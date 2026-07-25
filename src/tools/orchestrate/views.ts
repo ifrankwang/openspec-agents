@@ -515,6 +515,7 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("   - 实施所需信息是否齐备？（模板路径/字段映射/外部依赖决策等）")
   lines.push("   - 接口/模型是否与 design 冲突？")
   lines.push("   - 任务排列是否合理？（基础架构类任务应在更早完成）")
+  lines.push(`${stepNum++}. 按已加载 architecture skill 规范审查 design.md 架构方案（检查项由实际加载的 skill 决定）`)
   lines.push(`${stepNum++}. 可本地修复的问题（仅限 md 文件）→ edit；信息缺口 → opx_arch_blocker`)
   lines.push(`${stepNum++}. 识别任务中是否已存在通用做法（识别方式见项目 AGENTS.md/CLAUDE.md）：有则注明 dev 须遵循现有做法（任务明确要求换做法除外）；无但判断应做成通用做法的，在 notes 注明拓展性要求`)
   if (state.unattended) {
@@ -685,6 +686,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   if (dimension === "architecture") {
     lines.push("## 推荐阅读文档", "")
     lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
+    lines.push("  （以 design.md 中经 architect 批准的架构方案为基线，对照代码验证实施忠实度）")
     if (tg.relevantSpecs.length > 0) {
       for (const s of tg.relevantSpecs) lines.push(`- \`openspec/changes/${state.changeId}/specs/${s}/spec.md\``)
     }
@@ -709,6 +711,9 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   lines.push(...eff.lines)
   stepNum = eff.nextNum
   lines.push(`${stepNum++}. 逐文件审查「上轮变更文件」，按本维度审查标准发现问题`)
+  if (dimension === "architecture") {
+    lines.push(`${stepNum++}. 对照 design.md 架构方案基线，验证代码实施忠实度——偏离且违规时报 issue`)
+  }
   lines.push(`${stepNum++}. 核验「本维度 Issue (待确认)」中每条是否真已修复 → fixed_issue_ids（未达标的不列入）`)
   lines.push(`${stepNum++}. 裁定「本维度 Issue (豁免裁定中)」→ exempt_issue_ids / rejected_issue_ids`)
   if (tiSkills.length > 0) {

@@ -39,6 +39,8 @@ Info 级别 issue 的 description/suggestion 中禁止出现阶段/时机相关�
 
 加载匹配的 skill 后，按其中架构规范进行审查：
 
+审查时以 design.md 中的架构方案为基线，对照代码验证实施忠实度——代码偏离 design.md 且违反 architecture skill 规范时报 issue。
+
 - 分层依赖：按 skill 中的架构分层规则和依赖方向
 - 核心层隔离：按 skill 中领域/业务层对框架的依赖限制
 - 依赖注入：按 skill 中的 DI 方式约定（构造器注入 vs 字段注入）
