@@ -1,6 +1,6 @@
 ---
 name: java-dev-essentials
-description: 仅限 Java 后端开发场景。项目开发基础——构建命令、代码质量、测试、日志、提交规范。适用场景：Phase 2 编写代码（backend-developer）、Phase 2 测试审查（test-engineer）、Phase 3 任务验证（task-verifier）、Phase 3 规范审查（code-reviewer-style）。
+description: Java 后端开发基础规范——构建命令、代码质量工具、测试策略、日志规范、提交约定、Flyway 迁移、Spring Boot 配置。
 capabilities: ["efficiency", "tech-stack-java"]
 ---
 
@@ -95,6 +95,29 @@ chore: 升级依赖版本
 ```
 
 提交粒度：每个独立子任务至少一个 commit；修复审查反馈时 commit message 引用审查报告问题编号。
+
+## 新功能开发
+
+新增功能时须：
+- 编写单元测试覆盖全部验收条件，测试先行
+- 实现代码使测试通过，保持最小实现
+- 重构消除重复、改善可读性，测试须持续通过
+- 通过代码质量检查（spotless:check + pmd:check）
+- 完整测试套件通过
+
+## Bug 修复
+
+修复缺陷时须：
+- 从问题表象逐层追溯根因，基于事实定位系统性根因
+- 修复方案针对根因而非表象
+- 编写回归测试覆盖该场景
+
+## 调试
+
+调试期间须：
+- 使用日志框架输出，禁止直接输出到标准输出
+- 任务完成前清理所有仅为调试目的添加的日志
+- 生产环境可用的日志使用 info 级别并标注业务含义
 
 ## Flyway 迁移
 

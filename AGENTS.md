@@ -116,6 +116,24 @@ opx_* 工具返回体必须是 markdown 格式（列表、段落），不得使�
 
 Skill 定义只描述技术/领域规范（格式、目录结构、覆盖标准、认证方式等），不得包含编排流程概念（如"提交 issue"、"等待审批"、"进入下一阶段"）。流程指引由 `opx_status` 视图操作步骤和 agent 职责描述承载。
 
+### 三层职责分离
+
+agent.md 定义角色、工具边界与行为约束，不包含具体执行流程。
+opx_status 视图提供动态上下文、skill 加载建议、验证类别清单（不含具体 how）以及步骤顺序（流程控制）。
+skill 定义纯领域/技术规范——在不同场景下（新功能开发、Bug 修复、API 测试等）应完成哪些事、遵循什么格式与质量标准。skill 不定义步骤顺序。
+
+三者严禁重叠：同一概念只在一处权威定义。
+
+### Skill 可插拔设计
+
+工具和 agent 对 skill 透明——不硬依赖特定 skill，不引用 skill 目录名或内部具体内容。
+Skill 通过 frontmatter 声明 capability 与适用范围；agent 和工具通过 capability tag 匹配。
+
+agent 核心行为约束统一为：遵循所有已加载 skill 的全部规范与约束。新增/删除/替换 skill 后，agent 定义和工具代码无需修改——行为变化仅取决于哪些 skill 被匹配和加载。
+
+Skill 对编排概念无感知——描述中不含 Phase 编号、agent 名、工具名、编排动作（submit/issue/exempt 等）。
+Skill 之间的职责边界由各自规范定义。
+
 ## 测试
 
 ```bash

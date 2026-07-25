@@ -1,6 +1,6 @@
 ---
 name: db-conventions
-description: 数据库设计通用约定——表命名、主键选择、审计字段、逻辑删除、索引命名、状态字段、操作人来源链路。技术栈无关（不绑定具体 SQL 方言）。适用场景：Phase 1 设计表结构、Phase 2 数据访问层编码（backend-developer）、Phase 3 DB 规范审查（code-reviewer）。
+description: 数据库设计通用约定——表命名、主键选择、审计字段、逻辑删除、索引命名、状态字段、操作人来源链路。技术栈无关（不绑定具体 SQL 方言）。
 capabilities: ["db-design"]
 ---
 

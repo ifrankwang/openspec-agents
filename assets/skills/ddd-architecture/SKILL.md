@@ -1,6 +1,6 @@
 ---
 name: ddd-architecture
-description: DDD 分层架构规范——四层结构、层间依赖、各层职责、CQRS、聚合设计、Repository 语义、领域事件、值对象、Port/Adapter。方法论本身语言无关。适用场景：Phase 3 架构审查（code-reviewer-architecture）、Phase 1 架构师复核（architect）、Phase 2 编写代码（backend-developer）。
+description: DDD 分层架构规范——四层结构、层间依赖、各层职责、CQRS、聚合设计、Repository 语义、领域事件、值对象、Port/Adapter。方法论本身语言无关。
 capabilities: ["architecture"]
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: api-test
-description: Web 应用 API 自动化测试——编写 HTTP 黑盒测试脚本与前置 SQL 数据脚本。技术栈无关，仅绑定 Web 应用。适用场景：Phase 2 开发阶段提交前 API 测试编写与执行（developer），以及 Phase 3 任务验证中独立执行并审查（reviewer-task）。
+description: Web 应用 API 自动化测试规范——.http 脚本格式、目录结构、SQL 前置数据脚本、认证发现、覆盖标准与执行方式。
 capabilities: ["api-testing"]
 boundary_hints:
   directories: ["api-tests/"]
@@ -18,7 +18,7 @@ API 测试素材独立于项目源代码目录（不放入 src/test/ 等构建�
   └── script/      # API 测试脚本
 ```
 
-reviewer 可据项目现有目录惯例微调位置，但必须与构建工具的测试源码目录隔离。
+目录位置可据项目现有惯例微调，但必须与构建工具的测试源码目录隔离。
 
 ## 脚本格式
 
@@ -85,14 +85,14 @@ SQL 脚本按场景准备无法通过接口构造的数据库数据（历史数�
 
 ## 认证发现
 
-API 测试脚本运行前 reviewer 需获取有效认证凭证。常见模式：
+API 测试脚本运行前需获取有效认证凭证。常见模式：
 
 1. **Dev-only login 端点**：检查项目配置中是否有 profile 专属的免登入口（如 local/dev profile 下的登录 API）
 2. **静态 Token**：检查项目是否有 dev profile 专属的 JWT 密钥配置，可用相同密钥签发测试 token
 3. **Basic Auth**：检查项目安全配置中 dev profile 是否有固定凭证或免登入口
 4. **无认证**：若 dev profile 完全关闭认证，无需 token
 
-reviewer 从项目配置文件和安全配置类中查找。
+从项目配置文件和安全配置类中查找。
 
 ## 执行顺序
 
@@ -113,6 +113,11 @@ API 测试脚本必须覆盖所有新增/变更接口：
 |------|---------|
 | 正常路径 | 按 spec 请求结构传入合法值，验证响应状态码(2xx) 和响应结构 |
 | 关键边界 | 缺必填字段 → 4xx；非法值(空串/超长/类型错误) → 4xx；极值 → 正确响应或合理错误 |
+
+## 脚本执行
+
+API 变更时须同步创建/更新 api-tests/script/ 下对应 .http 测试脚本，以及 api-tests/data/ 下 SQL 前置数据脚本。
+API 验证须通过 .http 兼容执行工具运行脚本——不得使用 curl、wget 等通用 HTTP 命令行工具替代。
 
 ## 测试方式
 

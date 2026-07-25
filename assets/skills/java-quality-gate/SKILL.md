@@ -11,7 +11,7 @@ capabilities: ["quality-gate", "tech-stack-java"]
 
 ### 必做检查清单
 
-以下清单枚举工具 reviewer 必须完成的所有检查项。每项不可跳跃——要么执行并报告结果，要么在提交报告中注明跳过理由及对应 issue：
+以下清单枚举所有检查项。每项不可跳跃——要么执行并报告结果，要么在提交报告中注明跳过理由及对应 issue：
 
 | 序号 | 检查项 | skill 章节 | 报告要求 |
 |------|--------|-----------|---------|
@@ -48,7 +48,7 @@ mvn verify -q; echo "BUILD_STATUS=$?"
 说明：`mvn verify` 包含 compile + test + spotless:check + pmd:check 等阶段。
 
 - 通过：`BUILD_STATUS=0`
-- 不通过：`BUILD_STATUS≠0` → 工具层 issue，severity=Critical，developer 必须修复
+- 不通过：`BUILD_STATUS≠0` → 工具层 issue，severity=Critical，须修复
 
 ## 2. 代码格式检查
 
@@ -182,7 +182,7 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 
 ### 首次运行处理
 
-若为项目首次接入，存量违规项数量可能很大。工具 reviewer 应：
+若为项目首次接入，存量违规项数量可能很大。首次运行时应：
 1. 仅对新增/修改文件中的违规项生成 issue（通过 `git diff --name-only <baseRef>..HEAD` 过滤）
 2. 存量违规项报告但不生成 issue（在报告中标注 `[sonar-legacy]` 供后续处理）
 
@@ -239,7 +239,7 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 
 ## 9. 汇总与提交
 
-所有工具检查完成后，工具 reviewer 调 `opx_tool_review_submit` 提交：
+所有工具检查完成后，汇总检查结果并提交：
 - issues：统一 issue 结构列表（每条携带 dimension）
 - passed：true/false
 - fixed_issue_ids / exempt_issue_ids：酌情传入

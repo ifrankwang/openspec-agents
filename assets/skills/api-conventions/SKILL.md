@@ -1,6 +1,6 @@
 ---
 name: api-conventions
-description: REST API 设计规范——URL 路径约定、HTTP 动词映射、分层职责、输入校验、HTTP 状态码错误映射、统一响应结构。技术栈无关。适用场景：Phase 2 编写接口层代码（backend-developer）、Phase 2 接口规范审查（code-reviewer）。当新增 REST 接口或设计错误响应时使用。
+description: REST API 设计规范——URL 路径约定、HTTP 动词映射、分层职责、输入校验、HTTP 状态码错误映射、统一响应结构。技术栈无关。当新增 REST 接口或设计错误响应时使用。
 capabilities: ["api-design"]
 ---
 
