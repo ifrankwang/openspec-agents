@@ -38,6 +38,8 @@ capabilities: ["efficiency"]
 
 `command -v semble` → 成功则用；失败回退 grep。
 
+> 注意：`semble --version` 不可用，请仅以 `command -v` 判定存在性。
+
 ### RTK
 
 `command -v rtk` → 成功则标记可用；失败 git 输出不压缩。
