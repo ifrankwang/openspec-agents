@@ -7,7 +7,7 @@
 ## Quick start
 
 1. `scripts/export-session.sh <sessionID>` 导出并精简 session，返回 JSON 路径 + 摘要文件路径
-2. 读取 AGENTS.md「编排流程设计」「治理原则」章节和 `openspec-orchestrator` agent 定义，理解流程并提取约束清单与信号映射
+2. 读取 AGENTS.md「治理原则」章节与 README.md 流程部分，提取约束清单与信号映射
 3. 分派子代理按计划读取 session JSON（优先利用摘要文件制定分段策略），提取事件时间线
 4. 基于约束清单与事件时间线，执行合规分析（含 5-Why），识别改进点
 5. 读取目标文件，提出改进建议
@@ -26,16 +26,10 @@
 
 ### 2. 理解编排规范并制定分析计划
 
-读取以下两份文档，一次性完成以下三项输出：
-
-- AGENTS.md「编排流程设计」章节：编排工作流的阶段划分、各 Phase 约束
-- AGENTS.md「治理原则」章节：编排设计原则、约束
-- `openspec-orchestrator` agent 定义（`assets/agents/openspec-orchestrator.md`）：编排者自身的禁止操作、子代理分派规则、权限约束
-
-skill 定义工作流与阶段约束，agent 定义补充编排者行为边界与分派规则。两者共同构成编排的完整行为规范，合规分析的约束清单必须同时覆盖两份文档。
+基于 Quick start 步骤 2 已读文档，完成以下三项输出：
 
 a) **流程理解**：阶段划分、各阶段步骤、关键决策点、各角色职责
-b) **约束清单**：提取所有可验证的约束。覆盖范围包括但不限于：明确的禁止操作表、规则编号列表、各 Phase 描述中隐含的行为要求、自检清单项、「用户修复/变更」章节的流水线规则
+b) **约束清单**：从已读文档中提取所有可验证的约束。覆盖范围包括但不限于：禁止操作、行为约束、调度循环规则、状态机关联约束
 c) **信号映射**：对每条约束，确定在 session JSON 中验证它需要观察的信号——检索特定 tool 名称、agent 类型（.info.agent）、时序关系、参数值、消息分组方式等
 
 同时，基于流程理解，确定需要从 session JSON 中提取的**事件类型**及其信号特征。事件类型随着编排流程的版本不同而变化，不得预设固定列表。
@@ -45,7 +39,7 @@ c) **信号映射**：对每条约束，确定在 session JSON 中验证它需�
 主代理**不直接读取**精简后的 JSON。按以下策略分派子代理：
 
 - 估算 JSON 文件大小（`wc -c`）。若 ≤ 30KB，分派 1 个 explore agent 全文读取
-- 若 > 30KB：先分派 1 个 explore agent 读取摘要文件（Step 1 脚本输出的 `<output>.summary.jsonl`），根据摘要中的 session 边界制定分段策略——优先按 sessionID 切分（主 session 独立成段，每个子 session 独立成段），若某段仍过大再按编排阶段（Phase 2/3/3.5/4/5）细分。避免纯按消息索引号机械切分
+- 若 > 30KB：先分派 1 个 explore agent 读取摘要文件（Step 1 脚本输出的 `<output>.summary.jsonl`），根据摘要中的 session 边界制定分段策略——优先按 sessionID 切分（主 session 独立成段，每个子 session 独立成段），若某段仍过大再按编排阶段（task_analysis / dev_impl / review）细分。避免纯按消息索引号机械切分
 - 至少需覆盖：编排者 agent 的消息、子 session 中关键角色（openspec-architect、openspec-developer、openspec-reviewer-task）的响应
 
 传给子代理的指令须包含：
@@ -80,25 +74,29 @@ c) **信号映射**：对每条约束，确定在 session JSON 中验证它需�
 - plugins / prompts / 配置文件
 - 本 skill 使用的脚本（`scripts/export-session.sh`）
 
+优化方案优先在现有工具内部调整参数、返回值或状态转移逻辑；仅当现有工具语义确实无法承载时才考虑新增工具。
+
 ### 5.5 方案复核
 
 按主 SKILL.md「方案复核」执行。子代理额外验证不合规项是否与约束清单逐一匹配。
 
 ### 6. 输出报告
 
-纯段落格式，不落盘。报告模板如下：
+纯段落格式，不落盘。按用户诉求逐条列：
 
 ```
 ## 编排会话分析报告
-
 **Session**: <ID>
 
-**N. <规则来源>**
-问题：<描述>  根因：<结论>
-建议：<文件路径> → <改动方向>
+N. **<问题简述>**
+   根因
+   <结论>
+
+   方案
+   <改动意图>
 ```
 
-报告输出后，如需对分析结果实施修复，以本报告推荐的修复项清单 + 用户确认为交接载体，按 `reference/remediation.md` 执行。
+报告输出后，如需对分析结果实施修复，按 `reference/remediation.md` 执行。
 
 ## 本模式特有约束
 
