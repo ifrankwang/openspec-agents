@@ -486,6 +486,143 @@ describe("G6. task_review_submit 完整性门禁", () => {
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
+
+  test("validation_steps with all completed → accepted and stored in state", async () => {
+    const root = `/tmp/guard-valsteps-ok-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt), a = makeCtx("openspec-architect", wt),
+         d = makeCtx("openspec-developer", wt),
+         toolR = makeCtx("openspec-reviewer-tool", wt),
+         taskR = makeCtx("openspec-reviewer-task", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await arch_submit.execute({ outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+    await set_worktree.execute({}, o)
+    fakeGit.diffs.set(wt, ["src/T.java"])
+    await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+
+    const state = readStateSync(wt, CID)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    await init.execute({
+      change_id: CID, task_group_id: "1",
+      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+    await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+
+    const valSteps = [
+      { step: "Task 产出验证", completed: true, evidence: "编译通过，产出文件完整" },
+      { step: "服务启动验证", completed: true, evidence: "服务启动成功，健康检查通过" },
+      { step: "API 测试验证", completed: true, evidence: "3 个 .http 脚本全部通过" },
+      { step: "UT 测试质量审查", completed: true, evidence: "覆盖率和质量达标" },
+    ]
+
+    const result = JSON.parse(await task_review_submit.execute({
+      passed: true,
+      verified_task_ids: ["1", "2"],
+      failed_task_ids: [],
+      fixed_issue_ids: [],
+      validation_steps: valSteps,
+    }, taskR))
+    expect(result.status).toBe("ok")
+
+    // Verify stored in state
+    const savedState = readStateSync(wt, CID)
+    const savedTg = savedState.taskGroups.find((g: any) => g.id === "1")
+    expect(savedTg.phases.review.task.validationSteps).toBeDefined()
+    expect(savedTg.phases.review.task.validationSteps).toHaveLength(4)
+    expect(savedTg.phases.review.task.validationSteps[0].step).toBe("Task 产出验证")
+    expect(savedTg.phases.review.task.validationSteps[0].completed).toBe(true)
+    expect(savedTg.phases.review.task.validationSteps[0].evidence).toBe("编译通过，产出文件完整")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("validation_steps with skipped step missing skip_reason → throws", async () => {
+    const root = `/tmp/guard-valsteps-miss-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt), a = makeCtx("openspec-architect", wt),
+         d = makeCtx("openspec-developer", wt),
+         toolR = makeCtx("openspec-reviewer-tool", wt),
+         taskR = makeCtx("openspec-reviewer-task", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await arch_submit.execute({ outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+    await set_worktree.execute({}, o)
+    fakeGit.diffs.set(wt, ["src/T.java"])
+    await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+
+    const state = readStateSync(wt, CID)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    await init.execute({
+      change_id: CID, task_group_id: "1",
+      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+    await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+
+    await expect(
+      task_review_submit.execute({
+        passed: true,
+        verified_task_ids: ["1", "2"],
+        failed_task_ids: [],
+        fixed_issue_ids: [],
+        validation_steps: [
+          { step: "Task 产出验证", completed: true },
+          { step: "API 测试验证", completed: false },  // missing skip_reason
+        ],
+      }, taskR)
+    ).rejects.toThrow(/跳过原因/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("validation_steps with skipped step and valid skip_reason → accepted", async () => {
+    const root = `/tmp/guard-valsteps-skip-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt), a = makeCtx("openspec-architect", wt),
+         d = makeCtx("openspec-developer", wt),
+         toolR = makeCtx("openspec-reviewer-tool", wt),
+         taskR = makeCtx("openspec-reviewer-task", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await arch_submit.execute({ outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+    await set_worktree.execute({}, o)
+    fakeGit.diffs.set(wt, ["src/T.java"])
+    await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+
+    const state = readStateSync(wt, CID)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    await init.execute({
+      change_id: CID, task_group_id: "1",
+      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+    await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+
+    const result = JSON.parse(await task_review_submit.execute({
+      passed: true,
+      verified_task_ids: ["1", "2"],
+      failed_task_ids: [],
+      fixed_issue_ids: [],
+      validation_steps: [
+        { step: "Task 产出验证", completed: true, evidence: "编译通过" },
+        { step: "API 测试验证", completed: false, skip_reason: "本次变更为内部重构，非 API 契约变更" },
+      ],
+    }, taskR))
+    expect(result.status).toBe("ok")
+
+    // Verify stored in state
+    const savedState = readStateSync(wt, CID)
+    const savedTg = savedState.taskGroups.find((g: any) => g.id === "1")
+    expect(savedTg.phases.review.task.validationSteps[1].completed).toBe(false)
+    expect(savedTg.phases.review.task.validationSteps[1].skip_reason).toBe("本次变更为内部重构，非 API 契约变更")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
 })
 
 // ── G7: 非法 task id in failed_task_ids ──

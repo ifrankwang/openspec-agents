@@ -57,6 +57,13 @@ export const taskVerifyResult = tool.schema.object({
   reason: tool.schema.string().min(1).describe("失败理由"),
 })
 
+export const validationStepSchema = tool.schema.object({
+  step: tool.schema.string().min(1).describe("验证步骤名称，对应 opx_status 操作指引中的步骤描述"),
+  completed: tool.schema.boolean().describe("是否完成"),
+  evidence: tool.schema.string().optional().describe("执行结果摘要或证据，含关键输出指标"),
+  skip_reason: tool.schema.string().optional().describe("跳过原因（仅 completed=false 时必填）"),
+})
+
 export const blockerItem = tool.schema.object({
   source_role: tool.schema.string().min(1),
   task_id: tool.schema.string().min(1).optional(),

@@ -1,11 +1,11 @@
 import { tool } from "@opencode-ai/plugin"
 import path from "path"
-import type { TaskGroupState, IssueItem, Dimension, ReviewDimension, OrchestrateState, BlockerItem } from "./types.js"
+import type { TaskGroupState, IssueItem, Dimension, ReviewDimension, OrchestrateState, BlockerItem, ValidationStep } from "./types.js"
 import { REVIEW_DIMENSIONS } from "./types.js"
 import { DIMENSION_AGENT_MAP, MAX_RETRIES, BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT, SEVERITY_LEVELS } from "./constants.js"
 import {
   executionBoundarySchema, boundaryExpansionSchema, reviewIssue, blockerItem,
-  requestExemptItem, rejectedIssueItem, toolIssueItem, taskVerifyItem, taskVerifyResult,
+  requestExemptItem, rejectedIssueItem, toolIssueItem, taskVerifyItem, taskVerifyResult, validationStepSchema,
 } from "./schemas.js"
 import {
   findTaskGroup, assertOrchestrator, assertAgent, assertPassWithIssues,
@@ -462,6 +462,7 @@ export const task_review_submit = tool({
     exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("豁免裁定的 issue ID 列表"),
     rejected_issue_ids: tool.schema.array(rejectedIssueItem).optional().describe("驳回的 issue 列表（含原因）"),
     boundary_expansion: boundaryExpansionSchema.optional().describe("执行边界扩展（仅 passed=false 时有效）"),
+    validation_steps: tool.schema.array(validationStepSchema).optional().describe("验证步骤执行摘要。必须覆盖 opx_status 操作指引中的全部步骤，已完成的标记 completed=true 并附 evidence，跳过的标记 completed=false 并附 skip_reason"),
   },
   async execute(args, context) {
     assertAgent(context, "opx_task_review_submit", ["openspec-reviewer-task"])
@@ -559,6 +560,20 @@ export const task_review_submit = tool({
         }
         mergeExecutionBoundary(tg, args.boundary_expansion)
       }
+    }
+
+    if (args.validation_steps) {
+      for (const step of args.validation_steps) {
+        if (!step.completed && !step.skip_reason) {
+          throw new Error(`验证步骤 "${step.step}" 标记为未完成但未提供跳过原因（skip_reason）。`)
+        }
+      }
+      tg.phases.review.task.validationSteps = args.validation_steps.map(s => ({
+        step: s.step,
+        completed: s.completed,
+        evidence: s.evidence || "",
+        skip_reason: s.skip_reason || null,
+      }))
     }
 
     if (args.passed) {

@@ -61,9 +61,17 @@ export interface BlockerItem {
   architectConclusion: string | null
 }
 
+export interface ValidationStep {
+  step: string
+  completed: boolean
+  evidence: string
+  skip_reason: string | null
+}
+
 export interface ReviewLayerData {
   completed: boolean
   testResults?: string
+  validationSteps?: ValidationStep[]
 }
 
 export interface ReviewPhaseData {

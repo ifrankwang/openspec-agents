@@ -134,4 +134,18 @@ MUST 确保 api-tests/script/ 目录下存在与所有变更接口对应的 .htt
 
 API 验证须通过 .http 兼容执行工具运行脚本——不得使用 curl、wget 等通用 HTTP 命令行工具替代。
 
+### 执行工具
+
+API 测试脚本使用 IntelliJ HTTP Client CLI（`ijhttp`）执行，它是 JetBrains 官方提供的独立 CLI 工具，与 IDE 中 .http 文件的解析器和执行引擎完全一致。
+
+- **工具**: `ijhttp`（IntelliJ HTTP Client CLI）
+- **安装 (macOS)**: `brew install --cask ijhttp`
+- **Docker**: `docker pull jetbrains/intellij-http-client`
+- **直接下载**: `curl -f -L -o ijhttp.zip "https://jb.gg/ijhttp/latest"`
+- **执行**: `ijhttp api-tests/script/<文件名>.http`
+- **批量执行**: `ijhttp api-tests/script/*.http`
+- **环境变量**: `ijhttp <文件> --env-file api-tests/http-client.env.json --env <环境名>`
+- **测试报告 (JUnit XML)**: `ijhttp <文件>.http --report`
+- **依赖**: 需 Java 17+（macOS 可用 `brew install --cask temurin` 安装）
+
 API 验证须通过 `api-tests/script/` 下的 `.http` 脚本执行，不得使用 shell 命令或临时脚本替代。

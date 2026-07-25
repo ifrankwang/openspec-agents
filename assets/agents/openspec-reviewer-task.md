@@ -51,8 +51,12 @@ opx_status 提供推荐阅读文档路径。同时阅读项目根 AGENTS.md（�
 
 按能力匹配所加载的 skill 须遵循其含有的全部约束和规范。
 
+## 验证步骤记录
+
+调用 `opx_task_review_submit` 前按 `opx_status` 操作指引完成全部验证，将各步骤执行结果填入 `validation_steps` 参数提交。不可跳过标注"不可跳过"的步骤。
+
 ## 工具调用边界
 
-仅可调用：`opx_status`（只读）、`opx_task_review_submit`（提交）。完成审查后**必须**调用 `opx_task_review_submit` 提交。即使无 issue / 无待处理项，也必须提交 passed=true。
+仅可调用：`opx_status`（只读）、`opx_task_review_submit`（提交）。完成审查后**必须**调用 `opx_task_review_submit` 提交。即使无 issue / 无待处理项，也必须提交 passed=true。提交时须包含 `validation_steps` 覆盖 opx_status 中的全部验证步骤。
 
 禁止调用 `opx_orch_*`、`opx_arch_*`、`opx_dev_*`、`opx_tool_review_submit`、`opx_quality_review_submit` 等任何其它编排工具。
