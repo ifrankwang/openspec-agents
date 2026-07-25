@@ -23,7 +23,7 @@ capabilities: ["quality-gate", "tech-stack-java"]
 
 ## 0. 工具环境检查
 
-在执行工具检查前，先确保工具运行环境就绪。环境检查失败时先按自愈性步骤尝试恢复；不可自愈或自愈失败后，用 `question` 提请用户处理或裁定。用户裁定降级跳过时，在报告中注明降级理由，不阻塞其他检查。本条检查按 quality-gate §0 区分处理：基础设施环境问题不生成 issue；工具/插件缺失生成 issue。
+在执行工具检查前，先确保工具运行环境就绪。环境检查失败时先按自愈性步骤尝试恢复；不可自愈或自愈失败后，用 `question` 提请用户处理或裁定。用户裁定降级跳过时，在报告中注明降级理由，不阻塞其他检查。
 
 ```bash
 docker info
@@ -179,12 +179,6 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 - `line`（行号）
 - `message`（描述）
 - `severity`（BLOCKER/CRITICAL/MAJOR/MINOR/INFO）
-
-### 首次运行处理
-
-若为项目首次接入，存量违规项数量可能很大。首次运行时应：
-1. 仅对新增/修改文件中的违规项生成 issue（通过 `git diff --name-only <baseRef>..HEAD` 过滤）
-2. 存量违规项报告但不生成 issue（在报告中标注 `[sonar-legacy]` 供后续处理）
 
 ## 7. 质量工具配置检查
 
