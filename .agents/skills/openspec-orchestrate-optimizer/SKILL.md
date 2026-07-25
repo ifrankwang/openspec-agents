@@ -19,11 +19,14 @@ capabilities: ["orchestration-analysis"]
 ## 统一流程
 
 1. **明确意图** — 按入口表判定，模糊则追问
-2. **收集证据** — 读当前代码（`src/tools/`）、agent 定义（`assets/agents/`）、skill 定义（`assets/skills/`）、治理原则（`AGENTS.md`）。有 sessionID 则导出 session 比对（见 `reference/session-evidence.md`）
+2. **收集证据** —
+   a) 读取当前代码（`src/tools/`）、agent 定义（`assets/agents/`）、skill 定义（`assets/skills/`）、治理原则（`AGENTS.md`），提取约束清单
+   b) 有 sessionID 时，按 `reference/session-evidence.md` 分派子代理收集 session 证据
 3. **分析** — 按意图执行对应分析方法
 4. **方案复核** — 分派独立子代理交叉验证方案合理性、治理原则遵循、完整性。违规则回退
 5. **输出报告** — 纯段落，不落盘
-6. **实施**（可选）— 用户确认后按 `reference/implementation.md` 执行
+5.5 **确认与收尾** — 向用户展示报告摘要，询问是否实施改进项。不实施则总结关键发现并结束。实施则以报告改进项清单+用户确认为交接载体，进入步骤 6。
+6. **实施** — 按 `reference/implementation.md` 编排实施流水线。完成后按 implementation.md 完成输出格式展示结果。
 
 ## 分析方法
 
@@ -64,16 +67,12 @@ capabilities: ["orchestration-analysis"]
 <改动意图（含文件路径和章节/行号）>
 ```
 
-## session 证据
-
-sessionID 只在有助于精确定位根因或验证行为偏差时使用。导出与事件提取方法见 `reference/session-evidence.md`。无 sessionID 时纯基于当前代码和文档分析。
-
 ## 约束
 
 - 分析阶段不修改文件；实施阶段仅子代理改文件，主代理不得直接改
 - 改进建议必须指名具体文件路径和章节/行号
 - 5-Why 必须落到系统性根因
-- 子代理只负责数据提取，主代理负责分析与判断
+- 有 sessionID 时 session 证据收集必须由子代理执行，主代理禁止直接执行导出脚本或读取 session JSON
 - 工具逻辑以源码为准，但声明式行为与运行时行为可能有差异
 
 ## 简洁输出原则

@@ -593,6 +593,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
   lines.push(`${stepNum++}. 实施「Task (待完成)」的全部任务——遵循所有已加载 skill 的全部规范与约束`)
+  lines.push(`${stepNum++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
   lines.push(`${stepNum++}. 全部完成 → commit → opx_dev_submit(outcome=\"completed\")`)
   lines.push(`${stepNum++}. 遇外部依赖/凭证/真实输入缺失无法继续 → opx_dev_submit(outcome=\"blocked\")`)
   return lines.join("\n")
@@ -666,7 +667,7 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   }
   lines.push(`${stepNum++}. Task 产出验证：逐条核验各 task 产出完整性，按已加载的技术栈 skill 验证编译`)
   lines.push(`${stepNum++}. 服务启动验证：启动基础设施 → 启动应用 → 健康检查`)
-  lines.push(`${stepNum++}. API 测试验证：识别受影响 API，按已加载的 API 测试规范执行验证`)
+  lines.push(`${stepNum++}. **不可跳过** — API 测试验证：识别受影响 API，按已加载的 API 测试规范执行验证`)
   lines.push(`${stepNum++}. UT 测试质量审查：按已加载的测试技能规范审查单元测试质量`)
   lines.push(`${stepNum++}. 核验「审查 Issue」中「待确认」存量 issue 是否真已修复`)
   lines.push(`${stepNum++}. 缺少验证所需真实资源 → opx_task_review_submit(passed=false)`)
