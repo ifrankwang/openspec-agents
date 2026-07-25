@@ -44,7 +44,7 @@ export const OpenspecOrchestratePlugin: Plugin = async (input) => {
       opx_skill: tool({
         description: "Load a bundled orchestration skill by name",
         args: {
-          name: tool.schema.string().describe("Skill name (directory under assets/skills/)"),
+          name: tool.schema.string().describe("Skill name loaded from standard OpenCode skill directories"),
         },
         async execute(args) {
           const body = loadSkillBody(args.name)

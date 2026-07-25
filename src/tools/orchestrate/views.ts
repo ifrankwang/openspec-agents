@@ -3,8 +3,8 @@ import { REVIEW_DIMENSIONS } from "./types.js"
 import { SEVERITY_LEVELS, DIMENSION_AGENT_MAP, MAX_RETRIES } from "./constants.js"
 import { deriveStatus, isReviewCompleted, allTasksVerified, deriveCurrentAgents, isBlockingIssue, isStatusUnresolved } from "./derive.js"
 import { readdirSync, readFileSync, existsSync } from "node:fs"
-import { resolve, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
+import { resolve } from "node:path"
+import { findSkillPath, SKILL_SCAN_ROOTS } from "../../skills/scan.js"
 
 const AGENT_CAPABILITY_SUGGESTIONS: Record<string, string[]> = {
   "openspec-architect": ["efficiency", "architecture", "api-design", "db-design"],
@@ -18,12 +18,6 @@ const AGENT_CAPABILITY_SUGGESTIONS: Record<string, string[]> = {
   "openspec-reviewer-style": ["efficiency", "tool-improvement", "api-design", "db-design"],
 }
 
-const __skillsDir = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "..",
-  "assets", "skills"
-)
-
 function getToolImprovementSkills(agent: string): string[] {
   const caps = AGENT_CAPABILITY_SUGGESTIONS[agent]
   if (!caps || !caps.includes("tool-improvement")) return []
@@ -34,23 +28,28 @@ function getToolImprovementSkills(agent: string): string[] {
 function scanSkills(): { tagMap: Map<string, string[]>; skillTags: Map<string, string[]> } {
   const tagMap = new Map<string, string[]>()
   const skillTags = new Map<string, string[]>()
-  if (!existsSync(__skillsDir)) return { tagMap, skillTags }
-  for (const entry of readdirSync(__skillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const mdPath = resolve(__skillsDir, entry.name, "SKILL.md")
-    if (!existsSync(mdPath)) continue
-    try {
-      const raw = readFileSync(mdPath, "utf-8")
-      const m = raw.match(/capabilities:\s*\[([^\]]*)\]/)
-      if (!m) continue
-      const tags = m[1].split(",").map(s => s.trim().replace(/["']/g, "")).filter(Boolean)
-      skillTags.set(entry.name, tags)
-      for (const tag of tags) {
-        const arr = tagMap.get(tag) || []
-        arr.push(entry.name)
-        tagMap.set(tag, arr)
-      }
-    } catch { /* skip unreadable */ }
+  const seen = new Set<string>()
+  for (const root of SKILL_SCAN_ROOTS) {
+    if (!existsSync(root)) continue
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      if (seen.has(entry.name)) continue
+      const mdPath = resolve(root, entry.name, "SKILL.md")
+      if (!existsSync(mdPath)) continue
+      try {
+        const raw = readFileSync(mdPath, "utf-8")
+        const m = raw.match(/capabilities:\s*\[([^\]]*)\]/)
+        if (!m) continue
+        const tags = m[1].split(",").map(s => s.trim().replace(/["']/g, "")).filter(Boolean)
+        skillTags.set(entry.name, tags)
+        for (const tag of tags) {
+          const arr = tagMap.get(tag) || []
+          arr.push(entry.name)
+          tagMap.set(tag, arr)
+        }
+        seen.add(entry.name)
+      } catch { /* skip unreadable */ }
+    }
   }
   return { tagMap, skillTags }
 }
@@ -106,7 +105,8 @@ function renderSkillSuggestions(agent: string, caps: string[]): string[] {
   // Collect boundary_hints from matched skills
   const hinted: string[] = []
   for (const name of matched) {
-    const mdPath = resolve(__skillsDir, name, "SKILL.md")
+    const mdPath = findSkillPath(name)
+    if (!mdPath) continue
     try {
       const raw = readFileSync(mdPath, "utf-8")
       if (!raw.includes("boundary_hints:")) continue

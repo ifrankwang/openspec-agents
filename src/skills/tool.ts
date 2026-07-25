@@ -1,6 +1,5 @@
-import { readFileSync, existsSync } from "node:fs"
-import { join } from "node:path"
-import * as yaml from "js-yaml"
+import { readFileSync } from "node:fs"
+import { findSkillPath, projectSkillNames } from "./scan.js"
 
 interface ParsedContent {
   body: string
@@ -15,11 +14,9 @@ function parseBody(md: string): ParsedContent {
   return result
 }
 
-const SKILLS_ROOT = join(import.meta.dir!, "..", "..", "assets", "skills")
-
 export function loadSkillBody(skillName: string): string {
-  const skillPath = join(SKILLS_ROOT, skillName, "SKILL.md")
-  if (!existsSync(skillPath)) {
+  const skillPath = findSkillPath(skillName)
+  if (!skillPath) {
     return `(bundled skill not found: ${skillName})`
   }
   const raw = readFileSync(skillPath, "utf-8")
@@ -28,10 +25,5 @@ export function loadSkillBody(skillName: string): string {
 }
 
 export function listBundledSkills(): string[] {
-  if (!existsSync(SKILLS_ROOT)) return []
-  const entries: string[] = []
-  for (const entry of new Bun.Glob("*").scanSync({ cwd: SKILLS_ROOT })) {
-    entries.push(entry)
-  }
-  return entries.sort()
+  return projectSkillNames()
 }

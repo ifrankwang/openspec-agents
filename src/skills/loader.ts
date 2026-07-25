@@ -1,16 +1,19 @@
 import { existsSync } from "node:fs"
-import { join } from "node:path"
-
-const SKILLS_ROOT = join(import.meta.dir!, "..", "..", "assets", "skills")
+import { PROJECT_SKILL_ROOTS } from "./scan.js"
 
 export function injectSkills(config: Record<string, unknown>): void {
-  if (!existsSync(SKILLS_ROOT)) return
-
   const skillsCfg = (config.skills ?? {}) as Record<string, unknown>
   const paths = (skillsCfg.paths ?? []) as string[]
-  if (!paths.includes(SKILLS_ROOT)) {
-    paths.push(SKILLS_ROOT)
+
+  for (const root of PROJECT_SKILL_ROOTS) {
+    if (!existsSync(root)) continue
+    if (!paths.includes(root)) {
+      paths.push(root)
+    }
   }
-  skillsCfg.paths = paths
-  config.skills = skillsCfg
+
+  if (paths.length > 0) {
+    skillsCfg.paths = paths
+    config.skills = skillsCfg
+  }
 }
