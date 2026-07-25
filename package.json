@@ -1,6 +1,6 @@
 {
   "name": "openspec-orchestrate",
-  "version": "0.52.1",
+  "version": "0.52.2",
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
