@@ -127,6 +127,16 @@ function renderSkillSuggestions(agent: string, caps: string[]): string[] {
   return lines
 }
 
+function renderEfficiencySteps(tagMap: Map<string, string[]>, startNum: number): { lines: string[], nextNum: number } {
+  const lines: string[] = []
+  let n = startNum
+  if ((tagMap.get("efficiency") || []).length > 0) {
+    lines.push(`${n++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
+    lines.push(`${n++}. 初始化仅是前置——本 session 后续所有代码探索操作须持续遵循已加载效率 skill 中的工具选择规则，不可将初始化视为终点而恢复默认工具习惯`)
+  }
+  return { lines, nextNum: n }
+}
+
 /**
  * 渲染 worktree 信息段落（含路径、分支、diff 范围及操作约束）。
  * 所有子代理视图共享相同段落，避免多处复制。
@@ -492,9 +502,9 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("")
   let stepNum = 0
   lines.push(`${stepNum++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
-  if ((tagMap.get("efficiency") || []).length > 0) {
-    lines.push(`${stepNum++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
-  }
+  const eff = renderEfficiencySteps(tagMap, stepNum)
+  lines.push(...eff.lines)
+  stepNum = eff.nextNum
   lines.push(`${stepNum++}. 读取上方「推荐阅读文档」中所有文件原文`)
   lines.push(`${stepNum++}. 交叉比对：`)
   lines.push("   - spec ↔ tasks：当前组子任务是否有对应需求？")
@@ -578,9 +588,9 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("")
   let stepNum = 0
   lines.push(`${stepNum++}. 按「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
-  if ((tagMap.get("efficiency") || []).length > 0) {
-    lines.push(`${stepNum++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
-  }
+  const eff = renderEfficiencySteps(tagMap, stepNum)
+  lines.push(...eff.lines)
+  stepNum = eff.nextNum
   lines.push(`${stepNum++}. 实施「Task (待完成)」的全部任务——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${stepNum++}. 全部完成 → commit → opx_dev_submit(outcome=\"completed\")`)
   lines.push(`${stepNum++}. 遇外部依赖/凭证/真实输入缺失无法继续 → opx_dev_submit(outcome=\"blocked\")`)
@@ -600,9 +610,9 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push("")
   let stepNum = 0
   lines.push(`${stepNum++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
-  if ((tagMap.get("efficiency") || []).length > 0) {
-    lines.push(`${stepNum++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
-  }
+  const eff = renderEfficiencySteps(tagMap, stepNum)
+  lines.push(...eff.lines)
+  stepNum = eff.nextNum
   lines.push(`${stepNum++}. 加载质量门 skill，获取工具清单、执行命令与 issue 映射表`)
   lines.push(`${stepNum++}. 按质量门 skill 定义顺序逐项执行工具检查（环境检查 → 编译 → 格式 → 架构约束 → 静态分析 → 测试编译与覆盖率 → 深度扫描 → 工具配置检查）`)
   if (state.unattended) {
@@ -646,9 +656,9 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push("")
   lines.push("0. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）")
   let stepNum = 1
-  if ((tagMap.get("efficiency") || []).length > 0) {
-    lines.push(`${stepNum++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
-  }
+  const eff = renderEfficiencySteps(tagMap, stepNum)
+  lines.push(...eff.lines)
+  stepNum = eff.nextNum
   const hasGuidance = !!tg.executionBoundary?.notes
   if (hasGuidance) {
     lines.push(`${stepNum++}. 校验实施内容是否遵循上方「实施指引」中的指引；发现违背时报 issue`)
@@ -695,9 +705,9 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   lines.push("")
   let stepNum = 0
   lines.push(`${stepNum++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
-  if ((tagMap.get("efficiency") || []).length > 0) {
-    lines.push(`${stepNum++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
-  }
+  const eff = renderEfficiencySteps(tagMap, stepNum)
+  lines.push(...eff.lines)
+  stepNum = eff.nextNum
   lines.push(`${stepNum++}. 逐文件审查「上轮变更文件」，按本维度审查标准发现问题`)
   lines.push(`${stepNum++}. 核验「本维度 Issue (待确认)」中每条是否真已修复 → fixed_issue_ids（未达标的不列入）`)
   lines.push(`${stepNum++}. 裁定「本维度 Issue (豁免裁定中)」→ exempt_issue_ids / rejected_issue_ids`)

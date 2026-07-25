@@ -95,6 +95,8 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("Task (待完成)")
     expect(output).toContain("Skill 加载清单")
     expect(output).toContain("code-efficiency")
+    expect(output).toContain("初始化仅是前置")
+    expect(output).toContain("不可将初始化视为终点")
     expect(output).toContain("遵循所有已加载 skill")
     expect(output).toContain("api-test")
     expect(output).not.toContain("涉及 API 变更")
@@ -130,6 +132,8 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("## 操作指引")
     expect(output).toContain("Task 产出验证")
     expect(output).toContain("opx_task_review_submit")
+    expect(output).toContain("初始化仅是前置")
+    expect(output).toContain("不可将初始化视为终点")
   })
 
   test("renderTaskReviewView 有 notes 时显示实施指引", () => {

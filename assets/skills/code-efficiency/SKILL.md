@@ -42,7 +42,9 @@ capabilities: ["efficiency"]
 
 `command -v rtk` → 成功则标记可用；失败 git 输出不压缩。
 
-## 强制决策表
+## 强制决策表（持续生效）
+
+以下规则在本 session 全程覆盖所有其他工具选择倾向。初始化仅是前置条件——后续所有代码操作必须按此表选择工具。
 
 执行任何操作前，必须查此表：
 
@@ -55,6 +57,10 @@ capabilities: ["efficiency"]
 | 查符号定义 | 猜文件名后 Read | `codegraph query "<符号>" -p . --kind class/function` |
 | 改代码前评估影响 | 靠猜 | `codegraph impact "<符号>" -p . --depth 3` |
 | 查看 git 变更/日志/推送 | 裸 `git diff/log/status/push` | hook 自动重写，直接写原生 git 命令 |
+
+## 偏离纠正
+
+如发现自己正使用 `grep` / `rg` / `ls` / `find` / glob / 裸 `git diff` / 逐个 Read 猜测文件——立即停止，改用上表对应工具。这是硬约束，非建议。
 
 ## 工具细则
 
@@ -88,6 +94,4 @@ semble find-related src/auth.py 42 <path>
 
 搜索 yaml/json/md 等配置文件时加 `--include-text-files`。
 
-## 偏离纠正
 
-如发现自己正使用 `grep` / `rg` / `ls` / `find` / glob / 裸 `git diff` / 逐个 Read 猜测文件——立即停止，改用上表对应工具。这是硬约束，非建议。
