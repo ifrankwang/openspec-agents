@@ -134,8 +134,8 @@ describe("修复项2+3: dev_submit / task_review_submit verified 清除 rejectRe
     let tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true },
-    }, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 

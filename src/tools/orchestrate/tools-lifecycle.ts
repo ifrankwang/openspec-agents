@@ -25,13 +25,11 @@ export const init = tool({
     base_branch: tool.schema.string().optional().describe("基准分支名（如 main、develop），用于计算 merge-base 和 worktree fork 源。未传则自动从当前 git 分支推导。"),
     recovery: tool.schema.object({
       phase: tool.schema.enum(PHASE_ORDER).describe("恢复到哪个阶段"),
-      worktree_path: tool.schema.string().min(1).describe("已有 worktree 的绝对路径"),
-      branch_name: tool.schema.string().min(1).describe("worktree 对应的分支名（如 task-group/3）"),
-      preserve_progress: tool.schema.boolean().default(true).optional().describe("是否保留阶段内进度（task/issue 状态）。true 时只修阶段错位、不动阶段内明细；false 时按 phase 重置全部 task/issue 进度。默认 true。"),
       review_layer: tool.schema
         .enum(["tool", "task", "quality"])
         .optional()
         .describe("恢复到 review 内某子层（仅 phase=review 时有效）。tool→从 tool 层开始（默认），task→tool 层标记完成从 task 层开始，quality→tool+task 层完成从 quality 层开始"),
+      reopenIssues: tool.schema.boolean().default(false).optional().describe("完成后继续修 issue：将目标任务组全部非 verified issue 置为 rejected，重置 review 进度，回到 dev_impl 阶段。目标组必须为 completed。与 review_layer 互斥。"),
     }).optional().describe("进度恢复参数。提供后按 phase 恢复阶段状态，< phase 为 completed，== phase 为 in_progress，> phase 为 not_started。"),
   },
   async execute(args, context) {
@@ -100,6 +98,7 @@ export const init = tool({
     let state = await readStateByChangeId(context.worktree, args.change_id)
     const baseBranch = args.base_branch || await getCurrentBranch(context.worktree)
     const currentTaskGroupId = state?.taskGroupId
+    const originalCtgStatus = state?.taskGroups.find(g => g.id === args.task_group_id)?.status ?? null
     if (state) {
       state.baseBranch = state.baseBranch || baseBranch
       const existingMap = new Map(state.taskGroups.map((g) => [g.id, g]))
@@ -134,10 +133,9 @@ export const init = tool({
           ? buildPhases(recoveryPhase as BuildPhaseTarget, args.recovery?.review_layer).phases
           : buildPhases("task_analysis").phases
 
-        const preserveProgress = args.recovery?.preserve_progress !== false
         let tgTasks: TaskItem[]
         let tgIssues: IssueItem[]
-        if (existing && args.recovery && preserveProgress) {
+        if (existing && args.recovery) {
           tgTasks = newTasks.map((t) => {
             const existingTask = existing.tasks.find((et) => et.id === t.id)
             return existingTask || { ...t, status: taskInjectionStatus }
@@ -162,9 +160,6 @@ export const init = tool({
           }
           if (rl === "quality") {
             phases.review.task.completed = true
-            if (!preserveProgress) {
-              phases.review.retryCount = 0
-            }
           }
         }
 
@@ -216,42 +211,51 @@ export const init = tool({
 
     const ctg = findTaskGroup(state, args.task_group_id)
     if (args.recovery) {
-      ctg.worktreePath = args.recovery.worktree_path
-      ctg.branchName = args.recovery.branch_name
-      if (args.recovery.phase !== "task_analysis" && !args.recovery.worktree_path) {
-        throw new Error(
-          `recovery 缺少 worktree_path，无法获取 merge-base。请提供有效 worktree 路径。`
-        )
+      ctg.worktreePath = null
+      ctg.branchName = null
+      ctg.baseRef = null
+      ctg.lastFilesChanged = []
+    }
+
+    // Handle reopenIssues: completed → dev_impl, reject unresolved issues, reset review
+    if (args.recovery?.reopenIssues) {
+      if (originalCtgStatus !== "completed") {
+        throw new Error(`reopenIssues 仅支持已完成（completed）的任务组，当前状态为 "${originalCtgStatus}"。`)
       }
-      const baseRef = await getMergeBase(args.recovery.worktree_path, baseBranch)
-      if (!baseRef) throw new Error(`无法获取 worktree 与 ${baseBranch} 的 merge-base：${args.recovery.worktree_path}`)
-      ctg.baseRef = baseRef
-      const recoveryIdx = PHASE_ORDER.indexOf(args.recovery.phase)
-      const reviewIdx = PHASE_ORDER.indexOf("review")
-      if (recoveryIdx >= reviewIdx) {
-        ctg.lastFilesChanged = await getDiffFileList(args.recovery.worktree_path, baseRef)
+      if (args.recovery.phase !== "dev_impl") {
+        throw new Error("reopenIssues 仅支持恢复到 dev_impl 阶段。")
+      }
+      if (args.recovery.review_layer) {
+        throw new Error("reopenIssues 与 review_layer 互斥，不可同时使用。")
       }
 
-      if ((args.recovery.phase === "dev_impl" || args.recovery.phase === "review") && !ctg.executionBoundary) {
-        const diffFiles = recoveryIdx >= reviewIdx
-          ? ctg.lastFilesChanged
-          : await getDiffFileList(args.recovery.worktree_path, baseRef)
-        const dirs = [...new Set(diffFiles.map((f) => {
-          const d = path.dirname(f)
-          return d === "." ? f : d
-        }).filter(Boolean))]
-        ctg.executionBoundary = {
-          allowed_directories: dirs.length > 0 ? dirs : ["."],
-          allowed_packages: [],
-          notes: "(恢复时自动生成)",
+      for (const issue of ctg.issues) {
+        if (issue.status !== "verified") {
+          issue.status = "rejected"
+          issue.rejectReason = issue.rejectReason || "(通过 reopenIssues 自动驳回)"
         }
       }
+
+      ctg.phases.review.tool.completed = false
+      ctg.phases.review.task.completed = false
+      for (const d of REVIEW_DIMENSIONS) {
+        ctg.phases.review.quality.progress[d] = "pending"
+      }
+      ctg.phases.review.retryCount = 0
+      ctg.phases.review.lastResolvedRetryCount = 0
+
+      ctg.worktreePath = null
+      ctg.branchName = null
+      ctg.baseRef = null
+      ctg.lastFilesChanged = []
+
+      ctg.status = "dev_impl"
     }
 
     await writeState(context.worktree, state)
 
     const recoveryMsg = args.recovery
-      ? `已恢复到 ${args.recovery.phase} 阶段。worktree=${args.recovery.branch_name}，baseRef=${ctg.baseRef?.slice(0, 7)}。`
+      ? `已恢复到 ${args.recovery.phase} 阶段。`
       : ""
     return JSON.stringify(
       {
@@ -310,7 +314,12 @@ export const set_worktree = tool({
         tg.worktreePath = existingPath
         tg.branchName = branch
         const baseRef = await getMergeBase(existingPath, state.baseBranch)
-        if (baseRef) tg.baseRef = baseRef
+        if (baseRef) {
+          tg.baseRef = baseRef
+          if (!tg.lastFilesChanged || tg.lastFilesChanged.length === 0) {
+            tg.lastFilesChanged = await getDiffFileList(existingPath, baseRef)
+          }
+        }
         reused = true
       } else {
         // Diverged — can't fast-forward; clean up if safe
@@ -351,6 +360,9 @@ export const set_worktree = tool({
       tg.worktreePath = wtPath
       tg.branchName = branch
       tg.baseRef = baseRef
+      if (!tg.lastFilesChanged || tg.lastFilesChanged.length === 0) {
+        tg.lastFilesChanged = await getDiffFileList(wtPath, baseRef)
+      }
     }
 
     await writeState(context.worktree, state)

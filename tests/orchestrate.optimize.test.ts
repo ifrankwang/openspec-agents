@@ -85,7 +85,8 @@ async function setupThroughReviewReady(
   const tg1 = s1.taskGroups.find((g: any) => g.id === "1")
   await init.execute({
     change_id: CID, task_group_id: "1",
-    recovery: { phase: "review", worktree_path: tg1.worktreePath, branch_name: tg1.branchName, preserve_progress: true }}, o)
+    recovery: { phase: "review" }}, o)
+  await set_worktree.execute({}, o)
   await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
   await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -168,7 +169,8 @@ describe("B1. opx_status 阶段门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, orch)
+      recovery: { phase: "review" }}, orch)
+    await set_worktree.execute({}, orch)
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     const taskR = makeCtx("openspec-reviewer-task", wt)
@@ -196,7 +198,8 @@ describe("B1. opx_status 阶段门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, orch)
+      recovery: { phase: "review" }}, orch)
+    await set_worktree.execute({}, orch)
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -299,18 +302,18 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     // 再 init recovery to review → 应自动填充边界
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     state = readStateSync(wt, CID)
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.executionBoundary).not.toBeNull()
-    expect(tgAfter.executionBoundary.allowed_directories).toBeDefined()
+    expect(tgAfter.executionBoundary).toBeNull()
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  // B2.2 填充的 directories 来自 diff 文件（用 fakeGit.diffs 控制 diff 输出）
-  test("自动填充的 directories 从 diff 文件的 dirname 派生", async () => {
+  // B2.2 recovery 不再自动填充 executionBoundary（需 arch_submit 设置）
+  test("recovery 后 executionBoundary 为空", async () => {
     const root = `/tmp/optimize-b2b-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -340,23 +343,18 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
 
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     state = readStateSync(wt, CID)
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    const dirs = tgAfter.executionBoundary.allowed_directories
-    expect(dirs).toContain("src/main/java/com/t")
-    expect(dirs).toContain("src/test/java/com/t")
-    expect(dirs).toContain("docs")
-    expect(dirs).not.toContain("src/main/java/com/t/Foo.java")
-    expect(tgAfter.executionBoundary.allowed_packages).toEqual([])
-    expect(tgAfter.executionBoundary.notes).toBe("(恢复时自动生成)")
+    expect(tgAfter.executionBoundary).toBeNull()
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  // B2.3 恢复到 review 有 existing 边界 → 不覆盖（继承原值）
-  test("recovery review 有 existing 边界 → 继承原值不覆盖", async () => {
+  // B2.3 恢复到 review 有 existing 边界 → recovery 不生成边界
+  test("recovery review 有 existing 边界 → 不覆盖（继承原值）", async () => {
     const root = `/tmp/optimize-b2c-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -381,7 +379,8 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
 
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg2.worktreePath, branch_name: tg2.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     state = readStateSync(wt, CID)
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
@@ -392,8 +391,8 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  // B2.4 恢复后提 issue → 边界 directories 能正常 append
-  test("recovery 自动补边界后提 issue → 边界 directories 正常 append", async () => {
+  // B2.4 提 issue 时 boundary_expansion → 边界 directories 能正常 append
+  test("提 issue 时 boundary_expansion → 边界 directories 正常 append", async () => {
     const root = `/tmp/optimize-b2d-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -403,7 +402,7 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     const d = makeCtx("openspec-developer", wt)
     const toolR = makeCtx("openspec-reviewer-tool", wt)
 
-    // 正常走到 dev_submit
+    // 正常走到 tool review（有边界）
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     await arch_submit.execute({ outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
@@ -414,38 +413,14 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     fakeGit.diffs.set(devWt, ["src/main/Foo.java"])
     await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
 
-    // null out executionBoundary
-    state = readStateSync(wt, CID)
-    const tg1 = state.taskGroups.find((g: any) => g.id === "1")
-    tg1.executionBoundary = null
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // recovery to dev_impl with auto-fill
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "dev_impl", worktree_path: devWt, branch_name: tg1.branchName, preserve_progress: true }}, o)
-
-    // 检查边界已被自动填充
-    state = readStateSync(wt, CID)
-    const tgFill = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgFill.executionBoundary).not.toBeNull()
-
-    // dev submit 再次进入 review
-    await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
-
     state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg2.worktreePath, branch_name: tg2.branchName, preserve_progress: true }}, o)
 
-    // 提一条 issue 在新目录
+    // 提一条 issue 在新目录 + boundary_expansion
     await tool_review_submit.execute({ passed: false,
       issues: [{ dimension: "style", severity: "Low", file: "new-dir/x.java", line: 1, description: "Style issue", suggestion: "Fix" }],
-      fixed_issue_ids: []}, toolR)
+      fixed_issue_ids: [],
+      boundary_expansion: { allowed_directories: ["new-dir"] }}, toolR)
 
     state = readStateSync(wt, CID)
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
@@ -481,12 +456,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
 
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: {
-        phase: "review",
-        worktree_path: tg.worktreePath,
-        branch_name: tg.branchName,
-        preserve_progress: true,
-        review_layer: "task"}}, o)
+      recovery: { phase: "review", review_layer: "task" }}, o)
 
     const state2 = readStateSync(wt, CID)
     const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
@@ -515,12 +485,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
 
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: {
-        phase: "review",
-        worktree_path: tg.worktreePath,
-        branch_name: tg.branchName,
-        preserve_progress: true,
-        review_layer: "quality"}}, o)
+      recovery: { phase: "review", review_layer: "quality" }}, o)
 
     const state2 = readStateSync(wt, CID)
     const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
@@ -549,12 +514,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
 
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: {
-        phase: "review",
-        worktree_path: tg.worktreePath,
-        branch_name: tg.branchName,
-        preserve_progress: true,
-        review_layer: "tool"}}, o)
+      recovery: { phase: "review", review_layer: "tool" }}, o)
 
     const state2 = readStateSync(wt, CID)
     const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
@@ -586,11 +546,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await expect(
       init.execute({
         change_id: CID, task_group_id: "1",
-        recovery: {
-          phase: "dev_impl",
-          worktree_path: "/tmp/fake-worktree",
-          branch_name: "task-group/1",
-          review_layer: "task"}}, o)
+        recovery: { phase: "dev_impl", review_layer: "task" }}, o)
     ).rejects.toThrow(/review_layer/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
@@ -622,7 +578,8 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -640,12 +597,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     // 恢复时指定 review_layer=quality，preserve_progress=true
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: {
-        phase: "review",
-        worktree_path: tg1.worktreePath,
-        branch_name: tg1.branchName,
-        preserve_progress: true,
-        review_layer: "quality"}}, o)
+      recovery: { phase: "review", review_layer: "quality" }}, o)
 
     // 验证 quality 进度全部保留
     state = readStateSync(wt, CID)
@@ -686,7 +638,8 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -704,17 +657,12 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     // 恢复时指定 review_layer=quality，preserve_progress=false（清空 quality）
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: {
-        phase: "review",
-        worktree_path: tg1.worktreePath,
-        branch_name: tg1.branchName,
-        preserve_progress: false,
-        review_layer: "quality"}}, o)
+      recovery: { phase: "review", review_layer: "quality" }}, o)
 
-    // 验证 quality 进度：retryCount 清空，passed 维度保留，其余 pending
+    // 验证 quality 进度：retryCount 保留，passed 维度保留，其余 pending
     state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg2.phases.review.retryCount).toBe(0)
+    expect(tg2.phases.review.retryCount).toBe(2)
     expect(tg2.phases.review.quality.progress.style).toBe("passed")
     expect(tg2.phases.review.quality.progress.architecture).toBe("passed")
     expect(tg2.phases.review.quality.progress.performance).toBe("pending")
@@ -768,7 +716,8 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -785,12 +734,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     // 恢复时指定 review_layer=quality 且 preserveProgress
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: {
-        phase: "review",
-        worktree_path: tg2.worktreePath,
-        branch_name: tg2.branchName,
-        preserve_progress: true,
-        review_layer: "quality"}}, o)
+      recovery: { phase: "review", review_layer: "quality" }}, o)
 
     state = readStateSync(wt, CID)
     const tg3 = state.taskGroups.find((g: any) => g.id === "1")
@@ -833,7 +777,8 @@ describe("B4. 空 issue 正常提交回归", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     const result = await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: []}, toolR)
     const parsed = typeof result === "string" ? JSON.parse(result) : JSON.parse(result.output)
@@ -892,7 +837,8 @@ describe("B8. submit 工具支持数字类型 ID", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, orch)
+      recovery: { phase: "review" }}, orch)
+    await set_worktree.execute({}, orch)
 
     // tool_review_submit: fixed_issue_ids 传数字
     const r1 = await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
@@ -955,7 +901,8 @@ describe("B5. dev_submit 不再重置 retryCount", () => {
     // 3. tool+task 重新通过
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tgAfter.worktreePath, branch_name: tgAfter.branchName, preserve_progress: true }}, orch)
+      recovery: { phase: "review" }}, orch)
+    await set_worktree.execute({}, orch)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [issueId] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -1004,7 +951,8 @@ describe("B6. opx_status 编排者视图 review 进展", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, orch)
+      recovery: { phase: "review" }}, orch)
+    await set_worktree.execute({}, orch)
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 

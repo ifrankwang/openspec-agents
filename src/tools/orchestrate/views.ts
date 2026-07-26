@@ -360,7 +360,7 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
       for (const w of unregistered) {
         const match = w.branch.match(/^task-group\/(\d+)$/)
         const tgId = match ? match[1] : "?"
-        lines.push(`  - ${w.branch} → \`opx_orch_init({ recovery: { phase: "<phase>", worktree_path: "${w.path}", branch_name: "${w.branch}" } })\``)
+        lines.push(`  - ${w.branch} → \`opx_orch_init({ recovery: { phase: "<phase>" } })\` + \`opx_orch_set_worktree\``)
       }
     }
   }

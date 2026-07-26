@@ -76,8 +76,8 @@ async function setupToReview(root: string, wt: string, fakeGit: FakeGitRunner) {
   const tg = state.taskGroups.find((g: any) => g.id === "1")
   await init.execute({
     change_id: CID, task_group_id: "1",
-    recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }
-  }, o)
+    recovery: { phase: "review" }}, o)
+  await set_worktree.execute({}, o)
 }
 
 // ── Scene A: quality blocking issue → tool layer passes ──

@@ -72,7 +72,8 @@ async function setupToReview(wt: string, fakeGit: FakeGitRunner) {
   const tg = state.taskGroups.find((g: any) => g.id === "1")
   await init.execute({
     change_id: CID, task_group_id: "1",
-    recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+    recovery: { phase: "review" }}, o)
+  await set_worktree.execute({}, o)
   await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
   await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 }
@@ -233,7 +234,8 @@ describe("G2. 身份守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -271,7 +273,8 @@ describe("G3. 重复提交守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -370,7 +373,8 @@ describe("G5. 非法 task id 守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     await expect(
@@ -408,7 +412,8 @@ describe("G6. task_review_submit 完整性门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     await expect(
@@ -441,7 +446,8 @@ describe("G6. task_review_submit 完整性门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     fakeGit.dirtyPaths.add(tg.worktreePath)
@@ -476,7 +482,8 @@ describe("G6. task_review_submit 完整性门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     const result = await task_review_submit.execute({ passed: true,
@@ -508,7 +515,8 @@ describe("G6. task_review_submit 完整性门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     const valSteps = [
@@ -560,7 +568,8 @@ describe("G6. task_review_submit 完整性门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     await expect(
@@ -600,7 +609,8 @@ describe("G6. task_review_submit 完整性门禁", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     const result = JSON.parse(await task_review_submit.execute({
@@ -650,7 +660,8 @@ describe("G7. 非法 task id in failed_task_ids", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     await expect(
@@ -687,7 +698,8 @@ describe("G8. tool 层完成守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await expect(
       task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [],
@@ -758,7 +770,8 @@ describe("G10. 重复操作守卫", () => {
     const tg1 = s1.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg1.worktreePath, branch_name: tg1.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await dev_submit.execute({ completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Lib" }] }, d)
 
@@ -767,7 +780,8 @@ describe("G10. 重复操作守卫", () => {
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg2.worktreePath, branch_name: tg2.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [],
       exempt_issue_ids: [issueId]}, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [],
@@ -824,7 +838,8 @@ describe("G11. quality_review_submit 参数验证", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await expect(
       tool_review_submit.execute({ passed: false,
@@ -856,7 +871,8 @@ describe("G12. task 层完成守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     await expect(
@@ -890,7 +906,8 @@ describe("G13. tool 层重复提交守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await expect(
@@ -925,7 +942,8 @@ describe("G14. task 层重复提交守卫", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
@@ -961,7 +979,8 @@ describe("G15. 豁免完整性门禁", () => {
     const tg1 = s1.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg1.worktreePath, branch_name: tg1.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
@@ -986,7 +1005,8 @@ describe("G15. 豁免完整性门禁", () => {
     const tg3 = s3.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg3.worktreePath, branch_name: tg3.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     // tool 层仅看到 sourcePhase="tool" 的 exemption，quality 层 issue 的 exemption 跳过
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
@@ -1025,7 +1045,8 @@ describe("G16. 层失败回退 dev_impl", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     const toolOut = await tool_review_submit.execute({ passed: false, issues: [], fixed_issue_ids: [] }, toolR)
     const r = typeof toolOut === "string" ? toolOut : toolOut.output
@@ -1066,7 +1087,8 @@ describe("G16. 层失败回退 dev_impl", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -1116,7 +1138,8 @@ describe("G17. rejectReason 存储", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -1158,7 +1181,8 @@ describe("G19. task_review_submit 同步 tasks.md 复选框", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -1206,7 +1230,8 @@ describe("G19. task_review_submit 同步 tasks.md 复选框", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -1251,7 +1276,8 @@ describe("G18. tool_review_submit test_results 参数", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     const result = await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [],
       test_results: "Tests run: 42, Passed: 42, Failed: 0"}, toolR)
@@ -1291,7 +1317,8 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -1326,7 +1353,8 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -1361,7 +1389,8 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+      recovery: { phase: "review" }}, o)
+    await set_worktree.execute({}, o)
 
     await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 

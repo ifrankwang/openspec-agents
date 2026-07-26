@@ -355,7 +355,8 @@ describe("S9: checkpoint (${MAX_RETRIES} tool failures)", () => {
       if (round > 1) {
         await init.execute({
           change_id: CID, task_group_id: "1",
-          recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+          recovery: { phase: "review" }}, o)
+        await set_worktree.execute({}, o)
         fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
         await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
       }
@@ -404,7 +405,8 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
       if (round > 1) {
         await init.execute({
           change_id: CID, task_group_id: "1",
-          recovery: { phase: "review", worktree_path: tg.worktreePath, branch_name: tg.branchName, preserve_progress: true }}, o)
+          recovery: { phase: "review" }}, o)
+        await set_worktree.execute({}, o)
         fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
         await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
       }

@@ -192,8 +192,9 @@ describe("blocker 生命周期", () => {
       await init.execute({
         change_id: CID,
         task_group_id: "1",
-        recovery: { phase: recoveryPhase, worktree_path: worktreePath, branch_name: branchName, preserve_progress: true },
+        recovery: { phase: recoveryPhase },
       }, orch)
+      await set_worktree.execute({}, orch)
 
       tg = readState(wt).taskGroups[0]
       expect(tg.status).toBe("task_analysis")
