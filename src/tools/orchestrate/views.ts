@@ -498,6 +498,8 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
   renderOptionalSection(lines, "Blocker (待架构复核)", archBlockerLines)
   
   const { tagMap } = scanSkills()
+  const archSkills = tagMap.get("architecture") || []
+  const archSkillRef = archSkills.length > 0 ? archSkills.map(s => `\`${s}\``).join(", ") : "architecture 类 skill"
   lines.push("## 操作指引", "")
   lines.push("")
   let stepNum = 0
@@ -515,7 +517,12 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("   - 实施所需信息是否齐备？（模板路径/字段映射/外部依赖决策等）")
   lines.push("   - 接口/模型是否与 design 冲突？")
   lines.push("   - 任务排列是否合理？（基础架构类任务应在更早完成）")
-  lines.push(`${stepNum++}. 按已加载 architecture skill 规范审查 design.md 架构方案（检查项由实际加载的 skill 决定）`)
+  lines.push(`${stepNum++}. 按以下维度审查 design.md 方案合理性：`)
+  lines.push(`   - 需求对齐度：方案是否完整覆盖 spec 所有核心需求与非功能约束？`)
+  lines.push(`   - 架构模式合规性：方案是否遵循 ${archSkillRef} 的全部规范？`)
+  lines.push(`   - 复杂度匹配度：设计复杂度是否与需求规模匹配？是否有过度设计？`)
+  lines.push(`   - 风险与边界：隐含假设是否声明？异常路径与退化场景是否覆盖？`)
+  lines.push(`   不合理时通过 opx_arch_blocker (category=architecture_design) 反馈`)
   lines.push(`${stepNum++}. 可本地修复的问题（仅限 md 文件）→ edit；信息缺口 → opx_arch_blocker`)
   lines.push(`${stepNum++}. 识别任务中是否已存在通用做法（识别方式见项目 AGENTS.md/CLAUDE.md）：有则注明 dev 须遵循现有做法（任务明确要求换做法除外）；无但判断应做成通用做法的，在 notes 注明拓展性要求`)
   if (state.unattended) {
