@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { resolve, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { homedir } from "node:os"
@@ -27,19 +27,4 @@ export function findSkillPath(name: string): string | null {
   return null
 }
 
-export function projectSkillNames(): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const root of PROJECT_SKILL_ROOTS) {
-    if (!existsSync(root)) continue
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      if (seen.has(entry.name)) continue
-      const mdPath = resolve(root, entry.name, "SKILL.md")
-      if (!existsSync(mdPath)) continue
-      seen.add(entry.name)
-      result.push(entry.name)
-    }
-  }
-  return result.sort()
-}
+

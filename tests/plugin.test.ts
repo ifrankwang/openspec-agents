@@ -19,7 +19,7 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(hooks.tool).toBeDefined()
   })
 
-  test("registers 12 opx_* tools + opx_skill", async () => {
+  test("registers 12 opx_* tools", async () => {
     const hooks = await OpenspecOrchestratePlugin(mockInput as any)
     const names = Object.keys(hooks.tool!)
     expect(names).toContain("opx_orch_init")
@@ -33,9 +33,8 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(names).toContain("opx_task_review_submit")
     expect(names).toContain("opx_quality_review_submit")
     expect(names).toContain("opx_orch_resolve_review")
-    expect(names).toContain("opx_skill")
     expect(names).toContain("opx_arch_blocker")
-    expect(names.length).toBe(13)
+    expect(names.length).toBe(12)
     for (const n of names) {
       expect(typeof hooks.tool![n].execute).toBe("function")
     }
@@ -92,25 +91,4 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(agent["openspec-orchestrator"]).toBeDefined()
   })
 
-  test("opx_skill loads bundled SKILL.md", async () => {
-    const hooks = await OpenspecOrchestratePlugin(mockInput as any)
-    const result = await hooks.tool!["opx_skill"].execute(
-      { name: "java-dev-essentials" },
-      { agent: "test", worktree: "/tmp", directory: "/tmp", sessionID: "s", messageID: "m", abort: new AbortController().signal, metadata() {}, ask() {} } as any
-    )
-    const out = typeof result === "string" ? result : (result as any).output
-    expect(out).toContain("## Skill: java-dev-essentials")
-    // Verify frontmatter stripped (body starts with content, not "---")
-    expect(out).not.toMatch(/^---/m)
-  })
-
-  test("opx_skill returns graceful error for missing skill", async () => {
-    const hooks = await OpenspecOrchestratePlugin(mockInput as any)
-    const result = await hooks.tool!["opx_skill"].execute(
-      { name: "nonexistent" },
-      { agent: "test", worktree: "/tmp", directory: "/tmp", sessionID: "s", messageID: "m", abort: new AbortController().signal, metadata() {}, ask() {} } as any
-    )
-    const out = typeof result === "string" ? result : (result as any).output
-    expect(out).toContain("not found")
-  })
 })

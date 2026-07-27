@@ -1,5 +1,4 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
-import { loadSkillBody } from "./skills/tool.js"
 import { injectSkills } from "./skills/loader.js"
 import { injectAgents } from "./agents/loader.js"
 import { startDashboard } from "./dashboard/server.js"
@@ -43,16 +42,6 @@ export const OpenspecOrchestratePlugin: Plugin = async (input) => {
       opx_task_review_submit: task_review_submit,
       opx_quality_review_submit: quality_review_submit,
       opx_orch_resolve_review: resolve_review,
-      opx_skill: tool({
-        description: "Load a bundled orchestration skill by name",
-        args: {
-          name: tool.schema.string().describe("Skill name loaded from standard OpenCode skill directories"),
-        },
-        async execute(args) {
-          const body = loadSkillBody(args.name)
-          return `## Skill: ${args.name}\n\n${body}`
-        },
-      }),
     },
   }
 }
