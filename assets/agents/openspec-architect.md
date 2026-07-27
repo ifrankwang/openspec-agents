@@ -46,16 +46,13 @@ permission:
 
 - **自主边界**：问题分类处理——局部文档问题直接 edit；设计架构验证发现问题通过 blocker 提交（category 用 `architecture_design`）；信息缺口提交 blocker（category 用 `info_gap`）。不以假设或降级替代确认。
 - **提交门槛**：outcome=ready 仅在 opx_status 视图「操作指引」全部完成后使用。
+- **逐维审查**：opx_status 操作指引中列出的各评估维度必须逐项审查并给出结论（无问题也需简要确认）。
 - **blocker 处理**：需用户确认时：正常模式先 question 工具向用户确认；无人值守模式自行推断决策后标记 resolved（详见 opx_status 视图指引）。然后调用 `opx_arch_blocker` 记录/更新（不结束本环节）。所有 blocker 处理完毕后再用 `opx_arch_submit(outcome=ready)` 结案。
 - **工具调用边界**：仅可调用 `opx_arch_submit`、`opx_arch_blocker` 与 `opx_status`。
 - **只审当前任务组范围**：除"任务排列合理性"需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节。
 
 ## 文档阅读关注点
 
-调用 `opx_status` 自取上下文。opx_status 提供 worktree 路径及推荐阅读文档路径。**推荐阅读文档的路径均相对于 worktree，请基于 worktree 路径读取和编辑。**同时阅读项目根 AGENTS.md（全文，关注架构硬约束、项目结构规范、层间依赖）。关注：
-- clarify.md：架构方向结论
-- design.md：全文（审查架构模式合规性与方案合理性）
-- tasks.md：全部任务组标题与当前组全文（用于排列合理性检查）
-- spec 文件：与当前组相关的需求（用于 spec↔tasks、spec↔design 交叉比对）
+调用 `opx_status` 自取上下文（含 worktree 路径及推荐阅读文档路径）。同时阅读项目根 AGENTS.md（全文，关注架构硬约束、项目结构规范、层间依赖）。按 opx_status 操作指引审查推荐文档全文。
 
 
