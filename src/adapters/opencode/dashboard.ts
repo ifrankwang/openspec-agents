@@ -1,5 +1,5 @@
-import { readDashboardState } from "../tools/orchestrate.js"
-import { getDashboardPage } from "./page.js"
+import { readDashboardState } from "../../core/dashboard.js"
+import { getDashboardPage } from "../../dashboard/page.js"
 
 const BASE_PORT = 4519
 const MAX_ATTEMPTS = 20

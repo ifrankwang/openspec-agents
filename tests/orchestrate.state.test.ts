@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { readStateByChangeId } from "../src/tools/orchestrate/state"
+import { readStateByChangeId } from "../src/core/state"
 
 const CID = "legacy-state"
 
