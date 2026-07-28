@@ -1,6 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
-import { SEVERITY_LEVELS } from "./constants.js"
-import { CODE_DIMENSIONS } from "./types.js"
+import { SEVERITY_LEVELS } from "../../core/constants.js"
+import { CODE_DIMENSIONS } from "../../core/types.js"
 
 export const executionBoundarySchema = tool.schema.object({
   allowed_directories: tool.schema.array(tool.schema.string().min(1)).min(1).describe("developer 只能修改/创建文件的目录列表（含实施与验证所需的测试代码目录）"),
@@ -18,14 +18,8 @@ export const reviewIssue = tool.schema.object({
   file: tool.schema.string().min(1).describe("问题所在文件路径（相对于 worktree）"),
   line: tool.schema.number().int().min(0).describe("问题所在行号（0=整文件/待新建文件，如 tool 改进 issue 指向待建配置文件）"),
   description: tool.schema.string().min(1).describe("问题描述"),
-  suggestion: tool.schema
-    .string()
-    .optional()
-    .describe("修复建议"),
-  root_cause_guess: tool.schema
-    .string()
-    .optional()
-    .describe("根因猜测（仅特定维度需要）"),
+  suggestion: tool.schema.string().optional().describe("修复建议"),
+  root_cause_guess: tool.schema.string().optional().describe("根因猜测（仅特定维度需要）"),
 })
 
 export const requestExemptItem = tool.schema.object({

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { PROJECT_SKILL_ROOTS } from "./scan.js"
+import { PROJECT_SKILL_ROOTS } from "../../skills/scan.js"
 
 export function injectSkills(config: Record<string, unknown>): void {
   const skillsCfg = (config.skills ?? {}) as Record<string, unknown>

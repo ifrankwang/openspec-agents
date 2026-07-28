@@ -18,7 +18,6 @@ function parseAgentMd(content: string): ParsedAgent {
   try {
     result.frontmatter = (yaml.load(fmText) as Record<string, unknown>) ?? {}
   } catch {
-    // fallback to raw body
     result.body = content
   }
   return result
@@ -40,7 +39,7 @@ function mapPermission(
   return permission
 }
 
-const AGENTS_ROOT = join(import.meta.dir!, "..", "..", "assets", "agents")
+const AGENTS_ROOT = join(import.meta.dir!, "..", "..", "..", "assets", "agents")
 
 export function injectAgents(config: Record<string, unknown>): void {
   if (existsSync(AGENTS_ROOT)) {
@@ -77,7 +76,6 @@ export function injectAgents(config: Record<string, unknown>): void {
 }
 
 function pathToName(filename: string): string | null {
-  // openspec-orchestrator.md → openspec-orchestrator
   const base = filename.replace(/\.md$/i, "")
   return base || null
 }
