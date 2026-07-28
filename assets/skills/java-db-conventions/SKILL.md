@@ -1,7 +1,7 @@
 ---
 name: java-db-conventions
 description: 仅限 Java 后端开发场景。数据库规范——MyBatisPlus 持久化用法、审计字段自动填充、Flyway 迁移。通用 DB 设计约定见 db-conventions。适用场景同前。
-capabilities: ["db-design", "tech-stack-java"]
+capabilities: ["db-design", "architecture", "tech-stack-java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

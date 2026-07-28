@@ -38,6 +38,7 @@ Info 级别 issue 的 description/suggestion 中禁止出现阶段/时机相关�
 ## 审查内容（架构维度）
 
 加载匹配的 skill 后，按其中架构规范进行审查：
+注意：skill 所列规则为最低基准，不限于所列维度。审查时必须结合自身架构领域知识做拓展覆盖。
 
 审查时以 design.md 中的架构方案为基线，对照代码验证实施忠实度——代码偏离 design.md 且违反 architecture skill 规范时报 issue。
 

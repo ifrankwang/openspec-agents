@@ -1,6 +1,6 @@
 ---
-name: java-dev-essentials
-description: Java 后端开发基础规范——构建命令、代码质量工具、测试策略、日志规范、提交约定、Flyway 迁移、Spring Boot 配置。
+name: java-dev-practices
+description: Java 开发实践规范——构建命令、代码质量工具、测试策略、提交规范、Spring Boot 配置、开发流程。不定义质量规则（见 style / maintainability / performance / architecture / security skill）。仅在 Java 后端项目使用。
 capabilities: ["efficiency", "tech-stack-java"]
 ---
 
@@ -22,21 +22,9 @@ mvn test                              # 运行测试
 - 配置在 pom.xml `spotless-maven-plugin`
 
 **PMD**：
-- 规则集涵盖：禁止 System.out、强制 try-with-resources、禁止不必要的内联 FQN（`UnnecessaryFullyQualifiedName`）、方法行数上限 100、类圈复杂度上限 20/方法上限 15
 - 规则集定义按项目级 pmd-rules.xml
 
 **SonarLint**：IDE 建议安装 SonarLint 插件，尽量修复提示问题
-
-## .gitignore
-
-必须包含：
-```
-target/
-*.log
-.idea/
-*.iml
-.env
-```
 
 ## 测试规范
 
@@ -45,12 +33,12 @@ target/
 - 测试方法：`test{MethodName}`（如 `testCreateOrder`）
 
 **分层策略**：
-- domain service 测试用纯 JUnit，零 Spring 依赖（domain 层本就无框架依赖）
+- Domain service 测试用纯 JUnit，零 Spring 依赖（domain 层本就无框架依赖）
 - 优先切片测试 + `@Import` 组装所需 Bean，避免滥用全量 `@SpringBootTest`（启动慢、依赖环境）
 - 仅跨多层集成测试时才用 `@SpringBootTest` + `@ActiveProfiles("test")`
 
 **测试数据库**：
-- 默认 H2 内存库（`MODE=PostgreSQL` 兼容模式），Flyway 在 test profile 下禁用
+- 默认 H2 内存库（`MODE=PostgreSQL` 兼容模式）
 - 配置见 `src/test/resources/application-test.yml`
 
 **WireMock**：
@@ -66,21 +54,6 @@ target/
 **测试数据**：
 - XLSX 测试文件 → `src/test/resources/`
 - 配置文件 → `application-test.yml`
-
-## 日志规范
-
-**SLF4J + Logback**：
-```java
-private static final Logger log = LoggerFactory.getLogger(MyClass.class);
-log.info("Processing order {}", orderId);  // 参数化，不拼接字符串
-```
-
-**级别配置**：domain=DEBUG, infrastructure=INFO, framework=WARN
-
-**禁止**：
-1. `System.out.println` / `System.err.println`
-2. 日志中输出密码、Token、身份证号等敏感数据
-3. 保留仅为调试目的添加的日志（任务完成后清理）
 
 ## 提交规范
 
@@ -98,7 +71,6 @@ chore: 升级依赖版本
 
 ## 新功能开发
 
-新增功能时须：
 - 编写单元测试覆盖全部验收条件，测试先行
 - 实现代码使测试通过，保持最小实现
 - 重构消除重复、改善可读性，测试须持续通过
@@ -107,23 +79,15 @@ chore: 升级依赖版本
 
 ## Bug 修复
 
-修复缺陷时须：
 - 从问题表象逐层追溯根因，基于事实定位系统性根因
 - 修复方案针对根因而非表象
 - 编写回归测试覆盖该场景
 
 ## 调试
 
-调试期间须：
 - 使用日志框架输出，禁止直接输出到标准输出
 - 任务完成前清理所有仅为调试目的添加的日志
 - 生产环境可用的日志使用 info 级别并标注业务含义
-
-## Flyway 迁移
-
-- 脚本命名：`V{version}__{description}.sql`
-- 脚本位置：`src/main/resources/db/migration/`
-- DB 状态字段用 SMALLINT，Domain 层映射为 Java 枚举
 
 ## Spring Boot 启动与配置
 

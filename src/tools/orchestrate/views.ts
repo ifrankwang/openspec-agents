@@ -8,14 +8,14 @@ import { findSkillPath, SKILL_SCAN_ROOTS } from "../../skills/scan.js"
 
 const AGENT_CAPABILITY_SUGGESTIONS: Record<string, string[]> = {
   "openspec-architect": ["efficiency", "architecture", "api-design", "db-design"],
-  "openspec-developer": ["efficiency", "api-testing"],
+  "openspec-developer": ["efficiency", "api-testing", "style", "maintainability", "performance"],
   "openspec-reviewer-tool": ["efficiency", "quality-gate"],
   "openspec-reviewer-task": ["efficiency", "api-testing"],
   "openspec-reviewer-architecture": ["efficiency", "tool-improvement", "architecture"],
-  "openspec-reviewer-maintainability": ["efficiency", "tool-improvement"],
-  "openspec-reviewer-performance": ["efficiency", "tool-improvement"],
+  "openspec-reviewer-maintainability": ["efficiency", "tool-improvement", "maintainability"],
+  "openspec-reviewer-performance": ["efficiency", "tool-improvement", "performance"],
   "openspec-reviewer-security": ["efficiency", "tool-improvement", "security"],
-  "openspec-reviewer-style": ["efficiency", "tool-improvement", "api-design", "db-design"],
+  "openspec-reviewer-style": ["efficiency", "tool-improvement", "api-design", "db-design", "style"],
 }
 
 function getToolImprovementSkills(agent: string): string[] {

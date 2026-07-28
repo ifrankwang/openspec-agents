@@ -1,7 +1,7 @@
 ---
 name: java-api-conventions
 description: 仅限 Java 后端开发场景。接口层 Java/Spring 实现规范——Spring 注解、Swagger/SpringDoc 注解、R<T> 统一返回、@RestControllerAdvice 异常处理。通用 REST 设计原则见 api-conventions。适用场景同前。
-capabilities: ["api-design", "tech-stack-java"]
+capabilities: ["api-design", "architecture", "tech-stack-java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。
@@ -14,16 +14,6 @@ capabilities: ["api-design", "tech-stack-java"]
 | 1 | 必须用 `@RestController` | |
 | 2 | `@Validated` + `jakarta.validation` 校验参数 | 注解加在 DTO 字段上，入口触发校验 |
 | 3 | 统一返回 `R<T>` | 除文件下载等特殊场景外 |
-
-## Swagger 注解
-
-引入 SpringDoc OpenAPI（`springdoc-openapi-starter-webmvc-ui`，适配 Spring Boot 4）后，接口与 DTO 必须补充注解：
-
-| 对象 | 注解 |
-|------|------|
-| Controller 类 | `@Tag(name = "xxx相关接口")` |
-| 接口方法 | `@Operation(summary = "xxx")` |
-| DTO 字段 | `@Schema(description = "xxx")` |
 
 ## 统一返回 R<T>
 

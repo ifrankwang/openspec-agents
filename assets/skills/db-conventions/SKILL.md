@@ -1,7 +1,7 @@
 ---
 name: db-conventions
 description: 数据库设计通用约定——表命名、主键选择、审计字段、逻辑删除、索引命名、状态字段、操作人来源链路。技术栈无关（不绑定具体 SQL 方言）。
-capabilities: ["db-design"]
+capabilities: ["db-design", "architecture"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

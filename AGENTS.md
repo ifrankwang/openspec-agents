@@ -108,6 +108,14 @@ opx_* 工具返回体必须是 markdown 格式（列表、段落），不得使�
 
 此原则适用于整个项目：相同语义的代码段在 3 个及以上位置复用时必须提炼为共享函数，禁止复制粘贴。agent 文档（`assets/agents/*.md`）等非结构化文本除外。视图渲染（`src/tools/orchestrate/views.ts`）中因各 agent 视图高度同构，阈值降至 2 个及以上，worktree 路径展示、issue 列表渲染等已按此原则抽取。
 
+### Skill 间不得相互引用
+
+Skill 文件中不得引用其他 skill 的名称或目录路径。唯一例外：技术栈 skill 可单向引用其抽象基础 skill（如 `java-quality-gate` 可引用 `quality-gate`，`java-ddd-architecture` 可引用 `ddd-architecture`）。
+
+### Skill 仅为最低基准，非穷举清单
+
+Skill 定义的是该维度的最低审查基线，不限于所列维度。reviewer agent 在加载 skill 后，必须结合 agent 自身领域知识做拓展覆盖，禁止仅检查 skill 中明确列举的规则项。同一维度的未见问题同样须按统一严重级别报 issue。
+
 ### Agent 定义职责与约束一致性
 
 同一 `agent.md` 中角色职责描述与行为约束不得矛盾。修改职责或约束任一端时，必须同步审查另一端是否存在冲突。

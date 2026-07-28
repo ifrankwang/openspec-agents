@@ -27,7 +27,7 @@ capabilities: ["architecture", "tech-stack-java"]
 │   ├── service      ← Application Service（编排用例，不含技术实现）
 │   └── dto          ← 应用层 DTO（模块间传输）
 ├── infrastructure
-│   ├── persistence  ← PO、Mapper、Converter（MapStruct）
+│   ├── persistence  ← PO、Mapper、对象转换器
 │   ├── llm          ← LLM 适配器
 │   ├── excel        ← POI 解析器/写入器
 │   ├── auth         ← 认证适配器
@@ -40,7 +40,7 @@ capabilities: ["architecture", "tech-stack-java"]
     ├── controller   ← REST Controller（仅参数校验 + 调用 application）
     ├── security     ← 登录接口 / JWT 过滤器 / SecurityConfig
     ├── dto          ← 接口层 DTO（入参/出参）
-    └── assembler    ← DTO ↔ Domain 转换（MapStruct）
+    └── assembler    ← DTO ↔ Domain 转换器
 ```
 
 ## 层间依赖
@@ -440,20 +440,6 @@ public class LlmOrderGenAdapter implements OrderGenerationPort {
 ### 判据
 
 同一逻辑在 ≥2 处独立实现、属横向共性需求（非单点业务上下文特有）、新增场景漏调度即失效 → 必须基础设施化。
-
-## MapStruct
-
-> 概念见 ddd-architecture，以下为 Java 实现示例。
-
-\`\`\`java
-@Mapper(componentModel = "spring")
-public interface OrderConverter {
-    Order toDomain(OrderPO po);
-    OrderPO toPO(Order domain);
-}
-```
-
-必须 `componentModel = "spring"`；字段映射用 `@Mapping(source, target)`。
 
 ## Spring DI
 
