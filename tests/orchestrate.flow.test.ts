@@ -161,8 +161,9 @@ describe("1. Happy Path — 完整流程", () => {
     expect(tg1.executionBoundary.allowed_directories).toContain("src")
 
     // 3. set_worktree
-    const r2 = JSON.parse(await set_worktree.execute({}, o))
-    expect(r2.status).toBe("ok")
+    const r2 = await set_worktree.execute({}, o)
+    expect(r2).toContain("已创建 worktree")
+    expect(r2).toContain("**状态**")
 
     state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -455,7 +456,7 @@ describe("5. Recovery — dev_impl 阶段恢复", () => {
     expect(tg.phases.architect_review.completed).toBe(true)
     expect(tg.tasks.every((t: any) => t.status === "submitted")).toBe(true)
     expect(tg.worktreePath).toBe(devWt)
-    expect(tg.branchName).toBe("task-group/1")
+    expect(tg.branchName).toBe("task-group/test-flow/1")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1871,13 +1872,14 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       expect(tgBefore.baseRef).toBeNull()
 
       // set_worktree
-      const r = JSON.parse(await set_worktree.execute({}, o))
-      expect(r.status).toBe("ok")
+      const r = await set_worktree.execute({}, o)
+      expect(r).toContain("已创建 worktree")
+      expect(r).toContain("**状态**")
 
       state = readStateSync(wt, CID)
       const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
       expect(tgAfter.worktreePath).not.toBeNull()
-      expect(tgAfter.branchName).toBe("task-group/1")
+      expect(tgAfter.branchName).toBe("task-group/test-flow/1")
       expect(tgAfter.baseRef).toBe(fakeGit.baseRef)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}

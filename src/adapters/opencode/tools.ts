@@ -36,10 +36,10 @@ export const init = tool({
 
 export const set_worktree = tool({
   description:
-    "确保目标组的 git worktree 就绪。若已存在则复用，否则按规范自动创建（分支 task-group/{id}，路径 .worktree/task-group-{id}）。只补齐资源，不改变阶段。",
+    "确保目标组的 git worktree 就绪。若已存在则复用，否则按规范自动创建（分支 task-group/{changeId}/{taskGroupId}，路径 .worktree/{changeId}/task-group-{taskGroupId}）。只补齐资源，不改变阶段。",
   args: {
     worktree_path: tool.schema.string().optional().describe("git worktree 的绝对路径（可选，不传则按规范自动生成）"),
-    branch_name: tool.schema.string().optional().describe("worktree 对应的分支名（可选，不传则按规范 task-group/{id}）"),
+    branch_name: tool.schema.string().optional().describe("worktree 对应的分支名（可选，不传则按规范 task-group/{changeId}/{taskGroupId}）"),
   },
   async execute(args, context) {
     return setWorktreeExecute(args, { worktree: context.worktree, agent: context.agent })

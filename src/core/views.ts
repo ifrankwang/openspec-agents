@@ -347,9 +347,10 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
         lines.push(`⚠️ 发现 ${unregistered.length} 个未注册到状态文件的 worktree，请用 question 询问用户是否恢复，确认后调用 opx_orch_init(recovery=...) 恢复。`)
       }
       for (const w of unregistered) {
-        const match = w.branch.match(/^task-group\/(\d+)$/)
-        const tgId = match ? match[1] : "?"
-        lines.push(`  - ${w.branch} → \`opx_orch_init({ recovery: { phase: "<phase>" } })\` + \`opx_orch_set_worktree\``)
+        const match = w.branch.match(/^task-group\/(.+?)\/(\d+)$/)
+        const tgId = match ? match[2] : "?"
+        const cId = match ? match[1] : "?"
+        lines.push(`  - ${w.branch} (change=${cId}) → \`opx_orch_init({ change_id: "${cId}", recovery: { phase: "<phase>" } })\` + \`opx_orch_set_worktree\``)
       }
     }
   }

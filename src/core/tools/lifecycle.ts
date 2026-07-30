@@ -3,7 +3,7 @@ import type { TaskGroupState, TaskItem, IssueItem, TaskStatus, Phase, BuildPhase
 import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
-import { readStateByWorktree, readStateByChangeId, writeState } from "../state.js"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import { createEmptyPhases, assertOrchestrator, findTaskGroup, isReviewCompleted, deriveCurrentAgents } from "../derive.js"
 import {
@@ -263,8 +263,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   const tg = findTaskGroup(state, state.taskGroupId)
 
   const repoRoot = ctx.worktree
-  const branch = params.branch_name || `task-group/${state.taskGroupId}`
-  const wtPath = params.worktree_path || path.join(repoRoot, ".worktree", `task-group-${state.taskGroupId}`)
+  const branch = params.branch_name || `task-group/${state.changeId}/${state.taskGroupId}`
+  const wtPath = params.worktree_path || path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
 
   const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
   if (changeStatus.trim().length > 0) {
@@ -332,21 +332,17 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
 
   await writeState(ctx.worktree, state)
 
-  const msg = reused
-    ? `复用已有 worktree：${existingPath}（分支 ${branch}）。baseRef=${tg.baseRef?.slice(0, 7)}。`
-    : `已创建 worktree：${wtPath}（分支 ${branch}）。baseRef=${tg.baseRef?.slice(0, 7)}。`
-  return JSON.stringify(
-    {
-      status: "ok",
-      reused,
-      worktree_path: tg.worktreePath,
-      branch_name: branch,
-      base_ref: tg.baseRef,
-      message: msg,
-    },
-    null,
-    2
-  )
+  // 在 worktree 中写入上下文指针，供 worktree 内 session 读取 state
+  if (tg.worktreePath) {
+    await writeContextToWorktree(tg.worktreePath, state.changeId, state.taskGroupId)
+  }
+
+  return [
+    `- **状态**: ${reused ? "复用已有 worktree" : "已创建 worktree"}`,
+    `- **路径**: \`${tg.worktreePath}\``,
+    `- **分支**: \`${branch}\``,
+    `- **基准提交**: \`${tg.baseRef?.slice(0, 7)}\``,
+  ].join("\n")
 }
 
 export async function statusExecute(ctx: ToolContext): Promise<string> {

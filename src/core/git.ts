@@ -152,3 +152,33 @@ export async function discoverDiskWorktrees(worktree: string): Promise<{ branch:
   }
   return result
 }
+
+/**
+ * 从 git worktree 的 .git 文件中解析主仓库根路径。
+ *
+ * Git worktree 的 .git 是一个文本文件，内容为 `gitdir: /path/to/main/.git/worktrees/...`。
+ * 切割 `/.git/worktrees/` 得到主仓库路径。
+ *
+ * @param worktreePath - worktree 的绝对路径
+ * @returns 主仓库根路径
+ * @throws 无法解析 .git 文件或 gitdir 行时抛出错误
+ */
+export async function discoverRepoRoot(worktreePath: string): Promise<string> {
+  const gitFile = path.join(worktreePath, ".git")
+  let content: string
+  try {
+    content = await readFile(gitFile, "utf-8")
+  } catch {
+    throw new Error(`无法读取 ${gitFile}，请确认该路径是一个有效的 git worktree。`)
+  }
+  const match = content.match(/^gitdir:\s*(.+)$/m)
+  if (!match) {
+    throw new Error(`无法从 ${gitFile} 解析 gitdir 行。文件内容：${content.slice(0, 200)}`)
+  }
+  const gitdir = match[1].trim()
+  const idx = gitdir.indexOf("/.git/worktrees/")
+  if (idx === -1) {
+    throw new Error(`无法从 gitdir "${gitdir}" 推导主仓库路径，缺少 "/.git/worktrees/" 标记。`)
+  }
+  return gitdir.slice(0, idx)
+}

@@ -89,10 +89,10 @@ describe("G1. set_worktree 守卫已移除", () => {
     const o = makeCtx("openspec-orchestrator", wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
-    expect(result.worktree_path).toBeTruthy()
-    expect(result.base_ref).toBeTruthy()
+    const result = await set_worktree.execute({}, o)
+    expect(result).toContain("已创建 worktree")
+    expect(result).toContain("**路径**")
+    expect(result).toContain("**基准提交**")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -110,8 +110,8 @@ describe("G1.2. set_worktree 自修复", () => {
     const o = makeCtx("openspec-orchestrator", wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
+    const result = await set_worktree.execute({}, o)
+    expect(result).toContain("已创建 worktree")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -125,13 +125,11 @@ describe("G1.2. set_worktree 自修复", () => {
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
-    let result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
-    expect(result.reused).toBe(false)
+    let result = await set_worktree.execute({}, o)
+    expect(result).toContain("已创建 worktree")
 
-    result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
-    expect(result.reused).toBe(true)
+    result = await set_worktree.execute({}, o)
+    expect(result).toContain("复用已有 worktree")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -145,14 +143,12 @@ describe("G1.2. set_worktree 自修复", () => {
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
-    let result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
-    expect(result.reused).toBe(false)
+    let result = await set_worktree.execute({}, o)
+    expect(result).toContain("已创建 worktree")
 
     fakeGit.mergeConflictOnNext = true
-    result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
-    expect(result.reused).toBe(false)
+    result = await set_worktree.execute({}, o)
+    expect(result).toContain("已创建 worktree")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -166,11 +162,11 @@ describe("G1.2. set_worktree 自修复", () => {
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
-    const result = JSON.parse(await set_worktree.execute({}, o))
-    expect(result.status).toBe("ok")
+    const result = await set_worktree.execute({}, o)
+    expect(result).toContain("已创建 worktree")
 
     fakeGit.mergeConflictOnNext = true
-    const wtPath = join(wt, ".worktree", "task-group-1")
+    const wtPath = join(wt, ".worktree", CID, "task-group-1")
     fakeGit.dirtyPaths.add(wtPath)
 
     await expect(set_worktree.execute({}, o)).rejects.toThrow(/分叉且有未提交变更/)

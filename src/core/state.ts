@@ -1,11 +1,39 @@
 import path from "path"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, statSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import type { OrchestrateState } from "./types.js"
 import { STATE_DIR_NAME, STATE_SUBDIR_NAME } from "./constants.js"
+import { discoverRepoRoot } from "./git.js"
 
 export function getStateDir(worktree: string): string {
   return path.join(worktree, STATE_DIR_NAME, STATE_SUBDIR_NAME)
+}
+
+/** Worktree 内用于存储 changeId/taskGroupId 指针的上下文文件（相对于 worktree 根） */
+export const WORKTREE_CONTEXT_FILE = ".opencode/.orchestrate_state/context.json"
+
+/**
+ * 从 worktree 中读取上下文指针（changeId + taskGroupId）。
+ * 文件不存在时返回 null。
+ */
+export async function readContextFromWorktree(worktreePath: string): Promise<{ changeId: string; taskGroupId: string } | null> {
+  const fp = path.join(worktreePath, WORKTREE_CONTEXT_FILE)
+  try {
+    const raw = await readFile(fp, "utf-8")
+    return JSON.parse(raw) as { changeId: string; taskGroupId: string }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 向 worktree 写入上下文指针（changeId + taskGroupId）。
+ * 自动创建所需目录。
+ */
+export async function writeContextToWorktree(worktreePath: string, changeId: string, taskGroupId: string): Promise<void> {
+  const dir = path.dirname(path.join(worktreePath, WORKTREE_CONTEXT_FILE))
+  mkdirSync(dir, { recursive: true })
+  await writeFile(path.join(worktreePath, WORKTREE_CONTEXT_FILE), JSON.stringify({ changeId, taskGroupId }, null, 2))
 }
 
 export function getStatePath(worktree: string, changeId: string): string {
@@ -33,6 +61,23 @@ export async function writeCurrentChangeId(worktree: string, changeId: string): 
 }
 
 export async function readStateByWorktree(worktree: string): Promise<OrchestrateState | null> {
+  // 检测是否为 git worktree（.git 是文件）还是主仓库根（.git 是目录）
+  const gitPath = path.join(worktree, ".git")
+  try {
+    const gitStat = statSync(gitPath)
+    if (gitStat.isFile()) {
+      // Worktree 模式：读取 context.json 获取 changeId，通过 discoverRepoRoot 推导主仓库路径，
+      // 再从主仓库加载 state
+      const ctx = await readContextFromWorktree(worktree)
+      if (!ctx) return null
+      const repoRoot = await discoverRepoRoot(worktree)
+      return readStateByChangeId(repoRoot, ctx.changeId)
+    }
+    // .git 是目录 → 主仓库根模式，走现有逻辑
+  } catch {
+    // .git 不存在，走现有逻辑（可能返回 null）
+  }
+
   const changeId = await readCurrentChangeId(worktree)
   if (!changeId) return null
   return readStateByChangeId(worktree, changeId)
