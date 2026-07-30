@@ -9,6 +9,12 @@
 
 tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/`。
 
+## 代码探索
+
+本项目所有代码探索任务（理解架构、查询符号定义、分析调用关系、评估变更影响、搜索代码等）必须优先使用 `codegraph` CLI 工具，替代 `grep`/`ls`/`find`/逐个 `Read` 文件的低效方式。具体用法参考 `.agents/skills/code-efficiency/SKILL.md` 中 CodeGraph 章节。
+
+项目根已初始化 `.codegraph` 索引，可直接使用。worktree 环境下每个 linked worktree 需单独执行 `codegraph init`。
+
 ## 项目目录结构
 
 操作此项目前明确以下目录的职责边界：
@@ -152,13 +158,3 @@ bun test tests/orchestrate.flow.test.ts  # 单一文件
 ```
 
 测试通过 `FakeGitRunner`（`tests/helpers.ts`）伪造 Git，零外部依赖。`__setGitRunner()` 注入。
-
-## 同步本地改动到缓存
-
-发布新版本或改完插件代码后，将本地源码同步到 opencode 缓存以生效：
-
-```bash
-bun run sync
-```
-
-否则 OpenCode 仍加载旧版缓存，导致修改不生效。
