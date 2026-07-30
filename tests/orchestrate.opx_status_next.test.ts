@@ -247,7 +247,9 @@ describe("S6: tool review failed (non-checkpoint)", () => {
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
     fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-    await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: [] }, toolR)
+    await tool_review_submit.execute({ change_id: CID, passed: false,
+      issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
+      fixed_issue_ids: [] }, toolR)
 
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("openspec-developer")
@@ -351,6 +353,7 @@ describe("S9: checkpoint (${MAX_RETRIES} tool failures)", () => {
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // 2. ${MAX_RETRIES} 轮 tool 失败
+    let prevIssueS9: string | undefined
     for (let round = 1; round <= MAX_RETRIES; round++) {
       state = readStateSync(wt, CID)
       const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -361,10 +364,17 @@ describe("S9: checkpoint (${MAX_RETRIES} tool failures)", () => {
           recovery: { phase: "review" }}, o)
         await set_worktree.execute({ change_id: CID }, o)
         fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
-        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+          fixed_issue_ids: prevIssueS9 ? [prevIssueS9] : [] }, d)
       }
 
-      await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: []}, toolR)
+      await tool_review_submit.execute({ change_id: CID, passed: false,
+        issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
+        fixed_issue_ids: prevIssueS9 ? [prevIssueS9] : []}, toolR)
+
+      state = readStateSync(wt, CID)
+      const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
+      prevIssueS9 = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
     }
 
     const output = await status.execute({ change_id: CID }, o)
@@ -402,6 +412,7 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // 2. ${MAX_RETRIES} 轮 tool 失败（达到检查点，retryCount=${MAX_RETRIES}）
+    let prevIssueS10: string | undefined
     for (let round = 1; round <= MAX_RETRIES; round++) {
       state = readStateSync(wt, CID)
       const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -411,9 +422,16 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
           recovery: { phase: "review" }}, o)
         await set_worktree.execute({ change_id: CID }, o)
         fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
-        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+          fixed_issue_ids: prevIssueS10 ? [prevIssueS10] : [] }, d)
       }
-      await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: []}, toolR)
+      await tool_review_submit.execute({ change_id: CID, passed: false,
+        issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
+        fixed_issue_ids: prevIssueS10 ? [prevIssueS10] : []}, toolR)
+
+      state = readStateSync(wt, CID)
+      const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
+      prevIssueS10 = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
     }
 
     // 3. resolve_review(continue) → lastResolvedRetryCount=${MAX_RETRIES}, status=dev_impl
@@ -421,7 +439,8 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
 
     // 4. dev_submit → status=review, retryCount=${MAX_RETRIES}, lastResolvedRetryCount=${MAX_RETRIES}
     fakeGit.diffs.set(devWt, ["src/FR${MAX_RETRIES}.java"])
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+      fixed_issue_ids: prevIssueS10 ? [prevIssueS10] : [] }, d)
 
     // 5. opx_status 不应含 "以上状态异常" 和 "recovery"
     const output = await status.execute({ change_id: CID }, o)

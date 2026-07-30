@@ -140,7 +140,7 @@ describe("sourcePhase B: tool blocking issue causes tool rollback", () => {
     )
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const raw = await tool_review_submit.execute({change_id: CID, passed: true,
+    const raw = await tool_review_submit.execute({change_id: CID, passed: false,
       issues: [],
       fixed_issue_ids: [],}, toolR)
     const result = JSON.parse(typeof raw === "string" ? raw : raw.output)
@@ -185,7 +185,7 @@ describe("sourcePhase C: task blocking issue causes task throw", () => {
       task_review_submit.execute({change_id: CID, passed: true,
         verified_task_ids: ["1", "2"], failed_task_ids: [],
         fixed_issue_ids: [],}, taskR)
-    ).rejects.toThrow(/tk1/)
+    ).rejects.toThrow(/passed=true.*Low\+/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

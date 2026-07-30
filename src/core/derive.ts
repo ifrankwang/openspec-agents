@@ -128,7 +128,7 @@ export function deriveCurrentAgents(tg: TaskGroupState): string[] {
 export function assertPassWithIssues(passed: boolean, issues: Array<{ severity: string }>, toolName: string): void {
   if (passed && hasBlockingIssues(issues)) {
     throw new Error(
-      `工具 "${toolName}"：报告声称 passed=true，但 issues 中包含 Low 及以上严重级别的问题，仅有 Info 级别问题可以通过。`
+      `工具 "${toolName}"：报告声称 passed=true，但 issues 中包含 Low 及以上严重级别的问题。passed=true 只能带 Info 级别 issue；有 Low+ issue 时必须设 passed=false。`
     )
   }
 }
