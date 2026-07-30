@@ -803,17 +803,15 @@ describe("11. 守卫 — quality 阶段阻塞 issue", () => {
 
     await setupThroughQualityReady(wt, fakeGit, { orch: o, arch: a, dev: d, toolReviewer: toolR, taskReviewer: taskR })
 
-    const dims = ["style", "architecture", "performance", "security", "maintainability"]
     let lastResult: any
-    for (let i = 0; i < dims.length; i++) {
-      const args: any = { change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }
-      if (i === 0) {
-        args.passed = false
-        args.issues = [{ severity: "High", file: "src/x.java", line: 1, description: "Critical issue", suggestion: "Fix it" }]
-      }
-      const res = JSON.parse(await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
-      lastResult = res
+    const passDims = ["architecture", "performance", "security", "maintainability"]
+    for (const d of passDims) {
+      const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt)))
     }
+    // style 最后提交，此时已有阻塞 issue → passed=false 才合法
+    lastResult = JSON.parse(await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+      issues: [{ severity: "High", file: "src/x.java", line: 1, description: "Critical issue", suggestion: "Fix it" }],
+      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt)))
     expect(lastResult.status).toBe("recorded")
     expectNoOrchestration(lastResult.message)
     expect(lastResult.failed_dimensions).toBeDefined()
@@ -823,7 +821,7 @@ describe("11. 守卫 — quality 阶段阻塞 issue", () => {
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgAfter.phases.review.retryCount).toBe(1)
     expect(tgAfter.status).toBe("dev_impl")
-    // quality progress 不再清空——failed 维保持 failed，passed 维保持 passed
+    // 仅报 issue 的 style 维度 failed，其余维度正常 passed
     expect(tgAfter.phases.review.quality.progress.style).toBe("failed")
     expect(tgAfter.phases.review.quality.progress.architecture).toBe("passed")
     expect(tgAfter.phases.review.quality.progress.performance).toBe("passed")
@@ -865,6 +863,7 @@ describe("12. resolve_review — continue / giveup", () => {
       //    - 第 ${MAX_RETRIES} 轮 needs_user_decision
       // 每轮需通过 init(recovery to review)→dev_submit(review mode)
       // 重置 tool.completed 后才能再次提交 tool
+      let prevIssue: string | undefined
       for (let round = 1; round <= MAX_RETRIES; round++) {
         state = readStateSync(wt, CID)
         const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -875,10 +874,13 @@ describe("12. resolve_review — continue / giveup", () => {
 
         if (round > 1) {
           fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
-          await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+          await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+            fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
         }
 
-        const r = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: []}, toolR))
+        const r = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: false,
+          issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
+          fixed_issue_ids: prevIssue ? [prevIssue] : []}, toolR))
 
         expectNoOrchestration(r.message)
         if (round < MAX_RETRIES) {
@@ -887,6 +889,10 @@ describe("12. resolve_review — continue / giveup", () => {
         } else {
           expect(r.status).toBe("recorded")
         }
+
+        state = readStateSync(wt, CID)
+        const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
+        prevIssue = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
       }
 
       // 3. resolve_review(continue) — 不再重置 retryCount
@@ -907,9 +913,11 @@ describe("12. resolve_review — continue / giveup", () => {
 
       // 4. 验证可重新从 tool 层开始
       fakeGit.diffs.set(devWt, ["src/F5.java"])
-      await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+      await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+        fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
 
-      const r5 = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: []}, toolR))
+      const r5 = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: true, issues: [],
+        fixed_issue_ids: prevIssue ? [prevIssue] : []}, toolR))
       expect(r5.status).toBe("ok")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
@@ -934,16 +942,14 @@ describe("12. resolve_review — continue / giveup", () => {
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
 
       // 2. Round 1: 5 维 quality 全提交，style 报阻塞 issue → retryCount=1
-      const dims = ["style", "architecture", "performance", "security", "maintainability"]
       let lastRes: any
-      for (let i = 0; i < dims.length; i++) {
-        const args: any = { change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }
-        if (i === 0) {
-          args.passed = false
-          args.issues = [{ severity: "Low", file: "src/x.java", line: 1, description: "Style blocking issue", suggestion: "Fix style" }]
-        }
-        lastRes = JSON.parse(await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
+      const passDimsG = ["architecture", "performance", "security", "maintainability"]
+      for (const d of passDimsG) {
+        await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
       }
+      lastRes = JSON.parse(await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+        issues: [{ severity: "Low", file: "src/x.java", line: 1, description: "Style blocking issue", suggestion: "Fix style" }],
+        fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt)))
       expect(lastRes.status).toBe("recorded")
       expectNoOrchestration(lastRes.message)
       expect(lastRes.retry_count).toBe(1)
@@ -1045,15 +1051,12 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
     // --- 2. Quality review fails with issues (5 维全提交，仅 style 失败) ---
-    const dims = ["style", "architecture", "performance", "security", "maintainability"]
-    for (let i = 0; i < dims.length; i++) {
-      const args: any = { change_id: CID, task_group_id: "1", passed: true, issues: [] }
-      if (i === 0) {
-        args.passed = false
-        args.issues = [{ severity: "Low", file: "src/x.java", line: 1, description: "Fix naming", suggestion: "Rename" }]
-      }
-      await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+    const passDims13 = ["architecture", "performance", "security", "maintainability"]
+    for (const d of passDims13) {
+      await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
     }
+    await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+      issues: [{ severity: "Low", file: "src/x.java", line: 1, description: "Fix naming", suggestion: "Rename" }] }, makeCtx("openspec-reviewer-style", wt))
 
     // --- 3. After quality fail, status should be dev_impl ---
     state = readStateSync(wt, CID)
@@ -1128,14 +1131,12 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
-    const dims = ["style", "architecture", "performance", "security", "maintainability"]
-    const issueArgs: any = { change_id: CID, task_group_id: "1", passed: true, issues: [] }
-    issueArgs.passed = false
-    issueArgs.issues = [{ severity: "Low", file: "src/x.java", line: 1, description: "Fix naming", suggestion: "Rename" }]
-    await quality_review_submit.execute(issueArgs, makeCtx("openspec-reviewer-style", wt))
-    for (let i = 1; i < dims.length; i++) {
-      await quality_review_submit.execute({ change_id: CID, passed: true, issues: [] }, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+    const passDims14 = ["architecture", "performance", "security", "maintainability"]
+    for (const d of passDims14) {
+      await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
     }
+    await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+      issues: [{ severity: "Low", file: "src/x.java", line: 1, description: "Fix naming", suggestion: "Rename" }] }, makeCtx("openspec-reviewer-style", wt))
 
     // --- 2. After quality fail → dev_impl ---
     state = readStateSync(wt, CID)
@@ -1377,15 +1378,12 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
 
     // Quality 5 维全提交，仅 style 携带 line=0 issue 且 passed=false
-    const dims = ["style", "architecture", "performance", "security", "maintainability"]
-    for (let i = 0; i < dims.length; i++) {
-      const args: any = { change_id: CID, task_group_id: "1", passed: true, issues: [] }
-      if (i === 0) {
-        args.passed = false
-        args.issues = [{ severity: "Low", file: "pmd-rules.xml", line: 0, description: "Add XPath rule", suggestion: "XPath rule [tool_eligible]" }]
-      }
-      await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+    const dims16 = ["architecture", "performance", "security", "maintainability"]
+    for (const d of dims16) {
+      await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
     }
+    await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+      issues: [{ severity: "Low", file: "pmd-rules.xml", line: 0, description: "Add XPath rule", suggestion: "XPath rule [tool_eligible]" }] }, makeCtx("openspec-reviewer-style", wt))
 
     // quality failed → 自动回 dev_impl
     state = readStateSync(wt, CID)

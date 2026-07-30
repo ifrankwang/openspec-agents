@@ -129,7 +129,7 @@ export const tool_review_submit = tool({
     "工具审核层提交。跨维提交 tool issues（issues 自带 dimension 字段），含 UT 结果。调用者必须为 openspec-reviewer-tool。",
   args: {
     change_id: tool.schema.string().min(1).describe("change ID"),
-    passed: tool.schema.boolean().describe("工具层是否通过"),
+    passed: tool.schema.boolean().describe("工具层是否通过。有未解决的 Low+ issue 时须设为 false"),
     issues: tool.schema.array(toolIssueItem).optional().describe("跨维 issue，每个 item 需带 dimension"),
     fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
     exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("豁免裁定的 issue ID 列表"),
@@ -147,7 +147,7 @@ export const task_review_submit = tool({
     "任务审核层提交。验证 task 产出、服务启动、接口可用性、测试代码审查。调用者必须为 openspec-reviewer-task。",
   args: {
     change_id: tool.schema.string().min(1).describe("change ID"),
-    passed: tool.schema.boolean().describe("任务层是否通过"),
+    passed: tool.schema.boolean().describe("任务层是否通过。有未解决的 Low+ issue 或 task 未通过时须设为 false"),
     verified_task_ids: tool.schema.array(tool.schema.string()).optional().describe("已验证完成的 task ID 列表"),
     failed_task_ids: tool.schema.array(taskVerifyResult).optional().describe("未完成的 task 列表（含原因）"),
     issues: tool.schema.array(reviewIssue).optional().describe("测试代码审查 issue"),
@@ -167,7 +167,7 @@ export const quality_review_submit = tool({
     "AI 语义审查层提交。维度由调用者身份自动识别。调用者必须为 openspec-reviewer-{style|architecture|performance|security|maintainability}。",
   args: {
     change_id: tool.schema.string().min(1).describe("change ID"),
-    passed: tool.schema.boolean().describe("本维度是否通过"),
+    passed: tool.schema.boolean().describe("本维度是否通过。有未解决的 Low+ issue 时须设为 false"),
     issues: tool.schema.array(reviewIssue).optional().describe("新报审查 issue"),
     fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
     exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("豁免裁定的 issue ID 列表"),

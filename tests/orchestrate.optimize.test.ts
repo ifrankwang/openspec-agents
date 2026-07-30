@@ -871,15 +871,13 @@ describe("B5. dev_submit 不再重置 retryCount", () => {
     const { orch, dev, toolR, taskR } = await setupThroughReviewReady(wt, fakeGit)
 
     // 1. quality 首轮：style 报阻塞 issue
-    const dims: string[] = ["style", "architecture", "performance", "security", "maintainability"]
-    for (let i = 0; i < dims.length; i++) {
-      const args: any = { change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }
-      if (i === 0) {
-        args.passed = false
-        args.issues = [{ severity: "Low", file: "src/x.java", line: 1, description: "Naming", suggestion: "Fix" }]
-      }
-      await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+    const passDimsB5 = ["architecture", "performance", "security", "maintainability"]
+    for (const d of passDimsB5) {
+      await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
     }
+    await quality_review_submit.execute({ change_id: CID, passed: false,
+      issues: [{ severity: "Low", file: "src/x.java", line: 1, description: "Naming", suggestion: "Fix" }],
+      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt))
 
     let state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")

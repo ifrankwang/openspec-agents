@@ -38,6 +38,23 @@ function resetForBlocker(tg: TaskGroupState): void {
   }
 }
 
+function assertPassedConsistency(
+  passed: boolean,
+  blockingExists: boolean,
+  layerName: string,
+): void {
+  if (passed && blockingExists) {
+    throw new Error(
+      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue。有阻塞问题时请设 passed=false。`
+    )
+  }
+  if (!passed && !blockingExists) {
+    throw new Error(
+      `${layerName} 审核声称 passed=false，但不存在未解决的阻塞 issue。passed=false 时必须提供至少一个 Low+ issue 或 failed_task_id 作为不通过理由。`
+    )
+  }
+}
+
 export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolContext): Promise<string> {
   assertAgent(ctx.agent, "opx_arch_submit", ["openspec-architect"])
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
@@ -361,12 +378,14 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
     mergeExecutionBoundary(tg, params.boundary_expansion)
   }
 
+  const remainingToolBlocking = hasBlockingIssues(tg.issues, "tool")
+  assertPassedConsistency(params.passed, remainingToolBlocking, "工具层")
+
   tg.phases.review.tool.completed = true
   if (params.test_results) tg.phases.review.tool.testResults = params.test_results
   await writeState(ctx.worktree, state)
 
-  const hasBlocking = hasBlockingIssues(tg.issues, "tool")
-  if (params.passed && !hasBlocking) {
+  if (params.passed) {
     return JSON.stringify({
       status: "ok",
       phase: "review(tool=completed)",
@@ -515,26 +534,8 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
     }))
   }
 
-  if (params.passed) {
-    if (failed.length > 0) {
-      throw new Error(`任务层审核声称 passed=true，但存在 ${failed.length} 个未通过的 task。`)
-    }
-    if (hasBlockingIssues(tg.issues, "task")) {
-      const blockingIssues = tg.issues.filter(
-        (i) => (!i.sourcePhase || i.sourcePhase === "task") && isBlockingIssue(i)
-      )
-      const issueSummary = blockingIssues.slice(0, 3)
-        .map((i) => `#${i.id}(dimension:${i.dimension} status:${i.status || "open"})`)
-        .join("、")
-      throw new Error(`任务层审核声称 passed=true，但存在阻塞 issue：${issueSummary} 等 ${blockingIssues.length} 个。`)
-    }
-  }
-  if (!params.passed && failed.length === 0 && !hasBlockingIssues(tg.issues, "task")) {
-    throw new Error(
-      `任务层审核声称 passed=false，但既无 failed_task_ids 也无阻塞 issue。` +
-      `passed=false 时必须至少指定一个 failed_task_id 或提交 Low+ issue 作为不通过理由。`
-    )
-  }
+  const remainingTaskBlocking = hasBlockingIssues(tg.issues, "task")
+  assertPassedConsistency(params.passed, remainingTaskBlocking || failed.length > 0, "任务层")
 
   tg.phases.review.task.completed = true
   await writeState(ctx.worktree, state)
@@ -650,6 +651,9 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
     }
     mergeExecutionBoundary(tg, params.boundary_expansion)
   }
+
+  const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality")
+  assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
 
   tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"
   await writeState(ctx.worktree, state)

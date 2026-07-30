@@ -163,6 +163,7 @@ describe("T2: unattended suppresses checkpoint in status", () => {
 
     await set_unattended.execute({ change_id: CID, enabled: true }, o)
 
+    let prevIssueT2: string | undefined
     for (let round = 1; round <= MAX_RETRIES; round++) {
       state = readStateSync(wt, CID)
       const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -172,9 +173,16 @@ describe("T2: unattended suppresses checkpoint in status", () => {
           recovery: { phase: "review" }}, o)
         await set_worktree.execute({ change_id: CID }, o)
         fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
-        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+          fixed_issue_ids: prevIssueT2 ? [prevIssueT2] : [] }, d)
       }
-      await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: [] }, toolR)
+      await tool_review_submit.execute({ change_id: CID, passed: false,
+        issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
+        fixed_issue_ids: prevIssueT2 ? [prevIssueT2] : [] }, toolR)
+
+      state = readStateSync(wt, CID)
+      const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
+      prevIssueT2 = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
     }
 
     const output = await status.execute({ change_id: CID }, o)

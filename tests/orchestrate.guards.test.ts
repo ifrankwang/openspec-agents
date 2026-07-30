@@ -1038,7 +1038,9 @@ describe("G16. 层失败回退 dev_impl", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    const toolOut = await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: [] }, toolR)
+    const toolOut = await tool_review_submit.execute({ change_id: CID, passed: false,
+      issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
+      fixed_issue_ids: [] }, toolR)
     const r = typeof toolOut === "string" ? toolOut : toolOut.output
     const parsed = JSON.parse(r)
     expect(parsed.status).toBe("recorded")
