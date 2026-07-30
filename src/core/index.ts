@@ -27,8 +27,7 @@ export {
 // state
 export {
   readStateByWorktree, readStateByChangeId, writeState,
-  readCurrentChangeId, writeCurrentChangeId,
-  getStateDir, getStatePath, getCurrentPointerPath,
+  getStateDir, getStatePath,
 } from "./state.js"
 
 // git

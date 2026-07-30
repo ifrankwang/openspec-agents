@@ -49,36 +49,17 @@ export function getStatePath(worktree: string, changeId: string): string {
   return path.join(getStateDir(worktree), `${changeId}.json`)
 }
 
-export function getCurrentPointerPath(worktree: string): string {
-  return path.join(getStateDir(worktree), "current.json")
-}
-
-export async function readCurrentChangeId(worktree: string): Promise<string> {
-  const fp = getCurrentPointerPath(worktree)
-  try {
-    const raw = await readFile(fp, "utf-8")
-    const data = JSON.parse(raw) as { changeId: string }
-    return data.changeId || ""
-  } catch {
-    return ""
-  }
-}
-
-export async function writeCurrentChangeId(worktree: string, changeId: string): Promise<void> {
-  mkdirSync(getStateDir(worktree), { recursive: true })
-  await writeFile(getCurrentPointerPath(worktree), JSON.stringify({ changeId }, null, 2))
-}
-
-export async function readStateByWorktree(worktree: string): Promise<OrchestrateState | null> {
+export async function readStateByWorktree(worktree: string, changeId?: string): Promise<OrchestrateState | null> {
   if (isWorktreePath(worktree)) {
     const ctx = await readContextFromWorktree(worktree)
     if (!ctx) return null
     const repoRoot = await discoverRepoRoot(worktree)
     return readStateByChangeId(repoRoot, ctx.changeId)
   }
-  const changeId = await readCurrentChangeId(worktree)
-  if (!changeId) return null
-  return readStateByChangeId(worktree, changeId)
+  if (changeId) {
+    return readStateByChangeId(worktree, changeId)
+  }
+  throw new Error("change_id required for non-worktree context")
 }
 
 export async function readStateByChangeId(worktree: string, changeId: string): Promise<OrchestrateState | null> {

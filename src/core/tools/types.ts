@@ -21,15 +21,18 @@ export interface InitParams {
 }
 
 export interface SetWorktreeParams {
+  change_id: string
   worktree_path?: string
   branch_name?: string
 }
 
 export interface UnattendedParams {
+  change_id: string
   enabled: boolean
 }
 
 export interface ArchSubmitParams {
+  change_id: string
   outcome: "ready"
   execution_boundary: {
     allowed_directories: string[]
@@ -39,6 +42,7 @@ export interface ArchSubmitParams {
 }
 
 export interface ArchBlockerParams {
+  change_id: string
   blocker_id?: string
   blockers?: Array<{
     source_role: string
@@ -53,6 +57,7 @@ export interface ArchBlockerParams {
 }
 
 export interface DevSubmitParams {
+  change_id: string
   outcome?: "completed" | "blocked"
   completed_task_ids?: string[]
   self_check_results?: string
@@ -70,6 +75,7 @@ export interface DevSubmitParams {
 }
 
 export interface ToolReviewParams {
+  change_id: string
   passed: boolean
   issues?: Array<{
     dimension: string
@@ -90,6 +96,7 @@ export interface ToolReviewParams {
 }
 
 export interface TaskReviewParams {
+  change_id: string
   passed: boolean
   verified_task_ids?: string[]
   failed_task_ids?: Array<{ task_id: string; reason: string }>
@@ -117,6 +124,7 @@ export interface TaskReviewParams {
 }
 
 export interface QualityReviewParams {
+  change_id: string
   passed: boolean
   issues?: Array<{
     severity: string
@@ -136,5 +144,6 @@ export interface QualityReviewParams {
 }
 
 export interface ResolveReviewParams {
+  change_id: string
   decision: "continue" | "giveup"
 }

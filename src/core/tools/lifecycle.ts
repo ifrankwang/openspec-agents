@@ -3,7 +3,7 @@ import type { TaskGroupState, TaskItem, IssueItem, TaskStatus, Phase, BuildPhase
 import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
-import { readStateByWorktree, readStateByChangeId, writeState, writeCurrentChangeId, writeContextToWorktree } from "../state.js"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import { createEmptyPhases, assertOrchestrator, findTaskGroup, isReviewCompleted, deriveCurrentAgents } from "../derive.js"
 import {
@@ -237,7 +237,6 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   }
 
   await writeState(ctx.worktree, state)
-  await writeCurrentChangeId(ctx.worktree, state.changeId)
 
   const recoveryMsg = args.recovery
     ? `已恢复到 ${args.recovery.phase} 阶段。`
@@ -259,7 +258,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_set_worktree")
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
 
@@ -346,8 +345,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   ].join("\n")
 }
 
-export async function statusExecute(ctx: ToolContext): Promise<string> {
-  const state = await readStateByWorktree(ctx.worktree)
+export async function statusExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   const agent = ctx.agent
 
   if (!state) {
@@ -422,9 +421,9 @@ export async function statusExecute(ctx: ToolContext): Promise<string> {
   return view
 }
 
-export async function completeTaskGroupExecute(ctx: ToolContext): Promise<string> {
+export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_complete_task_group")
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (!isReviewCompleted(tg) || tg.status === "completed") {
@@ -493,7 +492,7 @@ export async function completeTaskGroupExecute(ctx: ToolContext): Promise<string
 
 export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_set_unattended")
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   state.unattended = params.enabled
   await writeState(ctx.worktree, state)

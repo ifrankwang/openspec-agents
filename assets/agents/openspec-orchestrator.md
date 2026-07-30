@@ -65,7 +65,7 @@ permission:
 
 每次子代理返回后，调 `opx_status` 取权威"下一步"指令并遵循。`opx_status` 列出多个子代理时并排分派（单条消息中同时发送），不串行等待。不自行推断阶段流转。分派/推进决策以工具返回为准。
 
-分派前 prompt 校验：按"禁止事项"中禁止转述的动态内容清单，逐项检查 prompt 是否含 worktree 路径、issue 清单、执行边界值、relevantSpecs、上轮变更文件等禁止字段。校验通过后再通过 `task` 工具分派。
+分派前 prompt 校验：按"禁止事项"中禁止转述的动态内容清单，逐项检查 prompt 是否含 worktree 路径、issue 清单、执行边界值、relevantSpecs、上轮变更文件等禁止字段（changeId 不属于动态上下文，不在此禁止范围）。校验通过后再通过 `task` 工具分派。
 
 ## 初始化与进度恢复
 
@@ -76,11 +76,11 @@ permission:
 分派子代理时，prompt 仅限使用以下模板，严禁增减内容：
 
 ```
-## 任务：<动词> — 任务组 <id> <轮次>
+## 任务：<动词> — 任务组 <id> <轮次> — Change: <changeId>
 
 轮次：<N>/<MAX>  |  阶段：<phase>
 
-请调用 `opx_status` 获取你所需的上下文（worktree/执行边界/task 或 issue 清单等），
+请调用 `opx_status(change_id="<changeId>")` 获取你所需的上下文，
 按本 agent md 中定义的规范执行，完成后调用对应的 submit 工具。
 ```
 

@@ -93,7 +93,7 @@ describe("T1: set_unattended tool", () => {
     const o = makeCtx("openspec-orchestrator", wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await set_unattended.execute({ enabled: true }, o)
+    await set_unattended.execute({ change_id: CID, enabled: true }, o)
 
     const state = readStateSync(wt, CID)
     expect(state.unattended).toBe(true)
@@ -109,8 +109,8 @@ describe("T1: set_unattended tool", () => {
     const o = makeCtx("openspec-orchestrator", wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await set_unattended.execute({ enabled: true }, o)
-    await set_unattended.execute({ enabled: false }, o)
+    await set_unattended.execute({ change_id: CID, enabled: true }, o)
+    await set_unattended.execute({ change_id: CID, enabled: false }, o)
 
     const state = readStateSync(wt, CID)
     expect(state.unattended).toBe(false)
@@ -129,7 +129,7 @@ describe("T1: set_unattended tool", () => {
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
     try {
-      await set_unattended.execute({ enabled: true }, d)
+      await set_unattended.execute({ change_id: CID, enabled: true }, d)
       expect.unreachable("should have thrown")
     } catch (e: any) {
       expect(e.message).toContain("仅限编排者")
@@ -153,15 +153,15 @@ describe("T2: unattended suppresses checkpoint in status", () => {
     const toolR = makeCtx("openspec-reviewer-tool", wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({ outcome: "ready",
+    await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({}, o)
+    await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
     fakeGit.diffs.set(devWt, ["src/F1.java"])
-    await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
-    await set_unattended.execute({ enabled: true }, o)
+    await set_unattended.execute({ change_id: CID, enabled: true }, o)
 
     for (let round = 1; round <= MAX_RETRIES; round++) {
       state = readStateSync(wt, CID)
@@ -170,14 +170,14 @@ describe("T2: unattended suppresses checkpoint in status", () => {
         await init.execute({
           change_id: CID, task_group_id: "1",
           recovery: { phase: "review" }}, o)
-        await set_worktree.execute({}, o)
+        await set_worktree.execute({ change_id: CID }, o)
         fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
-        await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       }
-      await tool_review_submit.execute({ passed: false, issues: [], fixed_issue_ids: [] }, toolR)
+      await tool_review_submit.execute({ change_id: CID, passed: false, issues: [], fixed_issue_ids: [] }, toolR)
     }
 
-    const output = await status.execute({}, o)
+    const output = await status.execute({ change_id: CID }, o)
     expect(output).not.toContain("opx_orch_resolve_review")
     expect(output).not.toContain("检查点")
     expect(output).toContain("openspec-developer")

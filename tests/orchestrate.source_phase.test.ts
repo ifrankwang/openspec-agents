@@ -64,20 +64,18 @@ async function setupToReview(root: string, wt: string, fakeGit: FakeGitRunner) {
     d = makeCtx("openspec-developer", wt)
 
   await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({
-    outcome: "ready", issues: [],
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
-  }, a)
-  await set_worktree.execute({}, o)
+  await arch_submit.execute({change_id: CID, outcome: "ready", issues: [],
+    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+  await set_worktree.execute({ change_id: CID }, o)
   fakeGit.diffs.set(wt, ["src/T.java"])
-  await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+  await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
   const state = readStateSync(wt)
   const tg = state.taskGroups.find((g: any) => g.id === "1")
   await init.execute({
     change_id: CID, task_group_id: "1",
     recovery: { phase: "review" }}, o)
-  await set_worktree.execute({}, o)
+  await set_worktree.execute({ change_id: CID }, o)
 }
 
 // ── Scene A: quality blocking issue → tool layer passes ──
@@ -106,11 +104,9 @@ describe("sourcePhase A: quality blocking issue does not block tool layer", () =
     )
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const raw = await tool_review_submit.execute({
-      passed: true,
+    const raw = await tool_review_submit.execute({change_id: CID, passed: true,
       issues: [{ severity: "Info", file: "d.md", line: 1, dimension: "style" as any, description: "Minor style", suggestion: "Consider" }],
-      fixed_issue_ids: [],
-    }, toolR)
+      fixed_issue_ids: [],}, toolR)
     const result = JSON.parse(typeof raw === "string" ? raw : raw.output)
 
     expect(result.status).toBe("ok")
@@ -147,11 +143,9 @@ describe("sourcePhase B: tool blocking issue causes tool rollback", () => {
     )
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const raw = await tool_review_submit.execute({
-      passed: true,
+    const raw = await tool_review_submit.execute({change_id: CID, passed: true,
       issues: [],
-      fixed_issue_ids: [],
-    }, toolR)
+      fixed_issue_ids: [],}, toolR)
     const result = JSON.parse(typeof raw === "string" ? raw : raw.output)
 
     expect(result.status).toBe("recorded")
@@ -174,7 +168,7 @@ describe("sourcePhase C: task blocking issue causes task throw", () => {
       taskR = makeCtx("openspec-reviewer-task", wt)
 
     await setupToReview(root, wt, fakeGit)
-    await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     const state = readStateSync(wt)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -191,11 +185,9 @@ describe("sourcePhase C: task blocking issue causes task throw", () => {
     )
 
     await expect(
-      task_review_submit.execute({
-        passed: true,
+      task_review_submit.execute({change_id: CID, passed: true,
         verified_task_ids: ["1", "2"], failed_task_ids: [],
-        fixed_issue_ids: [],
-      }, taskR)
+        fixed_issue_ids: [],}, taskR)
     ).rejects.toThrow(/tk1/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}

@@ -38,6 +38,7 @@ export const set_worktree = tool({
   description:
     "确保目标组的 git worktree 就绪。若已存在则复用，否则按规范自动创建（分支 task-group/{changeId}/{taskGroupId}，路径 .worktree/{changeId}/task-group-{taskGroupId}）。只补齐资源，不改变阶段。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     worktree_path: tool.schema.string().optional().describe("git worktree 的绝对路径（可选，不传则按规范自动生成）"),
     branch_name: tool.schema.string().optional().describe("worktree 对应的分支名（可选，不传则按规范 task-group/{changeId}/{taskGroupId}）"),
   },
@@ -49,18 +50,22 @@ export const set_worktree = tool({
 export const status = tool({
   description:
     "统一只读状态/上下文查询。按调用者角色路由：orchestrator→统计+worktree；architect→spec/blocker；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度存量 issue。",
-  args: {},
-  async execute(_args, context) {
-    return statusExecute({ worktree: context.worktree, agent: context.agent })
+  args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
+  },
+  async execute(args, context) {
+    return statusExecute({ change_id: args.change_id }, { worktree: context.worktree, agent: context.agent })
   },
 })
 
 export const complete_task_group = tool({
   description:
     "完成任务组收尾：合并 task-group 分支到 baseBranch → 清理 worktree 与分支。合并冲突时中止并返回 blocked（保留 worktree/分支）。",
-  args: {},
-  async execute(_args, context) {
-    return completeTaskGroupExecute({ worktree: context.worktree, agent: context.agent })
+  args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
+  },
+  async execute(args, context) {
+    return completeTaskGroupExecute({ change_id: args.change_id }, { worktree: context.worktree, agent: context.agent })
   },
 })
 
@@ -68,6 +73,7 @@ export const set_unattended = tool({
   description:
     "开启/关闭无人值守模式。开启后编排流程在重试检查点、状态异常、blocker 处理等场景不再 question 用户，自动决策。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     enabled: tool.schema.boolean().default(true).describe("true=开启；false=关闭"),
   },
   async execute(args, context) {
@@ -79,6 +85,7 @@ export const arch_submit = tool({
   description:
     "架构师提交预检结果。仅 outcome=ready，所有 blocker 需先通过 opx_arch_blocker 处理。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     outcome: tool.schema.enum(["ready"]),
     execution_boundary: executionBoundarySchema.optional(),
   },
@@ -90,6 +97,7 @@ export const arch_submit = tool({
 export const arch_blocker = tool({
   description: "架构师记录/更新 blocker，不结束本环节。创建 mode 入库 awaiting_user；更新 mode 写入 user_response 并置 resolved。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     blocker_id: tool.schema.string().optional().describe("提供=更新模式；不提供=创建模式"),
     blockers: tool.schema.array(blockerItem).optional().describe("创建模式：新增 blocker 列表"),
     user_response: tool.schema.string().optional().describe("用户答复。创建模式有则立即 resolved；更新模式必传"),
@@ -103,6 +111,7 @@ export const dev_submit = tool({
   description:
     "developer 提交实现结果。outcome=completed 提交实现；outcome=blocked 上报 blocker。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     outcome: tool.schema.enum(["completed", "blocked"]).optional(),
     completed_task_ids: tool.schema.array(tool.schema.string()).optional().describe("已完成的 task ID 列表"),
     self_check_results: tool.schema.string().optional().describe("提交前自检结果汇总"),
@@ -119,6 +128,7 @@ export const tool_review_submit = tool({
   description:
     "工具审核层提交。跨维提交 tool issues（issues 自带 dimension 字段），含 UT 结果。调用者必须为 openspec-reviewer-tool。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     passed: tool.schema.boolean().describe("工具层是否通过"),
     issues: tool.schema.array(toolIssueItem).optional().describe("跨维 issue，每个 item 需带 dimension"),
     fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
@@ -136,6 +146,7 @@ export const task_review_submit = tool({
   description:
     "任务审核层提交。验证 task 产出、服务启动、接口可用性、测试代码审查。调用者必须为 openspec-reviewer-task。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     passed: tool.schema.boolean().describe("任务层是否通过"),
     verified_task_ids: tool.schema.array(tool.schema.string()).optional().describe("已验证完成的 task ID 列表"),
     failed_task_ids: tool.schema.array(taskVerifyResult).optional().describe("未完成的 task 列表（含原因）"),
@@ -155,6 +166,7 @@ export const quality_review_submit = tool({
   description:
     "AI 语义审查层提交。维度由调用者身份自动识别。调用者必须为 openspec-reviewer-{style|architecture|performance|security|maintainability}。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     passed: tool.schema.boolean().describe("本维度是否通过"),
     issues: tool.schema.array(reviewIssue).optional().describe("新报审查 issue"),
     fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
@@ -171,6 +183,7 @@ export const resolve_review = tool({
   description:
     "编排者在 review 阶段重试超上限（needs_user_decision）后，根据用户决策推进。decision=continue：重置审查进度后继续修复；decision=giveup：将剩余待审 issue 置为 exempted 后完成。",
   args: {
+    change_id: tool.schema.string().min(1).describe("change ID"),
     decision: tool.schema
       .enum(["continue", "giveup"])
       .describe("continue=继续修复；giveup=放弃"),

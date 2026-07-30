@@ -40,7 +40,7 @@ function resetForBlocker(tg: TaskGroupState): void {
 
 export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolContext): Promise<string> {
   assertAgent(ctx.agent, "opx_arch_submit", ["openspec-architect"])
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "task_analysis") {
@@ -94,7 +94,7 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
 
 export async function archBlockerExecute(params: ArchBlockerParams, ctx: ToolContext): Promise<string> {
   assertAgent(ctx.agent, "opx_arch_blocker", ["openspec-architect"])
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "task_analysis") {
@@ -163,7 +163,7 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   if (params.completed_task_ids) params.completed_task_ids = params.completed_task_ids.map(String)
   if (params.fixed_issue_ids) params.fixed_issue_ids = idsToStrings(params.fixed_issue_ids)
   if (params.request_exempts) params.request_exempts = params.request_exempts.map(r => ({ ...r, issue_id: String(r.issue_id) }))
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "dev_impl" && tg.status !== "review") {
@@ -308,7 +308,7 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
   const tlFixedIds = idsToStrings(params.fixed_issue_ids)
   const tlExemptIds = idsToStrings(params.exempt_issue_ids)
   const tlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "review") {
@@ -413,7 +413,7 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   const tkFixedIds = idsToStrings(params.fixed_issue_ids)
   const tkExemptIds = idsToStrings(params.exempt_issue_ids)
   const tkRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "review") {
@@ -590,7 +590,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
       `参数 passed 必须为布尔值（true/false），收到类型 "${typeof params.passed}"，值 "${params.passed}"。`
     )
   }
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "review") {
@@ -665,7 +665,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
 
 export async function resolveReviewExecute(params: ResolveReviewParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_resolve_review")
-  const state = await readStateByWorktree(ctx.worktree)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
   if (tg.status !== "review") {

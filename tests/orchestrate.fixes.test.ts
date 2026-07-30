@@ -121,47 +121,41 @@ describe("修复项2+3: dev_submit / task_review_submit verified 清除 rejectRe
       taskR = makeCtx("openspec-reviewer-task", wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({
-      outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },
-    }, a)
-    await set_worktree.execute({}, o)
+    await arch_submit.execute({change_id: CID, outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },}, a)
+    await set_worktree.execute({ change_id: CID }, o)
     const devWt = readStateSync(wt).taskGroups.find((g: any) => g.id === "1").worktreePath
     fakeGit.diffs.set(devWt, ["src/T.java"])
-    await dev_submit.execute({ completed_task_ids: ["1", "2"] }, d)
+    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     let state = readStateSync(wt)
     let tg = state.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
       recovery: { phase: "review" }}, o)
-    await set_worktree.execute({}, o)
+    await set_worktree.execute({ change_id: CID }, o)
 
-    await tool_review_submit.execute({ passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
-    await task_review_submit.execute({
-      passed: false,
+    await task_review_submit.execute({change_id: CID, passed: false,
       verified_task_ids: ["2"], failed_task_ids: [{ task_id: "1", reason: "Incomplete" }],
-      issues: [], fixed_issue_ids: [],
-    }, taskR)
+      issues: [], fixed_issue_ids: [],}, taskR)
 
     state = readStateSync(wt)
     const t1AfterReject = state.taskGroups.find((g: any) => g.id === "1").tasks.find((t: any) => t.id === "1")
     expect(t1AfterReject.status).toBe("rejected")
     expect(t1AfterReject.rejectReason).toBe("Incomplete")
 
-    await dev_submit.execute({ completed_task_ids: ["1"] }, d)
+    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1"] }, d)
 
     state = readStateSync(wt)
     const t1AfterDev = state.taskGroups.find((g: any) => g.id === "1").tasks.find((t: any) => t.id === "1")
     expect(t1AfterDev.status).toBe("submitted")
     expect(t1AfterDev.rejectReason).toBeNull()
 
-    await task_review_submit.execute({
-      passed: true,
+    await task_review_submit.execute({change_id: CID, passed: true,
       verified_task_ids: ["1"], failed_task_ids: [],
-      issues: [], fixed_issue_ids: [],
-    }, taskR)
+      issues: [], fixed_issue_ids: [],}, taskR)
 
     state = readStateSync(wt)
     const t1AfterVerified = state.taskGroups.find((g: any) => g.id === "1").tasks.find((t: any) => t.id === "1")

@@ -8,7 +8,6 @@ const STATE_DIR = join(TMP, ".opencode", ".orchestrate_state")
 
 function writeState(changeId: string, data: unknown) {
   mkdirSync(STATE_DIR, { recursive: true })
-  writeFileSync(join(STATE_DIR, "current.json"), JSON.stringify({ changeId }))
   writeFileSync(join(STATE_DIR, `${changeId}.json`), JSON.stringify(data, null, 2))
 }
 
@@ -80,13 +79,15 @@ describe("Dashboard", () => {
   })
 
   test("readDashboardState returns null when no state", async () => {
-    const result = await readDashboardState(TMP)
+    const emptyDir = join(TMP, "empty-" + Date.now())
+    mkdirSync(emptyDir, { recursive: true })
+    const result = await readDashboardState(emptyDir)
     expect(result).toBeNull()
   })
 
   test("readDashboardState returns projection with correct fields", async () => {
     writeState("dash-change-001", mockState)
-    const result = await readDashboardState(TMP)
+    const result = await readDashboardState(TMP, "dash-change-001")
     expect(result).not.toBeNull()
     const r = result!
     expect(r.active).toBe(true)
@@ -120,15 +121,15 @@ describe("Dashboard", () => {
     }
 
     writeState("review-gates", completeReview)
-    expect((await readDashboardState(TMP))!.taskGroups[0].reviewCompleted).toBe(false)
+    expect((await readDashboardState(TMP, "review-gates"))!.taskGroups[0].reviewCompleted).toBe(false)
 
     completeReview.taskGroups[0].issues[0].status = "verified"
     writeState("review-gates", completeReview)
-    expect((await readDashboardState(TMP))!.taskGroups[0].reviewCompleted).toBe(false)
+    expect((await readDashboardState(TMP, "review-gates"))!.taskGroups[0].reviewCompleted).toBe(false)
 
     completeReview.taskGroups[0].blockers[0].status = "resolved"
     writeState("review-gates", completeReview)
-    expect((await readDashboardState(TMP))!.taskGroups[0].reviewCompleted).toBe(true)
+    expect((await readDashboardState(TMP, "review-gates"))!.taskGroups[0].reviewCompleted).toBe(true)
   })
 
   test("HTTP server returns state JSON", async () => {
@@ -138,7 +139,7 @@ describe("Dashboard", () => {
         port: 0,
         hostname: "127.0.0.1",
         fetch: async () => {
-          const data = await readDashboardState(TMP)
+          const data = await readDashboardState(TMP, "dash-change-001")
           return new Response(JSON.stringify(data ?? { active: false }), {
             headers: { "content-type": "application/json" },
           })
@@ -154,6 +155,12 @@ describe("Dashboard", () => {
       server?.stop()
       server = null
     }
+  })
+
+  test("readDashboardState without changeId scans directory and returns first", async () => {
+    writeState("dash-change-001", mockState)
+    const data = await readDashboardState(TMP)
+    expect(data).not.toBeNull()
   })
 
   test("HTTP server returns active:false when no state", async () => {
@@ -182,7 +189,7 @@ describe("Dashboard", () => {
 
   test("task and issue fields projected correctly", async () => {
     writeState("type-test", mockState)
-    const r = await readDashboardState(TMP)
+    const r = await readDashboardState(TMP, "type-test")
     const tg = r!.taskGroups[0]
 
     const t1 = tg.tasks.find((t: any) => t.id === "1")!
