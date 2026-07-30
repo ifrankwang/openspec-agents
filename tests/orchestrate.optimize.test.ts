@@ -9,17 +9,12 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { __setGitRunner } from "../src/core/git"
+import { MAX_RETRIES } from "../src/core/constants"
 import {
-  init,
-  status,
-  set_worktree,
-  arch_submit,
-  dev_submit,
-  tool_review_submit,
-  task_review_submit,
-  quality_review_submit,
-  MAX_RETRIES,
-  __setGitRunner} from "../src/tools/orchestrate"
+  init, status, set_worktree, arch_submit, dev_submit,
+  tool_review_submit, task_review_submit, quality_review_submit
+} from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
 
 const CID = "test-optimize"

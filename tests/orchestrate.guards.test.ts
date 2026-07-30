@@ -8,15 +8,11 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { __setGitRunner } from "../src/core/git"
 import {
-  init,
-  set_worktree,
-  arch_submit,
-  dev_submit,
-  tool_review_submit,
-  task_review_submit,
-  quality_review_submit,
-  __setGitRunner} from "../src/tools/orchestrate"
+  init, set_worktree, arch_submit, dev_submit,
+  tool_review_submit, task_review_submit, quality_review_submit
+} from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx } from "./helpers"
 
 const CID = "test-guard"

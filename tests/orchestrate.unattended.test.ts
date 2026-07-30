@@ -2,16 +2,19 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { __setGitRunner } from "../src/core/git"
+import { MAX_RETRIES } from "../src/core/constants"
 import {
   init, status, set_worktree, arch_submit, dev_submit,
   tool_review_submit, task_review_submit, quality_review_submit,
-  set_unattended, MAX_RETRIES, __setGitRunner } from "../src/tools/orchestrate"
-import { handleRetryCheckpoint } from "../src/tools/orchestrate/derive"
+  set_unattended
+} from "../src/adapters/opencode/tools"
+import { handleRetryCheckpoint } from "../src/core/derive"
 import {
   renderOrchestratorView, renderArchitectView, renderToolReviewView,
-} from "../src/tools/orchestrate/views"
-import type { OrchestrateState, TaskGroupState } from "../src/tools/orchestrate/types"
-import { REVIEW_DIMENSIONS } from "../src/tools/orchestrate/types"
+} from "../src/core/views"
+import type { OrchestrateState, TaskGroupState } from "../src/core/types"
+import { REVIEW_DIMENSIONS } from "../src/core/types"
 import { FakeGitRunner, makeCtx } from "./helpers"
 
 const CID = "test-unattended"
