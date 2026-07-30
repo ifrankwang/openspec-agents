@@ -128,13 +128,17 @@ API 测试脚本必须覆盖所有新增/变更接口：
 
 MUST 遵守以下约束，不得以编译通过或单元测试通过替代 API 测试：
 
+### 脚本准备
+
 MUST 确保 api-tests/script/ 目录下存在与所有变更接口对应的 .http 测试脚本：
 - 已有对应脚本 → 更新为匹配变更后契约
 - 尚无对应脚本 → 创建新脚本（不得因尚无已有脚本而跳过创建），同步准备 api-tests/data/ 下 SQL 前置数据脚本
 
+### 脚本执行
+
 API 验证须通过 .http 兼容执行工具运行脚本——不得使用 curl、wget 等通用 HTTP 命令行工具替代。
 
-### 执行工具
+#### 执行工具
 
 API 测试脚本使用 IntelliJ HTTP Client CLI（`ijhttp`）执行，它是 JetBrains 官方提供的独立 CLI 工具，与 IDE 中 .http 文件的解析器和执行引擎完全一致。
 
