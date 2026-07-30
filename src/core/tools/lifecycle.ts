@@ -3,7 +3,7 @@ import type { TaskGroupState, TaskItem, IssueItem, TaskStatus, Phase, BuildPhase
 import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
-import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
+import { readStateByWorktree, readStateByChangeId, writeState, writeCurrentChangeId, writeContextToWorktree } from "../state.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import { createEmptyPhases, assertOrchestrator, findTaskGroup, isReviewCompleted, deriveCurrentAgents } from "../derive.js"
 import {
@@ -237,6 +237,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   }
 
   await writeState(ctx.worktree, state)
+  await writeCurrentChangeId(ctx.worktree, state.changeId)
 
   const recoveryMsg = args.recovery
     ? `已恢复到 ${args.recovery.phase} 阶段。`

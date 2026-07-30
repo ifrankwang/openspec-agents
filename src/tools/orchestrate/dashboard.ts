@@ -1,5 +1,5 @@
 import type { OrchestrateState } from "./types.js"
-import { readStateByWorktree } from "./state.js"
+import { readStateByWorktree } from "../../core/state.js"
 import { deriveStatus, isReviewCompleted } from "./derive.js"
 
 export async function readDashboardState(worktree: string) {

@@ -2,7 +2,7 @@ import type { TaskGroupState, IssueItem, Dimension, OrchestrateState, ReviewDime
 import { REVIEW_DIMENSIONS } from "./types.js"
 import { MAX_RETRIES } from "./constants.js"
 import { handleRetryCheckpoint, hasBlockingIssues } from "./derive.js"
-import { writeState } from "./state.js"
+import { writeState } from "../../core/state.js"
 
 export function mergeExecutionBoundary(tg: TaskGroupState, expansion: { allowed_directories?: string[]; allowed_packages?: string[] }): void {
   if (!tg.executionBoundary) return

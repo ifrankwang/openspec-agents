@@ -1,12 +1,14 @@
-import { afterAll, describe, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { readStateByChangeId } from "../src/core/state"
+import { readStateByChangeId, writeState } from "../src/core/state"
+import type { OrchestrateState } from "../src/core/types"
 
 const CID = "legacy-state"
 
 afterAll(() => {
   rmSync("/tmp/orchestrate-state-test", { recursive: true, force: true })
+  rmSync("/tmp/orchestrate-writestate-test", { recursive: true, force: true })
 })
 
 function statePath(root: string): string {
@@ -28,5 +30,64 @@ describe("state 兼容性", () => {
     writeFileSync(statePath(root), "{")
 
     await expect(readStateByChangeId(root, CID)).resolves.toBeNull()
+  })
+})
+
+describe("writeState worktree 回写", () => {
+  const base = `/tmp/orchestrate-writestate-test/writestate-${Date.now()}`
+  const mainRepo = join(base, "main")
+  const worktreeDir = join(base, "worktree")
+
+  function makeSampleState(changeId: string): OrchestrateState {
+    return {
+      changeId,
+      taskGroupId: "1",
+      baseBranch: "main",
+      taskGroups: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+  }
+
+  function readStateFromDisk(root: string, changeId: string): Record<string, unknown> | null {
+    const p = join(root, ".opencode", ".orchestrate_state", `${changeId}.json`)
+    if (!existsSync(p)) return null
+    return JSON.parse(readFileSync(p, "utf-8")) as Record<string, unknown>
+  }
+
+  beforeEach(() => {
+    mkdirSync(mainRepo, { recursive: true })
+    mkdirSync(worktreeDir, { recursive: true })
+    const gitdir = join(mainRepo, ".git", "worktrees", "test")
+    mkdirSync(join(mainRepo, ".git"), { recursive: true })
+    writeFileSync(join(worktreeDir, ".git"), `gitdir: ${gitdir}`)
+  })
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  test("worktree 中 writeState 写到主仓库的 {changeId}.json", async () => {
+    const state = makeSampleState("wt-write-1")
+    await writeState(worktreeDir, state)
+
+    const inMain = readStateFromDisk(mainRepo, "wt-write-1")
+    expect(inMain).not.toBeNull()
+    expect(inMain?.changeId).toBe("wt-write-1")
+
+    const inWorktree = join(worktreeDir, ".opencode", ".orchestrate_state", "wt-write-1.json")
+    expect(existsSync(inWorktree)).toBe(false)
+  })
+
+  test("普通目录（.git 为目录）writeState 写原路径", async () => {
+    const normalDir = join(base, "normal")
+    mkdirSync(join(normalDir, ".git"), { recursive: true })
+
+    const state = makeSampleState("wt-write-2")
+    await writeState(normalDir, state)
+
+    const inNormal = readStateFromDisk(normalDir, "wt-write-2")
+    expect(inNormal).not.toBeNull()
+    expect(inNormal?.changeId).toBe("wt-write-2")
   })
 })
