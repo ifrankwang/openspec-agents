@@ -1,15 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { __setGitRunner } from "../src/core/git"
 import {
-  __setGitRunner,
-  arch_blocker,
-  arch_submit,
-  dev_submit,
-  init,
-  set_worktree,
-  status,
-} from "../src/tools/orchestrate"
+  arch_blocker, arch_submit, dev_submit, init, set_worktree, status
+} from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx } from "./helpers"
 
 const CID = "test-blocker"

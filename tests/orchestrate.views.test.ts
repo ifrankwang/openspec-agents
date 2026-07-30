@@ -3,7 +3,7 @@
  * 直接调用 view 函数，用最小 mock 数据断言输出。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { __setGitRunner } from "../src/tools/orchestrate"
+import { __setGitRunner } from "../src/core/git"
 import {
   renderOrchestratorView,
   renderArchitectView,
@@ -12,9 +12,9 @@ import {
   renderTaskReviewView,
   renderQualityReviewView,
   formatFilePath,
-} from "../src/tools/orchestrate/views"
-import type { OrchestrateState, TaskGroupState, TaskItem, IssueItem, BlockerItem, ExecutionBoundary } from "../src/tools/orchestrate/types"
-import { REVIEW_DIMENSIONS } from "../src/tools/orchestrate/types"
+} from "../src/core/views"
+import type { OrchestrateState, TaskGroupState, TaskItem, IssueItem, BlockerItem, ExecutionBoundary } from "../src/core/types"
+import { REVIEW_DIMENSIONS } from "../src/core/types"
 
 afterAll(() => { __setGitRunner(null) })
 

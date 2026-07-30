@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { readDashboardState } from "../src/tools/orchestrate"
+import { readDashboardState } from "../src/core/dashboard"
 
 const TMP = join("/tmp", "dash-test-" + Date.now())
 const STATE_DIR = join(TMP, ".opencode", ".orchestrate_state")

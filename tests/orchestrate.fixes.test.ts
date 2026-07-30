@@ -8,19 +8,15 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { __setGitRunner } from "../src/core/git"
 import {
-  init,
-  set_worktree,
-  arch_submit,
-  dev_submit,
-  tool_review_submit,
-  task_review_submit,
-  __setGitRunner,
-} from "../src/tools/orchestrate"
+  init, set_worktree, arch_submit, dev_submit,
+  tool_review_submit, task_review_submit
+} from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx } from "./helpers"
-import { deduplicateAndAddIssues, finalizeQualityPhase } from "../src/tools/orchestrate/review"
-import type { OrchestrateState, TaskGroupState, IssueItem } from "../src/tools/orchestrate/types"
-import { REVIEW_DIMENSIONS } from "../src/tools/orchestrate/types"
+import { deduplicateAndAddIssues, finalizeQualityPhase } from "../src/core/review"
+import type { OrchestrateState, TaskGroupState, IssueItem } from "../src/core/types"
+import { REVIEW_DIMENSIONS } from "../src/core/types"
 
 afterAll(() => { __setGitRunner(null) })
 
@@ -181,7 +177,7 @@ describe("修复项4: finalizeQualityPhase 不被 tool 层遗留 blocking issue 
     }
     const state = mockStateForUnit({ taskGroups: [tg] })
 
-    const raw = await finalizeQualityPhase(state, tg, "architecture", true, { worktree: tmpRoot })
+    const raw = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
     const result = JSON.parse(raw)
 
     expect(result.status).toBe("ok")
@@ -202,7 +198,7 @@ describe("修复项4: finalizeQualityPhase 不被 tool 层遗留 blocking issue 
     }
     const state = mockStateForUnit({ taskGroups: [tg] })
 
-    const raw = await finalizeQualityPhase(state, tg, "architecture", true, { worktree: tmpRoot })
+    const raw = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
     const result = JSON.parse(raw)
 
     expect(result.status).toBe("recorded")

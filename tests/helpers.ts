@@ -1,4 +1,4 @@
-import { __setGitRunner, type GitRunner } from "../src/tools/orchestrate"
+import { __setGitRunner, type GitRunner } from "../src/core/git"
 import type { ToolContext } from "@opencode-ai/plugin"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
