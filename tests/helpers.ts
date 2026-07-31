@@ -12,6 +12,8 @@ export class FakeGitRunner implements GitRunner {
   dirtyPaths = new Set<string>()
   mergedBranches: string[] = []
   mergeConflictOnNext = false
+  forceMergeFailure = false
+  revListCount = 0
   currentBranch = "main"
   callLog: string[] = []
 
@@ -48,6 +50,7 @@ export class FakeGitRunner implements GitRunner {
     }
 
     if (cmd === "merge-base") return this.baseRef
+    if (cmd === "rev-list" && rest[0] === "--count") return String(this.revListCount)
     if (cmd === "rev-parse") {
       if (rest[0] === "--abbrev-ref" && rest[1] === "HEAD") return this.currentBranch
       return "abc123def456"
@@ -78,6 +81,9 @@ export class FakeGitRunner implements GitRunner {
     const cmd = args[0]
 
     if (cmd === "merge") {
+      if (this.forceMergeFailure) {
+        return { success: false, stdout: "", stderr: "merge failed" }
+      }
       if (this.mergeConflictOnNext) {
         this.mergeConflictOnNext = false
         return { success: false, stdout: "", stderr: "merge conflict" }

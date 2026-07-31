@@ -151,7 +151,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       const base: TaskGroupState = {
         id: p.id, name: p.name, taskCount: p.taskCount,
         status: defaultPhase,
-        worktreePath: null, branchName: null, baseRef: null,
+        worktreePath: existing?.worktreePath ?? null, branchName: existing?.branchName ?? null, baseRef: existing?.baseRef ?? null,
         executionBoundary: existing?.executionBoundary ?? null,
         relevantSpecs,
         lastFilesChanged: existing?.lastFilesChanged ?? [],
@@ -195,7 +195,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   }
 
   const ctg = findTaskGroup(state, args.task_group_id)
-  if (args.recovery) {
+  if (args.recovery && args.recovery.phase === "task_analysis") {
     ctg.worktreePath = null
     ctg.branchName = null
     ctg.baseRef = null
@@ -256,6 +256,28 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   )
 }
 
+async function bindWorktreeRefs(
+  tg: TaskGroupState,
+  worktreePath: string,
+  branch: string,
+  baseBranch: string,
+  opts: { requireBaseRef?: boolean; refreshFilesChanged?: boolean } = {},
+): Promise<void> {
+  tg.worktreePath = worktreePath
+  tg.branchName = branch
+  const baseRef = await getMergeBase(worktreePath, baseBranch)
+  if (!baseRef) {
+    if (opts.requireBaseRef) {
+      throw new Error(`worktree 创建成功但无法获取与 ${baseBranch} 的 merge-base：${worktreePath}`)
+    }
+    return
+  }
+  tg.baseRef = baseRef
+  if (opts.refreshFilesChanged || !tg.lastFilesChanged || tg.lastFilesChanged.length === 0) {
+    tg.lastFilesChanged = await getDiffFileList(worktreePath, baseRef)
+  }
+}
+
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_set_worktree")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
@@ -286,15 +308,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     const baseHead = await runGit(repoRoot, ["rev-parse", state.baseBranch])
     const mergeResult = await runGitChecked(existingPath, ["merge", "--ff-only", baseHead])
     if (mergeResult.success) {
-      tg.worktreePath = existingPath
-      tg.branchName = branch
-      const baseRef = await getMergeBase(existingPath, state.baseBranch)
-      if (baseRef) {
-        tg.baseRef = baseRef
-        if (!tg.lastFilesChanged || tg.lastFilesChanged.length === 0) {
-          tg.lastFilesChanged = await getDiffFileList(existingPath, baseRef)
-        }
-      }
+      await bindWorktreeRefs(tg, existingPath, branch, state.baseBranch)
       reused = true
     } else {
       const clean = await isWorktreeClean(existingPath)
@@ -304,13 +318,22 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
           `无法自动 fast-forward。请手动处理后重试。`
         )
       }
-      const rmResult = await runGitChecked(repoRoot, ["worktree", "remove", existingPath, "--force"])
-      if (!rmResult.success) {
-        throw new Error(`无法清理已有 worktree "${existingPath}"：${rmResult.stderr}`)
-      }
-      const branchRmResult = await runGitChecked(repoRoot, ["branch", "-D", branch])
-      if (!branchRmResult.success) {
-        throw new Error(`无法清理已有分支 "${branch}"：${branchRmResult.stderr}`)
+      const localCommitCount = parseInt(
+        await runGit(existingPath, ["rev-list", "--count", `${state.baseBranch}..HEAD`]),
+        10
+      )
+      if (localCommitCount > 0 || Number.isNaN(localCommitCount)) {
+        await bindWorktreeRefs(tg, existingPath, branch, state.baseBranch, { refreshFilesChanged: true })
+        reused = true
+      } else {
+        const rmResult = await runGitChecked(repoRoot, ["worktree", "remove", existingPath, "--force"])
+        if (!rmResult.success) {
+          throw new Error(`无法清理已有 worktree "${existingPath}"：${rmResult.stderr}`)
+        }
+        const branchRmResult = await runGitChecked(repoRoot, ["branch", "-D", branch])
+        if (!branchRmResult.success) {
+          throw new Error(`无法清理已有分支 "${branch}"：${branchRmResult.stderr}`)
+        }
       }
     }
   }
@@ -318,16 +341,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   if (!reused) {
     const forkBranch = state.baseBranch
     await runGit(repoRoot, ["worktree", "add", "-b", branch, wtPath, forkBranch])
-
-    const baseRef = await getMergeBase(wtPath, forkBranch)
-    if (!baseRef) throw new Error(`worktree 创建成功但无法获取与 ${forkBranch} 的 merge-base：${wtPath}`)
-
-    tg.worktreePath = wtPath
-    tg.branchName = branch
-    tg.baseRef = baseRef
-    if (!tg.lastFilesChanged || tg.lastFilesChanged.length === 0) {
-      tg.lastFilesChanged = await getDiffFileList(wtPath, baseRef)
-    }
+    await bindWorktreeRefs(tg, wtPath, branch, forkBranch, { requireBaseRef: true })
   }
 
   await writeState(ctx.worktree, state)

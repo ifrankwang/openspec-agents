@@ -1,9 +1,13 @@
 import path from "path"
-import { mkdirSync, statSync } from "node:fs"
+import { mkdirSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import type { OrchestrateState } from "./types.js"
 import { STATE_DIR_NAME, STATE_SUBDIR_NAME } from "./constants.js"
 import { discoverRepoRoot } from "./git.js"
+
+const LOCK_POLL_INTERVAL_MS = 50
+const LOCK_META_FILENAME = "meta.json"
+const LOCK_STALE_THRESHOLD_MS = 10000
 
 function isWorktreePath(worktree: string): boolean {
   const gitPath = path.join(worktree, ".git")
@@ -91,9 +95,75 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
   return state
 }
 
+export async function resolveStateRoot(worktree: string): Promise<string> {
+  return isWorktreePath(worktree) ? await discoverRepoRoot(worktree) : worktree
+}
+
 export async function writeState(worktree: string, state: OrchestrateState): Promise<void> {
-  const target = isWorktreePath(worktree) ? await discoverRepoRoot(worktree) : worktree
+  const target = await resolveStateRoot(worktree)
   mkdirSync(getStateDir(target), { recursive: true })
   state.updatedAt = new Date().toISOString()
   await writeFile(getStatePath(target, state.changeId), JSON.stringify(state, null, 2))
+}
+
+export async function getLockPath(worktree: string, changeId: string): Promise<string> {
+  const root = await resolveStateRoot(worktree)
+  return path.join(getStateDir(root), `${changeId}.review.lock`)
+}
+
+function readLockMeta(lockPath: string): { pid: number; acquiredAt: number } | null {
+  try {
+    const meta = JSON.parse(readFileSync(path.join(lockPath, LOCK_META_FILENAME), "utf-8"))
+    if (meta && typeof meta.acquiredAt === "number") return meta
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function acquireLock(lockPath: string, timeoutMs = 10000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs
+    const tryAcquire = () => {
+      try {
+        mkdirSync(lockPath)
+        try {
+          writeFileSync(
+            path.join(lockPath, LOCK_META_FILENAME),
+            JSON.stringify({ pid: process.pid, acquiredAt: Date.now() })
+          )
+        } catch (metaErr) {
+          rmSync(lockPath, { recursive: true, force: true })
+          reject(metaErr as Error)
+          return
+        }
+        resolve()
+      } catch (err: unknown) {
+        if ((err as { code?: string }).code !== "EEXIST") {
+          reject(err as Error)
+          return
+        }
+        const meta = readLockMeta(lockPath)
+        if (meta && Date.now() - meta.acquiredAt >= LOCK_STALE_THRESHOLD_MS) {
+          rmSync(lockPath, { recursive: true, force: true })
+          setTimeout(tryAcquire, LOCK_POLL_INTERVAL_MS)
+          return
+        }
+        if (Date.now() >= deadline) {
+          reject(new Error(`获取锁超时：${lockPath}（${timeoutMs}ms 内未获得锁）`))
+          return
+        }
+        setTimeout(tryAcquire, LOCK_POLL_INTERVAL_MS)
+      }
+    }
+    tryAcquire()
+  })
+}
+
+export function releaseLock(lockPath: string): void {
+  try {
+    rmSync(lockPath, { recursive: true, force: true })
+  } catch {
+    // 锁目录不存在时静默忽略
+  }
 }

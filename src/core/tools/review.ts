@@ -8,7 +8,7 @@ import {
   isReviewCompleted, computeRequiredDims, dimsWithPendingAction, isStatusUnresolved,
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
-import { readStateByWorktree, writeState } from "../state.js"
+import { readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock } from "../state.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, markTaskGroupCheckboxesComplete } from "../git.js"
 import { parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import type {
@@ -591,23 +591,6 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
       `参数 passed 必须为布尔值（true/false），收到类型 "${typeof params.passed}"，值 "${params.passed}"。`
     )
   }
-  const state = await readStateByWorktree(ctx.worktree, params.change_id)
-  if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
-  const tg = findTaskGroup(state, state.taskGroupId)
-  if (tg.status !== "review") {
-    throw new Error(`quality_review_submit 需在 review 阶段调用，当前阶段为 "${tg.status}"。`)
-  }
-  if (!tg.phases.review.task.completed) {
-    throw new Error("task 层审核未完成，quality 层不可提交。")
-  }
-  if (tg.phases.review.quality.progress[dimension] !== "pending") {
-    throw new Error(`维度 "${dimension}" 的审查报告已提交，不允许重复提交。`)
-  }
-
-  const qlFixedIds = idsToStrings(params.fixed_issue_ids)
-  const qlExemptIds = idsToStrings(params.exempt_issue_ids)
-  const qlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
-
   const passed = params.passed === true || (params.passed as any) === "true"
   const issues = (params.issues || []) as any[]
   assertPassWithIssues(passed, issues, "opx_quality_review_submit")
@@ -618,53 +601,89 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
     }
   }
 
-  applyReviewGate(tg.issues, qlFixedIds, qlExemptIds, qlRejected, dimension, "quality")
+  const qlFixedIds = idsToStrings(params.fixed_issue_ids)
+  const qlExemptIds = idsToStrings(params.exempt_issue_ids)
+  const qlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
 
-  let nextIssueId = tg.issues.reduce((m, i) => Math.max(m, parseInt(i.id, 10) || 0), 0) + 1
-  const newIssues: IssueItem[] = []
-  let dedupedCount = 0
-  for (const iss of issues) {
-    const dedupResult = deduplicateAndAddIssues(
-      [iss], tg.issues, dimension, "quality",
-      nextIssueId
-    )
-    if (dedupResult.dedupedCount > 0) { dedupedCount++; continue }
-    if (dedupResult.newIssues.length > 0) {
-      newIssues.push(dedupResult.newIssues[0])
-      nextIssueId = dedupResult.nextIssueId
+  const stateBefore = await readStateByWorktree(ctx.worktree, params.change_id)
+  if (!stateBefore) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
+  const tgBefore = findTaskGroup(stateBefore, stateBefore.taskGroupId)
+  if (tgBefore.status !== "review") {
+    throw new Error(`quality_review_submit 需在 review 阶段调用，当前阶段为 "${tgBefore.status}"。`)
+  }
+  if (!tgBefore.phases.review.task.completed) {
+    throw new Error("task 层审核未完成，quality 层不可提交。")
+  }
+  if (tgBefore.phases.review.quality.progress[dimension] !== "pending") {
+    throw new Error(`维度 "${dimension}" 的审查报告已提交，不允许重复提交。`)
+  }
+
+  const lockPath = await getLockPath(ctx.worktree, params.change_id)
+  await acquireLock(lockPath)
+  try {
+    const state = await readStateByWorktree(ctx.worktree, params.change_id)
+    if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
+    const tg = findTaskGroup(state, state.taskGroupId)
+    if (tg.status !== "review") {
+      throw new Error(`quality_review_submit 需在 review 阶段调用，当前阶段为 "${tg.status}"。`)
     }
-  }
-  tg.issues.push(...newIssues)
-
-  if (tg.executionBoundary && newIssues.length > 0) {
-    const dirs = tg.executionBoundary.allowed_directories
-    for (const iss of newIssues) {
-      const dir = path.dirname(iss.file)
-      const entry = dir === "" || dir === "." ? iss.file : dir
-      if (entry !== "." && entry !== "" && !dirs.includes(entry)) dirs.push(entry)
+    if (!tg.phases.review.task.completed) {
+      throw new Error("task 层审核未完成，quality 层不可提交。")
     }
-  }
-
-  if (tg.executionBoundary && params.boundary_expansion) {
-    if (params.passed) {
-      throw new Error("passed=true 时不允许边界扩展。boundary_expansion 仅 passed=false 有效。")
+    if (tg.phases.review.quality.progress[dimension] !== "pending") {
+      throw new Error("该维度审查已提交，不允许重复提交。")
     }
-    mergeExecutionBoundary(tg, params.boundary_expansion)
-  }
 
-  const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality")
-  assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
+    applyReviewGate(tg.issues, qlFixedIds, qlExemptIds, qlRejected, dimension, "quality")
 
-  tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"
-  await writeState(ctx.worktree, state)
-  const resultStr = await finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree)
-  if (dedupedCount > 0) {
-    const result = JSON.parse(resultStr)
-    result.deduped = dedupedCount
-    result.message = result.message.replace(/([。！])\s*$/, `；${dedupedCount} 个重复 issue 已自动跳过。`)
-    return JSON.stringify(result)
+    let nextIssueId = tg.issues.reduce((m, i) => Math.max(m, parseInt(i.id, 10) || 0), 0) + 1
+    const newIssues: IssueItem[] = []
+    let dedupedCount = 0
+    for (const iss of issues) {
+      const dedupResult = deduplicateAndAddIssues(
+        [iss], tg.issues, dimension, "quality",
+        nextIssueId
+      )
+      if (dedupResult.dedupedCount > 0) { dedupedCount++; continue }
+      if (dedupResult.newIssues.length > 0) {
+        newIssues.push(dedupResult.newIssues[0])
+        nextIssueId = dedupResult.nextIssueId
+      }
+    }
+    tg.issues.push(...newIssues)
+
+    if (tg.executionBoundary && newIssues.length > 0) {
+      const dirs = tg.executionBoundary.allowed_directories
+      for (const iss of newIssues) {
+        const dir = path.dirname(iss.file)
+        const entry = dir === "" || dir === "." ? iss.file : dir
+        if (entry !== "." && entry !== "" && !dirs.includes(entry)) dirs.push(entry)
+      }
+    }
+
+    if (tg.executionBoundary && params.boundary_expansion) {
+      if (passed) {
+        throw new Error("passed=true 时不允许边界扩展。boundary_expansion 仅 passed=false 有效。")
+      }
+      mergeExecutionBoundary(tg, params.boundary_expansion)
+    }
+
+    const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality")
+    assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
+
+    tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"
+    await writeState(ctx.worktree, state)
+    const resultStr = await finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree)
+    if (dedupedCount > 0) {
+      const result = JSON.parse(resultStr)
+      result.deduped = dedupedCount
+      result.message = result.message.replace(/([。！])\s*$/, `；${dedupedCount} 个重复 issue 已自动跳过。`)
+      return JSON.stringify(result)
+    }
+    return resultStr
+  } finally {
+    releaseLock(lockPath)
   }
-  return resultStr
 }
 
 export async function resolveReviewExecute(params: ResolveReviewParams, ctx: ToolContext): Promise<string> {
