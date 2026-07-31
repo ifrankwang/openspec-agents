@@ -18,6 +18,7 @@ capabilities: ["tool-improvement", "tech-stack-java"]
 | 代码结构/复杂度违规 | 方法超 100 行 | PMD |
 | 格式化违规 | 缩进/换行不符合团队约定 | Spotless |
 | 安全漏洞模式 | SQL 拼接、硬编码凭证 | SonarQube |
+| 覆盖率误报 | DTO/POJO/Lombok/配置类被覆盖率检查标记为未覆盖 | JaCoCo/SonarQube |
 
 ## 规则草案模板
 
@@ -96,7 +97,7 @@ SonarQube 使用内置规则库（6,500+），一般无需自定义规则。工�
 - **精准抑制**：某规则对特定文件模式产生误报 → 用 `sonar.issue.ignore.multicriteria` 按规则 ID + 文件模式抑制
 
 ```
-# 排除整个目录
+# 完全排除扫描（该目录不参与任何规则检查）；覆盖率误报请用 sonar.coverage.exclusions，见下
 sonar.exclusions=**/generated/**,**/model/*.java
 
 # 按规则+模式精准抑制
@@ -105,8 +106,37 @@ sonar.issue.ignore.multicriteria.e1.ruleKey=java:S1068
 sonar.issue.ignore.multicriteria.e1.resourceKey=**/model/*.java
 ```
 
+- **覆盖率排除**：POJO/DTO/Lombok/配置类/生成代码等不需单元测试的类被覆盖率检查误报为"未覆盖"时，用 `sonar.coverage.exclusions` 按通配模式跳过覆盖率计算：
+
+  ```
+  # 按通配模式跳过覆盖率计算（仍参与其他规则扫描）
+  sonar.coverage.exclusions=**/model/*.java,**/dto/*.java,**/generated/**
+  ```
+
+  - `sonar.exclusions` 是完全排除扫描（该目录不参与任何规则检查），`sonar.coverage.exclusions` 仅跳过覆盖率计算、仍参与其他规则扫描。对 POJO/DTO 等应优先用 `sonar.coverage.exclusions`，避免完全排除导致漏检安全规则。
+- **误报抑制与门禁**：项目须通过质量门禁。门禁不通过时先分析是否为误报导致，参照本节排除/抑制方式处理，不得为凑覆盖率扩大排除范围。排除范围仅限确实不需要单元测试的类，过度排除属质量配置削弱。
+
 - 配置文件位置：`sonar-project.properties`
 - 验证命令：`sonar-scanner -X`
+
+### JaCoCo 排除规则
+
+- **工具改进 issue 的 file**：`pom.xml`（现有文件，`line` 指 `jacoco-maven-plugin` 配置块行号）
+- **suggestion** 包含需追加的 `<exclude>` 配置片段 + 验证命令，末尾 `[tool_eligible]`：
+
+不需单元测试的类（包括但不限于：POJO / DTO / Lombok 注解类、`@Configuration` / `@ConfigurationProperties` 配置类、常量 / 枚举类、`@SpringBootApplication` 启动类、纯接口（无 default 方法）、生成代码）被覆盖率检查误报为"未覆盖"时，在 `jacoco-maven-plugin` 的 `<configuration><excludes>` 中追加 `<exclude>` 条目，排除范围与 SonarQube 覆盖率排除口径一一对应：
+
+```xml
+<!-- 规则文件位置：pom.xml → jacoco-maven-plugin <configuration><excludes> 中追加 -->
+<excludes>
+    <exclude>**/model/*.class</exclude>
+    <exclude>**/dto/*.class</exclude>
+    <exclude>**/generated/**</exclude>
+</excludes>
+```
+
+- 排除范围仅限确实不需要单元测试的类，不得为凑覆盖率扩大排除范围——过度排除属质量配置削弱。
+- 验证命令：`mvn verify -q`（含 JaCoCo check 阶段）或 `mvn jacoco:check`
 
 ## 规则与 severity 映射
 
