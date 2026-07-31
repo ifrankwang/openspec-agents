@@ -271,6 +271,78 @@ describe("一致性分析 sourcePhase 过滤", () => {
   })
 })
 
+describe("一致性分析建议文本", () => {
+  const boundary = { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" }
+
+  function passAllReview(tg: TaskGroupState): void {
+    tg.phases.architect_review.completed = true
+    tg.phases.review.tool.completed = true
+    tg.phases.review.task.completed = true
+    for (const d of REVIEW_DIMENSIONS) tg.phases.review.quality.progress[d] = "passed"
+  }
+
+  test("检查项2：isReviewCompleted 但 status=dev_impl → 建议 complete_task_group 收尾（轻量，不再 recovery）", () => {
+    const state = mockState()
+    const tg = baseTg({ status: "dev_impl", executionBoundary: boundary })
+    passAllReview(tg)
+    const output = renderOrchestratorView(state, tg)
+    expect(output).toContain("状态未推进")
+    expect(output).toContain("opx_orch_complete_task_group")
+    expect(output).not.toContain('recovery: { phase: "review"')
+  })
+
+  test("检查项4：completed 且维度 passed 遗留阻塞 issue → 建议 reopenIssues 重置", () => {
+    const state = mockState()
+    const tg = baseTg({ status: "completed", issues: [mockIssue("i1")] })
+    passAllReview(tg)
+    const output = renderOrchestratorView(state, tg)
+    expect(output).toContain("review 内部矛盾")
+    expect(output).toContain('recovery: { phase: "dev_impl", reopenIssues: true }')
+  })
+
+  test("检查项4：review 且维度 passed 遗留阻塞 issue → 建议 recovery 到 dev_impl（dev 修复重置进度）", () => {
+    const state = mockState()
+    const tg = baseTg({
+      status: "review",
+      worktreePath: "/wt",
+      branchName: "tg-1",
+      baseRef: "base",
+      executionBoundary: boundary,
+      issues: [mockIssue("i1")],
+    })
+    passAllReview(tg)
+    const output = renderOrchestratorView(state, tg)
+    expect(output).toContain("review 内部矛盾")
+    expect(output).toContain('recovery: { phase: "dev_impl"')
+  })
+
+  test("检查项4：dev_impl 且维度 passed 遗留阻塞 issue → 建议 recovery 到 dev_impl", () => {
+    const state = mockState()
+    const tg = baseTg({
+      status: "dev_impl",
+      worktreePath: "/wt",
+      branchName: "tg-1",
+      baseRef: "base",
+      executionBoundary: boundary,
+      issues: [mockIssue("i1")],
+    })
+    passAllReview(tg)
+    const output = renderOrchestratorView(state, tg)
+    expect(output).toContain("review 内部矛盾")
+    expect(output).toContain('recovery: { phase: "dev_impl"')
+  })
+
+  test("有异常时指引不再硬编码 recovery 工具名", () => {
+    const state = mockState()
+    const tg = baseTg({ status: "dev_impl", executionBoundary: boundary })
+    passAllReview(tg)
+    const output = renderOrchestratorView(state, tg)
+    expect(output).toContain("按对应建议修复")
+    expect(output).not.toContain("按 recovery 建议修复")
+    expect(output).not.toContain("调用 opx_orch_init(recovery=...) 修复")
+  })
+})
+
 describe("formatFilePath 路径截断", () => {
   test("短路径不截断", () => {
     expect(formatFilePath("src/Foo.java", 10)).toBe("src/Foo.java:10")

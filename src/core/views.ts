@@ -362,8 +362,8 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
     checks.push(`  建议：\`opx_orch_init({ recovery: { phase: "task_analysis", ... } })\``)
   }
   if (isReviewCompleted(tg) && tg.status !== "review" && tg.status !== "completed") {
-    checks.push(`- ⚠️ 阶段逆序：status=${tg.status} 但 review 已完成`)
-    checks.push(`  建议：\`opx_orch_init({ recovery: { phase: "review", ... } })\``)
+    checks.push(`- ⚠️ 状态未推进：status=${tg.status} 但 review 已完成`)
+    checks.push(`  建议：直接调用 \`opx_orch_complete_task_group\` 收尾完成。`)
   }
   if ((tg.status === "dev_impl" || tg.status === "review") && !tg.executionBoundary) {
     checks.push(`- ⚠️ 缺 executionBoundary：status=${tg.status} 但 executionBoundary=null`)
@@ -376,7 +376,11 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
       )
       if (openInDim.length > 0) {
         checks.push(`- ⚠️ review 内部矛盾：维度 ${dim} passed 但仍有 ${openInDim.length} 个阻塞 issue`)
-        checks.push(`  建议：\`opx_orch_init({ recovery: { phase: "${tg.status === "completed" ? "review" : tg.status}", ... } })\``)
+        if (tg.status === "completed") {
+          checks.push(`  建议：\`opx_orch_init({ recovery: { phase: "dev_impl", reopenIssues: true } })\` 重置审查进度后重新验证。`)
+        } else {
+          checks.push(`  建议：\`opx_orch_init({ recovery: { phase: "dev_impl", ... } })\`，恢复后由 developer 修复遗留 issue 并提交（将重置该维度审查进度）。`)
+        }
       }
     }
   }
@@ -392,16 +396,16 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
     lines.push(...checks)
     lines.push("")
     if (state.unattended) {
-      lines.push("（无人值守模式）以上异常将自动执行 recovery。")
+      lines.push("（无人值守模式）以上异常将按对应建议自动执行。")
     } else {
-      lines.push("请用 question 向用户展示上述异常，确认后按对应建议调用 opx_orch_init(recovery=...) 修复。")
+      lines.push("请用 question 向用户展示上述异常，确认后按对应建议修复。")
     }
   } else {
     lines.push("未发现状态异常。")
   }
   lines.push("", "## 下一步", "")
   if (checks.length > 0) {
-    lines.push("以上状态异常，请按 recovery 建议修复。")
+    lines.push("以上状态异常，请按对应建议修复。")
   } else if (tg.status === "completed") {
     lines.push("编排已完成。")
   } else if (isReviewCompleted(tg)) {
