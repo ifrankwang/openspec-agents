@@ -151,6 +151,41 @@ cat target/site/jacoco/jacoco.csv
 
 本地 SonarQube Server 通过 `docker compose -p <namespace> -f <docker-compose-file> up -d sonarqube` 启动。
 
+### 扫描前准备
+
+以 `<项目原key>-<namespace>` 作为 project key，经 SonarQube Web API 完成 project 预创建、new code 定义设置与一次性认证 token 生成。
+
+#### 判断 project 存在性并预创建
+
+先经 Web API 查询 project 是否已存在，不存在才创建：
+
+```bash
+curl -sf "http://localhost:9000/api/projects/search?project=<项目原key>-<namespace>"
+curl -sf -X POST "http://localhost:9000/api/projects/create?key=<项目原key>-<namespace>&name=<项目原key>-<namespace>"
+```
+
+MUST 先 search 再 create：create 对已存在的 key 返回 HTTP 400，必须以 search 结果判断存在性，禁止直接 create。project key 即 `<项目原key>-<namespace>`。
+
+#### 设置 new code 定义
+
+将 project 的 new code 定义设置为 `NUMBER_OF_DAYS`，天数固定 30：
+
+```bash
+curl -sf -X POST "http://localhost:9000/api/new_code_periods/set?project=<项目原key>-<namespace>&type=NUMBER_OF_DAYS&value=30"
+```
+
+设置后下一次分析自动按此 period 计算 new code，无需触发重算。
+
+#### 生成一次性认证 token
+
+扫描前用 admin 凭据生成一次性 token，token 值仅本次响应返回一次，扫描结束后回收：
+
+```bash
+curl -sf -X POST -u admin:<admin密码> "http://localhost:9000/api/user_tokens/generate?name=<唯一token名>"
+```
+
+MUST token 名唯一（如附时间戳或随机后缀），token 值只在生成响应中返回一次，须在后续扫描命令中引用。admin 凭据取自本地 SonarQube 部署配置。
+
 ### 配置
 
 `sonar-project.properties` 文件位于项目根目录。
@@ -158,10 +193,35 @@ cat target/site/jacoco/jacoco.csv
 ### 执行
 
 ```bash
-sonar-scanner -Dsonar.projectKey=<项目原key>-<namespace>
+SONAR_TOKEN=<token> sonar-scanner \
+  -Dsonar.projectKey=<项目原key>-<namespace> \
+  -Dsonar.scm.enabled=true \
+  -Dsonar.scm.provider=git
 ```
 
 MUST 使用 `-Dsonar.projectKey` 指定含隔离标识 `<namespace>` 的项目 key（原始 key 从 `sonar-project.properties` 读取后追加 `-<namespace>`），禁止不加 `-Dsonar.projectKey` 覆盖直接执行 `sonar-scanner`。隔离标识来自编排会话上下文。
+
+MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，禁止改动 `sonar-project.properties`，避免影响质量门配置检查。
+
+token 经 `SONAR_TOKEN` 环境变量注入（等价写法：`-Dsonar.token=<token>`）。
+
+### 取 new code 期间 issue
+
+经 Web API 查询 new code 期 issue：
+
+```bash
+curl -sf "http://localhost:9000/api/issues/search?inNewCodePeriod=true&componentKeys=<项目原key>-<namespace>"
+```
+
+MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。
+
+### 回收一次性认证 token
+
+```bash
+curl -sf -X POST -u admin:<admin密码> "http://localhost:9000/api/user_tokens/revoke?name=<唯一token名>"
+```
+
+MUST 扫描结束即回收 token，禁止遗留长期有效的未回收凭证。
 
 ### 违规项 → issue 映射
 
@@ -183,6 +243,18 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 - `line`（行号）
 - `message`（描述）
 - `severity`（BLOCKER/CRITICAL/MAJOR/MINOR/INFO）
+
+### 降级条件
+
+当 SCM 时间戳不可靠导致 new code 期无法正确识别时，降级为全量 issue 口径。
+
+降级判据（满足其一即触发）：
+- scanner 日志出现 git blame 相关警告（如 SCM 信息获取失败、blame 执行失败）
+- `.git/shallow` 文件存在（shallow clone 历史不完整）
+- 全新仓库或 squash 导入，无历史可溯源
+- `new_lines` 与 `ncloc` 指标对比异常（new code 期行数明显偏离预期，如近乎全量或为零）
+
+降级处理：放弃 `inNewCodePeriod=true` 过滤，对全量扫描结果按第 8 节映射表归类提交。
 
 ## 7. 质量工具配置检查
 
