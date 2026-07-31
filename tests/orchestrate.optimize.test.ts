@@ -52,7 +52,6 @@ async function setupThroughDevSubmit(
   await set_worktree.execute({ change_id: CID }, o)
   const state = readStateSync(wt, CID)
   const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-  fakeGit.diffs.set(devWt, ["src/F1.java", "src/F2.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
   return { orch: o, arch: a, dev: d }
 }
@@ -73,7 +72,6 @@ async function setupThroughReviewReady(
   await set_worktree.execute({ change_id: CID }, o)
   let state = readStateSync(wt, CID)
   const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-  fakeGit.diffs.set(devWt, ["src/F1.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
   const s1 = readStateSync(wt, CID)
@@ -292,7 +290,6 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
       JSON.stringify(state, null, 2)
     )
 
-    fakeGit.diffs.set(tg.worktreePath, ["src/foo/bar.ts", "src/foo/baz.ts", "tests/foo.test.ts", "README.md"])
 
     // 再 init recovery to review → 应自动填充边界
     await init.execute({
@@ -323,18 +320,11 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     let state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
 
-    // null out boundary + set specific diffs
     tg.executionBoundary = null
     writeFileSync(
       join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
       JSON.stringify(state, null, 2)
     )
-    fakeGit.diffs.set(tg.worktreePath, [
-      "src/main/java/com/t/Foo.java",
-      "src/main/java/com/t/Bar.java",
-      "src/test/java/com/t/FooTest.java",
-      "docs/README.md",
-    ])
 
     await init.execute({
       change_id: CID, task_group_id: "1",
@@ -364,13 +354,11 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     let state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     const devWt = tg.worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, makeCtx("openspec-developer", wt))
 
     state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
     // 改 diff 的内容，但边界应有原值
-    fakeGit.diffs.set(devWt, ["other/foo.java"])
 
     await init.execute({
       change_id: CID, task_group_id: "1",
@@ -405,7 +393,6 @@ describe("B2. Recovery 自动补非空 executionBoundary", () => {
     let state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     const devWt = tg.worktreePath
-    fakeGit.diffs.set(devWt, ["src/main/Foo.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -447,7 +434,6 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    fakeGit.diffs.set(tg.worktreePath, ["src/F1.java"])
 
     await init.execute({
       change_id: CID, task_group_id: "1",
@@ -476,7 +462,6 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    fakeGit.diffs.set(tg.worktreePath, ["src/F1.java"])
 
     await init.execute({
       change_id: CID, task_group_id: "1",
@@ -505,7 +490,6 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    fakeGit.diffs.set(tg.worktreePath, ["src/F1.java"])
 
     await init.execute({
       change_id: CID, task_group_id: "1",
@@ -566,7 +550,6 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -626,7 +609,6 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -704,7 +686,6 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -765,7 +746,6 @@ describe("B4. 空 issue 正常提交回归", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, makeCtx("openspec-developer", wt))
 
     state = readStateSync(wt, CID)
@@ -823,7 +803,6 @@ describe("B8. submit 工具支持数字类型 ID", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java", "src/F2.java"])
 
     // dev_submit: completed_task_ids 传数字
     await dev_submit.execute({ change_id: CID, completed_task_ids: [1, 2] as any }, makeCtx("openspec-developer", wt))
@@ -883,7 +862,6 @@ describe("B5. dev_submit 不再重置 retryCount", () => {
     const devWt = tg.worktreePath
 
     // 2. developer 修复并提交
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, dev)
 
     state = readStateSync(wt, CID)

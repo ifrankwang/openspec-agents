@@ -9,7 +9,7 @@ import {
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
 import { readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock } from "../state.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, markTaskGroupCheckboxesComplete } from "../git.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete } from "../git.js"
 import { parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import type {
   ToolContext, ArchSubmitParams, ArchBlockerParams, DevSubmitParams,
@@ -207,7 +207,6 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     await writeState(ctx.worktree, state)
     return JSON.stringify({ status: "blocked", outcome, message: "已记录 blocker，职责已完成，请立即结束当前会话。" })
   }
-  tg.lastFilesChanged = await getDiffFileList(tg.worktreePath, tg.baseRef)
 
   let requiredDims: ReviewDimension[] = []
 

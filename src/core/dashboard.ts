@@ -26,7 +26,6 @@ export async function readDashboardState(worktree: string, changeId?: string) {
         worktreePath: tg.worktreePath,
         branchName: tg.branchName,
         relevantSpecs: tg.relevantSpecs,
-        lastFilesChanged: tg.lastFilesChanged,
         phases: tg.phases,
         tasks: tg.tasks,
         issues: tg.issues,
@@ -55,7 +54,6 @@ export async function readDashboardState(worktree: string, changeId?: string) {
       worktreePath: string | null
       branchName: string | null
       relevantSpecs: string[]
-      lastFilesChanged: string[]
       phases: any
       tasks: any
       issues: any
@@ -84,7 +82,6 @@ export async function readDashboardState(worktree: string, changeId?: string) {
           worktreePath: tg.worktreePath,
           branchName: tg.branchName,
           relevantSpecs: tg.relevantSpecs,
-          lastFilesChanged: tg.lastFilesChanged,
           phases: tg.phases,
           tasks: tg.tasks,
           issues: tg.issues,

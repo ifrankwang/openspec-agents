@@ -74,7 +74,6 @@ async function setupThroughQualityReady(
   await set_worktree.execute({ change_id: CID }, ctx.orch)
   const s1 = readStateSync(wt, CID)
   const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-  fakeGit.diffs.set(devWt, ["src/F1.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, ctx.dev)
 
   const s2 = readStateSync(wt, CID)
@@ -168,7 +167,6 @@ describe("1. Happy Path — 完整流程", () => {
 
     // 4. dev_submit
     const devWt = tg2.worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     const r3 = JSON.parse(await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d))
     expect(r3.status).toBe("ok")
     expect(r3.active_phase).toBe("review")
@@ -177,7 +175,6 @@ describe("1. Happy Path — 完整流程", () => {
     state = readStateSync(wt, CID)
     const tg3 = state.taskGroups.find((g: any) => g.id === "1")
     expect(tg3.tasks.every((t: any) => t.status === "submitted")).toBe(true)
-    expect(tg3.lastFilesChanged).toContain("src/F1.java")
     expect(tg3.status).toBe("review")
 
 
@@ -272,7 +269,6 @@ describe("2. 完整流程（无驳回）", () => {
     expect(tgWt.worktreePath).not.toBeNull()
     const devWt = tgWt.worktreePath
 
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -336,7 +332,6 @@ describe("3. 架构师通过 → 完成全部流程", () => {
 
     await set_worktree.execute({ change_id: CID }, o)
     state = readStateSync(wt, CID)
-    fakeGit.diffs.set(state.taskGroups.find((g: any) => g.id === "1").worktreePath, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     await transitionToReview(wt, o, toolR, taskR)
@@ -391,7 +386,6 @@ describe("4. 豁免裁定 — tool 层通过 exempt_issue_ids 授权", () => {
     const issueId = state.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     // dev_submit in review: request exemption for Info issue
-    fakeGit.diffs.set(devWt, [])
     await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Trivial" }]}, d)
 
@@ -433,7 +427,6 @@ describe("5. Recovery — dev_impl 阶段恢复", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -523,7 +516,6 @@ describe("7. 多任务组 — 完成 group1 → 初始化 group2", () => {
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
-    fakeGit.diffs.set(state.taskGroups.find((g: any) => g.id === "1").worktreePath, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     await transitionToReview(wt, o, toolR, taskR)
@@ -612,7 +604,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
 
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
@@ -634,7 +625,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
     expect(issueId).toBeDefined()
 
     // Dev fixes + exemption via review phase dev_submit
-    fakeGit.diffs.set(devWt, ["src/F1.java", "src/F2.java"])
     const s2 = readStateSync(wt, CID)
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
@@ -674,7 +664,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
 
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
@@ -695,7 +684,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
     const issueId = state.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     // Dev fixes + exemption via review phase
-    fakeGit.diffs.set(devWt, ["src/F1.java", "src/F2.java"])
     const s2 = readStateSync(wt, CID)
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
@@ -759,7 +747,6 @@ describe("10. quality 层豁免 — quality reviewer 裁定", () => {
     const issueId = state.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     // dev_submit in review with exemption
-    fakeGit.diffs.set(devWt, [])
     await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Trivial" }]}, d)
 
@@ -850,7 +837,6 @@ describe("12. resolve_review — continue / giveup", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
       // 2. ${MAX_RETRIES} 轮 tool 失败（审查重试达到检查点 retryCount=${MAX_RETRIES}）：
@@ -868,7 +854,6 @@ describe("12. resolve_review — continue / giveup", () => {
         await set_worktree.execute({ change_id: CID }, o)
 
         if (round > 1) {
-          fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
           await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
             fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
         }
@@ -909,7 +894,6 @@ describe("12. resolve_review — continue / giveup", () => {
       // 4. 验证可重新从 tool 层开始。continue 已重置 tool.completed，
       //    无需 dev_submit 推进阶段；dev_submit 仅将遗留 open issue 声明为已修（open→submitted），
       //    使 tool 层可复核通过
-      fakeGit.diffs.set(devWt, ["src/F5.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
         fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
 
@@ -961,7 +945,6 @@ describe("12. resolve_review — continue / giveup", () => {
         await set_worktree.execute({ change_id: CID }, o)
 
         // progress 不再自动清空，需 dev_submit 重置
-        fakeGit.diffs.set(devWt, ["src/F1.java"])
         const prevState = readStateSync(wt, CID)
         const prevIssueId = prevState.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.status === "open")?.id
         await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: prevIssueId ? [prevIssueId] : [] }, d)
@@ -1034,7 +1017,6 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review (orchestrator does recovery)
@@ -1072,7 +1054,6 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     expect(viewText).toContain("Fix naming")
 
     // --- 5. Developer fixes the issue ---
-    fakeGit.diffs.set(devWt, ["src/F1.java"]) // simulates new commit
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId]}, d)
 
     // --- 6. After dev_submit with issues → status should be review (Option Y) ---
@@ -1116,7 +1097,6 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -1143,7 +1123,6 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     const issueId = tgAfter.issues[0].id
 
     // --- 3. Developer fixes the issue → status=review, no submitted tasks ---
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, d)
 
     state = readStateSync(wt, CID)
@@ -1239,7 +1218,6 @@ describe("15. base_branch 自动推导与异常", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state1 = readStateSync(wt, CID)
     const devWt = state1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state2 = readStateSync(wt, CID)
@@ -1320,7 +1298,6 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1361,7 +1338,6 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review
@@ -1416,7 +1392,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1453,7 +1428,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1490,7 +1464,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1522,7 +1495,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1562,7 +1534,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1642,7 +1613,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1692,7 +1662,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       await transitionToReview(wt, o, toolR, taskR)
 
@@ -1769,7 +1738,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
       state = readStateSync(wt, CID)
@@ -1802,7 +1770,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       await transitionToReview(wt, o, toolR, taskR)
 
@@ -1843,7 +1810,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       await transitionToReview(wt, o, toolR, taskR)
 

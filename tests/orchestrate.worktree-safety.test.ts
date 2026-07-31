@@ -57,7 +57,6 @@ async function setupThroughReviewReady(wt: string, fakeGit: FakeGitRunner): Prom
     execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } }, a)
   await set_worktree.execute({ change_id: CID }, o)
   const devWt = findTg(wt).worktreePath
-  fakeGit.diffs.set(devWt, ["src/F1.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
   await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, o)
@@ -72,7 +71,7 @@ async function setupThroughReviewReady(wt: string, fakeGit: FakeGitRunner): Prom
 
 describe("W1. set_worktree 分支安全守卫", () => {
 
-  // W1.1 merge 失败 + 分支有本地提交 → 复用不删分支，baseRef/lastFilesChanged 重算
+  // W1.1 merge 失败 + 分支有本地提交 → 复用不删分支，baseRef 重算
   test("已有 worktree 分叉 + revListCount>0 → 复用不删分支", async () => {
     const root = `/tmp/wts-w1a-${Date.now()}`
     const wt = freshWt(root)
@@ -87,7 +86,6 @@ describe("W1. set_worktree 分支安全守卫", () => {
     const existingPath = findTg(wt).worktreePath
     fakeGit.forceMergeFailure = true
     fakeGit.revListCount = 5
-    fakeGit.diffs.set(existingPath, ["src/impl.java"])
 
     const second = await set_worktree.execute({ change_id: CID }, o)
     expect(second).toContain("复用已有 worktree")
@@ -98,7 +96,6 @@ describe("W1. set_worktree 分支安全守卫", () => {
     expect(tg.worktreePath).toBe(existingPath)
     expect(tg.branchName).toBe(`task-group/${CID}/1`)
     expect(tg.baseRef).toBe(fakeGit.baseRef)
-    expect(tg.lastFilesChanged).toEqual(["src/impl.java"])
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -190,7 +187,6 @@ describe("W2. init recovery 条件清空 worktree 引用", () => {
     expect(tg.worktreePath).toBeNull()
     expect(tg.branchName).toBeNull()
     expect(tg.baseRef).toBeNull()
-    expect(tg.lastFilesChanged).toEqual([])
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

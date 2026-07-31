@@ -54,7 +54,6 @@ function baseTg(overrides?: Partial<TaskGroupState>): TaskGroupState {
     blockers: [],
     issues: [],
     relevantSpecs: [],
-    lastFilesChanged: [],
     phases: {
       architect_review: { completed: false },
       review: {
@@ -100,6 +99,8 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("不可将初始化视为终点")
     expect(output).toContain("遵循所有已加载 skill")
     expect(output).toContain("api-test")
+    expect(output).toContain("**变更范围**")
+    expect(output).toContain("diff --name-only base..HEAD")
     expect(output).not.toContain("涉及 API 变更")
   })
 
@@ -124,12 +125,13 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
     })
     const output = renderToolReviewView(state, tg)
     expect(output).toContain("## 操作指引")
     expect(output).toContain("质量门 skill")
     expect(output).toContain("opx_tool_review_submit")
+    expect(output).toContain("变更范围")
+    expect(output).not.toContain("上轮变更文件")
   })
 
   test("renderTaskReviewView 含操作指引", () => {
@@ -139,7 +141,6 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       tasks: [mockTask("1", "submitted")],
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" },
     })
@@ -149,6 +150,8 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("opx_task_review_submit")
     expect(output).toContain("初始化仅是前置")
     expect(output).toContain("不可将初始化视为终点")
+    expect(output).toContain("变更范围")
+    expect(output).not.toContain("上轮变更文件")
   })
 
   test("renderTaskReviewView 操作指引含隔离环境执行要求", () => {
@@ -158,7 +161,6 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       tasks: [mockTask("1", "submitted")],
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" },
     })
@@ -179,7 +181,6 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       tasks: [mockTask("1", "submitted")],
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes },
     })
@@ -196,7 +197,6 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       tasks: [mockTask("1", "submitted")],
       executionBoundary: null,
     })
@@ -213,13 +213,14 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       issues: [mockIssue("1")],
     })
     const output = renderQualityReviewView(state, tg, "openspec-reviewer-architecture")
     expect(output).toContain("## 操作指引")
     expect(output).toContain("opx_quality_review_submit")
     expect(output).toContain("按本维度审查标准")
+    expect(output).toContain("变更范围")
+    expect(output).not.toContain("上轮变更文件")
   })
 
   test("renderQualityReviewView 含 tool-improvement skill 时展示工具改进子步骤", () => {
@@ -229,7 +230,6 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       issues: [mockIssue("1")],
     })
     const output = renderQualityReviewView(state, tg, "openspec-reviewer-architecture")
@@ -245,7 +245,6 @@ describe("视图「操作指引」段", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       issues: [mockIssue("1")],
     })
     const output = renderQualityReviewView(state, tg, "")
@@ -282,7 +281,6 @@ describe("一致性分析 sourcePhase 过滤", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       issues: [mockToolStyleIssue("i1")],
     })
     tg.phases.review.quality.progress.style = "passed"
@@ -297,7 +295,6 @@ describe("一致性分析 sourcePhase 过滤", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
       issues: [mockQualityStyleIssue("i1")],
     })
     tg.phases.review.quality.progress.style = "passed"

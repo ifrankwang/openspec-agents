@@ -31,7 +31,6 @@ const mockState = {
         allowed_packages: ["com.example"],
         notes: "",
       },
-      lastFilesChanged: ["AuthController.java"],
       phases: {
         architect_review: { completed: true },
         review: {
@@ -104,7 +103,6 @@ describe("Dashboard", () => {
     expect(tg.phases.architect_review.completed).toBe(true)
     expect(tg.phases.review.retryCount).toBe(0)
     expect(tg.blockers).toHaveLength(1)
-    expect(tg.lastFilesChanged).toEqual(["AuthController.java"])
     expect(tg.reviewCompleted).toBe(false)
   })
 

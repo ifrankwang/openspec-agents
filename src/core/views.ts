@@ -141,7 +141,7 @@ function renderWorktreeSection(state: OrchestrateState, tg: TaskGroupState): str
   if (tg.worktreePath) {
     lines.push(`- **路径**: \`${tg.worktreePath}\``)
     lines.push(`- **分支**: \`${tg.branchName || "(none)"}\``)
-    if (tg.baseRef) lines.push(`- **diff 范围**: \`${tg.baseRef}..HEAD\``)
+    if (tg.baseRef) lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
     lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行")
   } else {
     lines.push("- (worktree 尚未设置)")
@@ -598,7 +598,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   stepNum = eff.nextNum
   lines.push(`${stepNum++}. 实施「Task (待完成)」的全部任务——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${stepNum++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
-  lines.push(`${stepNum++}. 按已加载的 API 测试规范核对变更接口的测试脚本——文件存在、内容已更新`)
+  lines.push(`${stepNum++}. 用上方「变更范围」命令确认本次变更涉及文件，据此按已加载的 API 测试规范核对变更接口的测试脚本——文件存在、内容已更新`)
   lines.push(`${stepNum++}. 按已加载的技术栈 skill 运行项目级构建验证（编译、单元测试、质量门等）`)
   lines.push(`${stepNum++}. 全部完成 → commit → opx_dev_submit(outcome=\"completed\")`)
   lines.push(`${stepNum++}. 遇外部依赖/凭证/真实输入缺失无法继续 → opx_dev_submit(outcome=\"blocked\")`)
@@ -610,7 +610,6 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push("# 工具审核上下文", "")
   lines.push(...renderSkillSuggestions("openspec-reviewer-tool", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-tool"]))
   lines.push(...renderWorktreeSection(state, tg))
-  renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
   const toolIssues = renderLayerIssues(tg.issues, "tool")
   renderOptionalSection(lines, "全部 Issue（tool 层可见）", toolIssues)
   const { tagMap } = scanSkills()
@@ -621,6 +620,7 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   const eff = renderEfficiencySteps(tagMap, stepNum)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
+  lines.push(`${stepNum++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为审查范围`)
   lines.push(`${stepNum++}. 加载质量门 skill，获取工具清单、执行命令与 issue 映射表`)
   lines.push(`${stepNum++}. 按质量门 skill 定义顺序逐项执行工具检查（环境检查 → 编译 → 格式 → 架构约束 → 静态分析 → 测试编译与覆盖率 → 深度扫描 → 工具配置检查）`)
   if (state.unattended) {
@@ -640,7 +640,6 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push(`**tool 层**: ${tg.phases.review.tool.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
   lines.push(...renderSkillSuggestions("openspec-reviewer-task", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-task"]))
   lines.push(...renderWorktreeSection(state, tg))
-  renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
   lines.push("## 推荐阅读文档", "")
   lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
   for (const s of tg.relevantSpecs) lines.push(`- \`openspec/changes/${state.changeId}/specs/${s}/spec.md\``)
@@ -667,6 +666,7 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   const eff = renderEfficiencySteps(tagMap, stepNum)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
+  lines.push(`${stepNum++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为审查范围`)
   const hasGuidance = !!tg.executionBoundary?.notes
   if (hasGuidance) {
     lines.push(`${stepNum++}. 校验实施内容是否遵循上方「实施指引」中的指引；发现违背时报 issue`)
@@ -694,7 +694,6 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   lines.push(`**task 层**: ${tg.phases.review.task.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
   lines.push(...renderSkillSuggestions(agent, AGENT_CAPABILITY_SUGGESTIONS[agent] || []))
   lines.push(...renderWorktreeSection(state, tg))
-  renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
   if (dimension === "architecture") {
     lines.push("## 推荐阅读文档", "")
     lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
@@ -709,7 +708,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
     lines.push("")
   }
   lines.push(
-    "> 回归排查：对照上述「上轮变更文件」，检查本次修复是否在本维度引入了新问题；发现即在本维度报新 issue。",
+    "> 回归排查：对照上方「变更范围」命令输出的变更文件，检查本次修复是否在本维度引入了新问题；发现即在本维度报新 issue。",
     ""
   )
   const qualityIssues = renderLayerIssues(tg.issues, "quality", dimension)
@@ -722,7 +721,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   const eff = renderEfficiencySteps(tagMap, stepNum)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
-  lines.push(`${stepNum++}. 逐文件审查「上轮变更文件」，按本维度审查标准发现问题`)
+  lines.push(`${stepNum++}. 用上方「变更范围」命令获取变更文件清单，逐文件审查，按本维度审查标准发现问题`)
   if (dimension === "architecture") {
     lines.push(`${stepNum++}. 对照 design.md 架构方案基线，验证代码实施忠实度——偏离且违规时报 issue`)
   }

@@ -60,7 +60,6 @@ async function setupToReview(wt: string, fakeGit: FakeGitRunner) {
   await arch_submit.execute({change_id: CID, outcome: "ready",
     execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
   await set_worktree.execute({ change_id: CID }, o)
-  fakeGit.diffs.set(wt, ["src/T.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
   // Transition to review + tool + task
@@ -218,7 +217,6 @@ describe("G2. 身份守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review + tool + task
@@ -257,7 +255,6 @@ describe("G3. 重复提交守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review + tool + task
@@ -357,7 +354,6 @@ describe("G5. 非法 task id 守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review + tool pass
@@ -396,7 +392,6 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review + tool pass
@@ -431,7 +426,6 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -467,7 +461,6 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -500,7 +493,6 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -551,7 +543,6 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -590,7 +581,6 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -638,7 +628,6 @@ describe("G7. 非法 task id in failed_task_ids", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review + tool pass
@@ -676,7 +665,6 @@ describe("G8. tool 层完成守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review (without tool layer)
@@ -816,7 +804,6 @@ describe("G11. quality_review_submit 参数验证", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review (tool NOT completed)
@@ -850,7 +837,6 @@ describe("G12. task 层完成守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -885,7 +871,6 @@ describe("G13. tool 层重复提交守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -921,7 +906,6 @@ describe("G14. task 层重复提交守卫", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -958,7 +942,6 @@ describe("G15. 豁免完整性门禁", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const s1 = readStateSync(wt, CID)
@@ -983,7 +966,6 @@ describe("G15. 豁免完整性门禁", () => {
     const issueId = s2.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     const devWt = s2.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, [])
     await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Trivial" }]}, d)
 
@@ -1024,7 +1006,6 @@ describe("G16. 层失败回退 dev_impl", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1068,7 +1049,6 @@ describe("G16. 层失败回退 dev_impl", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1119,7 +1099,6 @@ describe("G17. rejectReason 存储", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1162,7 +1141,6 @@ describe("G19. task_review_submit 同步 tasks.md 复选框", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1211,7 +1189,6 @@ describe("G19. task_review_submit 同步 tasks.md 复选框", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1257,7 +1234,6 @@ describe("G18. tool_review_submit test_results 参数", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1298,7 +1274,6 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1334,7 +1309,6 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1370,7 +1344,6 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
-    fakeGit.diffs.set(wt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state = readStateSync(wt, CID)
@@ -1393,7 +1366,6 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
     const issueId = tg1.issues[0].id
 
     // dev_submit to fix the task issue
-    fakeGit.diffs.set(tg1.worktreePath, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, d)
 
     const s2 = readStateSync(wt, CID)
@@ -1439,7 +1411,6 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/T.java"])
 
     await expect(
       dev_submit.execute({ change_id: CID }, d)
@@ -1462,7 +1433,6 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/T.java"])
 
     await expect(
       dev_submit.execute({ change_id: CID, completed_task_ids: ["1"] }, d)
@@ -1485,7 +1455,6 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/T.java"])
 
     const result = await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const parsed = JSON.parse(typeof result === "string" ? result : (result as any).output)
@@ -1513,7 +1482,6 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/T.java"])
 
     // 先提交，让所有 task 变为 submitted
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
@@ -1527,7 +1495,6 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     writeFileSync(statePath, JSON.stringify(s2, null, 2))
 
     // 再次提交，不传 completed_task_ids → 应成功（所有 task 已 verified）
-    fakeGit.diffs.set(devWt, ["src/T.java"])
     const result = await dev_submit.execute({ change_id: CID }, d)
     const parsed = JSON.parse(typeof result === "string" ? result : (result as any).output)
     expect(parsed.status).toBe("ok")
@@ -1549,7 +1516,6 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/T.java"])
 
     const result = await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"],
       self_check_results: "lint: pass, typecheck: pass, tests: 42/42 passed"}, d)

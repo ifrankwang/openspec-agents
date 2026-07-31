@@ -64,7 +64,6 @@ async function setupToReview(root: string, wt: string, fakeGit: FakeGitRunner) {
   await arch_submit.execute({change_id: CID, outcome: "ready", issues: [],
     execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
   await set_worktree.execute({ change_id: CID }, o)
-  fakeGit.diffs.set(wt, ["src/T.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
   const state = readStateSync(wt)

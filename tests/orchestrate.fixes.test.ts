@@ -63,7 +63,6 @@ function mockTgForUnit(overrides?: Partial<TaskGroupState>): TaskGroupState {
     baseRef: null,
     executionBoundary: null,
     relevantSpecs: [],
-    lastFilesChanged: [],
     status: "review",
     phases: {
       architect_review: { completed: true },
@@ -122,7 +121,6 @@ describe("修复项2+3: dev_submit / task_review_submit verified 清除 rejectRe
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },}, a)
     await set_worktree.execute({ change_id: CID }, o)
     const devWt = readStateSync(wt).taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/T.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     let state = readStateSync(wt)

@@ -2,7 +2,7 @@ import path from "path"
 import type { TaskGroupState, TaskItem, IssueItem, TaskStatus, Phase, BuildPhaseTarget, Phases, OrchestrateState } from "../types.js"
 import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
@@ -101,7 +101,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
           status: "task_analysis" as Phase,
           worktreePath: null, branchName: null, baseRef: null,
           executionBoundary: null,
-          relevantSpecs: [], lastFilesChanged: [],
+          relevantSpecs: [],
           phases: createEmptyPhases(),
           tasks: [],
           issues: [], blockers: [],
@@ -156,7 +156,6 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
         worktreePath: existing?.worktreePath ?? null, branchName: existing?.branchName ?? null, baseRef: existing?.baseRef ?? null,
         executionBoundary: existing?.executionBoundary ?? null,
         relevantSpecs,
-        lastFilesChanged: existing?.lastFilesChanged ?? [],
         phases,
         tasks: tgTasks,
         issues: tgIssues,
@@ -184,7 +183,6 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
           worktreePath: null, branchName: null, baseRef: null,
           executionBoundary: null,
           relevantSpecs: isCurrent ? relevantSpecs : [],
-          lastFilesChanged: [],
           phases,
           tasks: isCurrent
             ? newTasks.map((t) => ({ ...t, status: taskInjectionStatus }))
@@ -202,7 +200,6 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     ctg.worktreePath = null
     ctg.branchName = null
     ctg.baseRef = null
-    ctg.lastFilesChanged = []
   }
 
   if (args.recovery?.reopenIssues) {
@@ -234,7 +231,6 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     ctg.worktreePath = null
     ctg.branchName = null
     ctg.baseRef = null
-    ctg.lastFilesChanged = []
 
     ctg.status = "dev_impl"
   }
@@ -264,7 +260,7 @@ async function bindWorktreeRefs(
   worktreePath: string,
   branch: string,
   baseBranch: string,
-  opts: { requireBaseRef?: boolean; refreshFilesChanged?: boolean } = {},
+  opts: { requireBaseRef?: boolean } = {},
 ): Promise<void> {
   tg.worktreePath = worktreePath
   tg.branchName = branch
@@ -276,9 +272,6 @@ async function bindWorktreeRefs(
     return
   }
   tg.baseRef = baseRef
-  if (opts.refreshFilesChanged || !tg.lastFilesChanged || tg.lastFilesChanged.length === 0) {
-    tg.lastFilesChanged = await getDiffFileList(worktreePath, baseRef)
-  }
 }
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
@@ -326,7 +319,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
         10
       )
       if (localCommitCount > 0 || Number.isNaN(localCommitCount)) {
-        await bindWorktreeRefs(tg, existingPath, branch, state.baseBranch, { refreshFilesChanged: true })
+        await bindWorktreeRefs(tg, existingPath, branch, state.baseBranch)
         reused = true
       } else {
         const rmResult = await runGitChecked(repoRoot, ["worktree", "remove", existingPath, "--force"])

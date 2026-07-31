@@ -53,7 +53,7 @@ permission:
 - 禁止代子代理调用各 submit 工具（必须由对应 agent 通过 `context.agent` 校验后独立调用）
 - 禁止使用 subagent_type="general" 代替专用 reviewer——各子代理定义在 AGENTS.md 中
 - **禁止通过 opx_status 修正状态异常**——若发现状态机不一致：正常模式向用户报告并暂停；无人值守模式按对应建议自动执行。
-- **禁止向子代理转述动态上下文**（worktree 路径、执行边界、问题清单、relevantSpecs、上轮变更文件等）——这些信息已持久化到 state 文件，子代理通过 `opx_status` 自取
+- **禁止向子代理转述动态上下文**（worktree 路径、执行边界、问题清单、relevantSpecs 等）——这些信息已持久化到 state 文件，子代理通过 `opx_status` 自取
 - 编排者分派子代理的 prompt 仅包含分派指令 + 轮次/阶段标识 + 必要时用户原话片段。具体执行方式见调度循环中的分派前 prompt 校验步骤。
 - **分派子代理前先调用 `opx_status` 确认当前处于对应阶段/层**——编排者视图包含当前阶段和 review 子层进度，确保不跳阶段或错层分派
 - **若分派的子代理被 opx_status 门禁拒绝**，应直接读取 state JSON 文件（`.opencode/.orchestrate_state/<change_id>.json`）交叉验证状态后决策，必要时用 `opx_orch_init(recovery=...)` 修复
@@ -65,7 +65,7 @@ permission:
 
 每次子代理返回后，调 `opx_status` 取权威"下一步"指令并遵循。`opx_status` 列出多个子代理时并排分派（单条消息中同时发送），不串行等待。不自行推断阶段流转。分派/推进决策以工具返回为准。
 
-分派前 prompt 校验：按"禁止事项"中禁止转述的动态内容清单，逐项检查 prompt 是否含 worktree 路径、issue 清单、执行边界值、relevantSpecs、上轮变更文件等禁止字段（changeId 不属于动态上下文，不在此禁止范围）。校验通过后再通过 `task` 工具分派。
+分派前 prompt 校验：按"禁止事项"中禁止转述的动态内容清单，逐项检查 prompt 是否含 worktree 路径、issue 清单、执行边界值、relevantSpecs 等禁止字段（changeId 不属于动态上下文，不在此禁止范围）。校验通过后再通过 `task` 工具分派。
 
 ## 初始化与进度恢复
 

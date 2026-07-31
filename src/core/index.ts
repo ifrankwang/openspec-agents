@@ -33,7 +33,7 @@ export {
 // git
 export {
   runGit, runGitChecked, __setGitRunner,
-  getCurrentHead, getCurrentBranch, getMergeBase, getDiffFileList,
+  getCurrentHead, getCurrentBranch, getMergeBase,
   isWorktreeClean, markTaskGroupCheckboxesComplete,
   mergeBranchToTarget, discoverDiskWorktrees,
 } from "./git.js"
