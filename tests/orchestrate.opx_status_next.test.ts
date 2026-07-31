@@ -434,15 +434,10 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
       prevIssueS10 = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
     }
 
-    // 3. resolve_review(continue) → lastResolvedRetryCount=${MAX_RETRIES}, status=dev_impl
+    // 3. resolve_review(continue) → lastResolvedRetryCount=${MAX_RETRIES}, status=review
     await resolve_review.execute({ change_id: CID, decision: "continue" }, o)
 
-    // 4. dev_submit → status=review, retryCount=${MAX_RETRIES}, lastResolvedRetryCount=${MAX_RETRIES}
-    fakeGit.diffs.set(devWt, ["src/FR${MAX_RETRIES}.java"])
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
-      fixed_issue_ids: prevIssueS10 ? [prevIssueS10] : [] }, d)
-
-    // 5. opx_status 不应含 "以上状态异常" 和 "recovery"
+    // 4. opx_status 下一步分派 tool 层复审，不应含 "以上状态异常" 和 "recovery"
     const output = await status.execute({ change_id: CID }, o)
     expect(output).not.toContain("以上状态异常")
     expect(output).not.toContain("recovery")

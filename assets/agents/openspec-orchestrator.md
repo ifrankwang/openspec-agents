@@ -40,7 +40,7 @@ permission:
 |------|------|
 | `opx_orch_init` | 初始化编排会话。工具自行解析 tasks.md；重复初始化当前组时保留进度，切换任务组时初始化目标组。支持 recovery 参数恢复进度（phase / review_layer / reopenIssues）。 |
 | `opx_orch_set_worktree` | 确保 worktree 就绪。参数可选，自动按规范创建/复用。 |
-| `opx_orch_resolve_review` | 据用户决策推进：continue 继续修复（retryCount 保留不清零）；giveup 豁免剩余 Low+ 后标记 review 完成。 |
+| `opx_orch_resolve_review` | 据用户决策推进：continue 重置审查进度回到 tool 层基线（retryCount 保留不清零）；giveup 豁免剩余 Low+ 后标记 review 完成。 |
 | `opx_orch_complete_task_group` | 任务组收尾：自动合并 task-group 分支到 baseBranch + 清理 worktree/分支 |
 | `opx_orch_set_unattended` | 开启/关闭无人值守模式。开启后自动处理决策点，不再 question 用户。 |
 

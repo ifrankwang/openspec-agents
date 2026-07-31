@@ -711,7 +711,6 @@ export async function resolveReviewExecute(params: ResolveReviewParams, ctx: Too
         tg.phases.review.quality.progress[d] = "pending"
       }
     }
-    tg.status = "dev_impl"
     await writeState(ctx.worktree, state)
     return JSON.stringify(
       {

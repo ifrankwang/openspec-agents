@@ -900,13 +900,15 @@ describe("12. resolve_review — continue / giveup", () => {
       expect(tgS.phases.review.retryCount).toBe(MAX_RETRIES)
       expect(tgS.phases.review.tool.completed).toBe(false)
       expect(tgS.phases.review.task.completed).toBe(false)
-      expect(tgS.status).toBe("dev_impl")
+      expect(tgS.status).toBe("review")
 
-      // 验证 developer opx_status 通过门禁
-      const ds = await status.execute({ change_id: CID }, d)
-      expect(ds).toContain("当前轮到你执行")
+      // 验证 continue 后下一步分派 tool 层复审（而非 developer）
+      const os = await status.execute({ change_id: CID }, o)
+      expect(os).toContain("openspec-reviewer-tool")
 
-      // 4. 验证可重新从 tool 层开始
+      // 4. 验证可重新从 tool 层开始。continue 已重置 tool.completed，
+      //    无需 dev_submit 推进阶段；dev_submit 仅将遗留 open issue 声明为已修（open→submitted），
+      //    使 tool 层可复核通过
       fakeGit.diffs.set(devWt, ["src/F5.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
         fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
