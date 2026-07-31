@@ -623,10 +623,11 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push(`${stepNum++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为审查范围`)
   lines.push(`${stepNum++}. 加载质量门 skill，获取工具清单、执行命令与 issue 映射表`)
   lines.push(`${stepNum++}. 按质量门 skill 定义顺序逐项执行工具检查（环境检查 → 编译 → 格式 → 架构约束 → 静态分析 → 测试编译与覆盖率 → 深度扫描 → 工具配置检查）`)
+  lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复——同一环境/技术故障自愈尝试上限 3 次`)
   if (state.unattended) {
-    lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复，不可自愈时记 skipped 并说明理由（无人值守模式）`)
+    lines.push(`${stepNum++}. 自愈超限后记 skipped 并说明理由（无人值守模式）`)
   } else {
-    lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复，不可自愈用 question 提请用户裁定`)
+    lines.push(`${stepNum++}. 自愈超限后用 question 提请用户裁定，或按质量门 skill 降级`)
   }
   lines.push(`${stepNum++}. 按质量门 skill 映射表将工具输出翻译为统一 issue`)
   lines.push(`${stepNum++}. 核验「待确认」存量 issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入（工具自动回退为 rejected）`)

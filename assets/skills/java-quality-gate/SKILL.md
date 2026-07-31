@@ -201,7 +201,9 @@ SONAR_TOKEN=<token> sonar-scanner \
 
 MUST 使用 `-Dsonar.projectKey` 指定含隔离标识 `<namespace>` 的项目 key（原始 key 从 `sonar-project.properties` 读取后追加 `-<namespace>`），禁止不加 `-Dsonar.projectKey` 覆盖直接执行 `sonar-scanner`。隔离标识来自编排会话上下文。
 
-MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，禁止改动 `sonar-project.properties`，避免影响质量门配置检查。
+MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，禁止改动 `sonar-project.properties`，避免影响质量门配置检查。若因 SCM 集成故障导致扫描失败或 new code 期数据异常，按下方降级判据降级。
+
+当项目 `sonar-project.properties` 含 `sonar.scm.disabled=true` 时，需在上方命令显式追加 `-Dsonar.scm.disabled=false` 覆盖（`sonar.scm.disabled` 是 SCM 集成总开关，`-Dsonar.scm.enabled=true` 会被其压制）；覆盖失败按下方降级判据降级。
 
 token 经 `SONAR_TOKEN` 环境变量注入（等价写法：`-Dsonar.token=<token>`）。
 
@@ -250,11 +252,14 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 
 降级判据（满足其一即触发）：
 - scanner 日志出现 git blame 相关警告（如 SCM 信息获取失败、blame 执行失败）
+- SCM 集成运行时不可用——scanner 报告无法打开 git 仓库（典型于 git worktree 部署形态，worktree 的 `.git` 为 gitdir 文件，内嵌 JGit 无法解析），或项目 `sonar-project.properties` 存在 `sonar.scm.disabled=true`（已显式 `-Dsonar.scm.disabled=false` 覆盖后仍失败）
 - `.git/shallow` 文件存在（shallow clone 历史不完整）
 - 全新仓库或 squash 导入，无历史可溯源
-- `new_lines` 与 `ncloc` 指标对比异常（new code 期行数明显偏离预期，如近乎全量或为零）
+- `new_lines` 与 `ncloc` 指标对比异常（new code 期行数明显偏离预期，`new_lines=0` 即触发降级）
 
-降级处理：放弃 `inNewCodePeriod=true` 过滤，对全量扫描结果按第 8 节映射表归类提交。
+降级处理：
+- 优先复用本次已 ANALYSIS SUCCESSFUL 的全量扫描结果，禁止为修复 SCM 无限重扫（SCM 覆盖尝试最多 1 次）
+- 全量扫描结果按第 8 节 dimension 映射表统一提交；非本轮变更行引入的 issue 按 quality-gate 第 8 节存量处理口径提交（标注"存量"、不降级、不豁免阻塞）
 
 ## 7. 质量工具配置检查
 

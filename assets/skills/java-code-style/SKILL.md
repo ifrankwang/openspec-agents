@@ -11,7 +11,7 @@ capabilities: ["style", "tech-stack-java"]
 
 - Lombok 存在（pom.xml 中检测到 lombok 依赖）时必须用 `@Slf4j` 替代手动 `LoggerFactory.getLogger()`
 - 检测方法：逐文件扫描 pom.xml 中是否含 `lombok` 依赖，若存在则该项目中所有新写/修改的类须使用 `@Slf4j` 生成 Logger 字段
-- 存量处理：首轮审查仅对 diff 内新增/修改的类提出 issue（Low+ 阻塞），既有的手动 Logger 不阻塞本轮（标记 Info 建议）
+- 存量处理：首轮审查仅对 diff 内新增/修改的类提出 issue（Low+ 阻塞），已存在的手动 Logger 按存量标注、按原严重级别提交，不因存量豁免阻塞
 - Logger 字段名统一用 `log`
 - 参数化日志：`log.info("order {} status {}", orderId, status)`，禁止字符串拼接构造日志消息
 - 敏感数据（密码、Token、身份证号等）禁止出现在日志输出中
