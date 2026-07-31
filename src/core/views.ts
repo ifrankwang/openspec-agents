@@ -672,12 +672,16 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
     lines.push(`${stepNum++}. 校验实施内容是否遵循上方「实施指引」中的指引；发现违背时报 issue`)
   }
   lines.push(`${stepNum++}. Task 产出验证：逐条核验各 task 产出完整性，按已加载的技术栈 skill 验证编译`)
-  lines.push(`${stepNum++}. 服务启动验证：启动基础设施 → 启动应用 → 健康检查`)
+  lines.push(`${stepNum++}. 服务启动验证：`)
+  lines.push("   - 按上方 Worktree 区段的隔离标识与建议端口，按已加载 API 测试 skill 的隔离要求执行：搭建独立验证环境 → 启动应用 → 健康检查")
+  lines.push("   - validation_steps 须显式列出「隔离环境搭建/清理」项")
+  lines.push("   - **禁止复用或清空共享开发库**")
   lines.push(`${stepNum++}. **不可跳过** — API 测试验证：识别受影响 API，按已加载的 API 测试规范执行验证`)
   lines.push(`${stepNum++}. UT 测试质量审查：按已加载的测试技能规范审查单元测试质量`)
+  lines.push(`${stepNum++}. 全部验证完成后清理隔离环境`)
   lines.push(`${stepNum++}. 发现本轮验证过程中的非本轮引入缺陷 → 按统一严重级别体系提交 issue（至少 Low）`)
   lines.push(`${stepNum++}. 核验「审查 Issue」中「待确认」存量 issue 是否真已修复`)
-  lines.push(`${stepNum++}. 缺少验证所需真实资源 → opx_task_review_submit(passed=false)`)
+  lines.push(`${stepNum++}. 缺少验证所需真实资源（隔离环境无法正常搭建亦属此类）→ opx_task_review_submit(passed=false)；禁止静默降级复用共享库`)
   lines.push(`${stepNum++}. 汇总 → opx_task_review_submit`)
   return lines.join("\n")
 }

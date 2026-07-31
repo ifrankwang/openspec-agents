@@ -151,6 +151,26 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("不可将初始化视为终点")
   })
 
+  test("renderTaskReviewView 操作指引含隔离环境执行要求", () => {
+    const state = mockState()
+    const tg = baseTg({
+      status: "review",
+      worktreePath: "/wt",
+      branchName: "tg-1",
+      baseRef: "base",
+      lastFilesChanged: ["src/Foo.java"],
+      tasks: [mockTask("1", "submitted")],
+      executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" },
+    })
+    const output = renderTaskReviewView(state, tg)
+    expect(output).toContain("隔离")
+    expect(output).toContain("清理隔离环境")
+    expect(output).toContain("禁止复用或清空共享开发库")
+    expect(output).toContain("validation_steps")
+    expect(output).toContain("隔离环境搭建/清理")
+    expect(output).toContain("隔离环境无法正常搭建")
+  })
+
   test("renderTaskReviewView 有 notes 时显示实施指引", () => {
     const state = mockState()
     const notes = "需要将文件类型拦截做成通用机制"
