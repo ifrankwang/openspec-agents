@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import type { OrchestrateState } from "./types.js"
 import { STATE_DIR_NAME, STATE_SUBDIR_NAME } from "./constants.js"
 import { discoverRepoRoot } from "./git.js"
+import { generateIsolationNamespace } from "./namespace.js"
 
 const LOCK_POLL_INTERVAL_MS = 50
 const LOCK_META_FILENAME = "meta.json"
@@ -80,6 +81,9 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     throw new Error(
       `状态文件 "${state.changeId}" 是旧版本格式，不兼容当前版本。请重新初始化编排会话（opx_orch_init）。`
     )
+  }
+  if (!state.isolationNamespace) {
+    state.isolationNamespace = generateIsolationNamespace(state.changeId)
   }
   for (const group of state.taskGroups || []) {
     group.blockers ??= []

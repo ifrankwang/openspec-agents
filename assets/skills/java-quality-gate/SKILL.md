@@ -25,6 +25,8 @@ capabilities: ["quality-gate", "tech-stack-java"]
 
 在执行工具检查前，先确保工具运行环境就绪。环境检查失败时先按自愈性步骤尝试恢复；不可自愈或自愈失败后，用 `question` 提请用户处理或裁定。用户裁定降级跳过时，在报告中注明降级理由，不阻塞其他检查。
 
+使用编排会话提供的隔离标识 `<namespace>`（来自编排会话上下文）为 SonarQube 容器指定独立的 docker compose 项目名，避免多个并发 change 的容器互相冲突。
+
 ```bash
 docker info
 docker compose version
@@ -36,7 +38,7 @@ sonar-scanner --version
 |--------|------|-------|-----------|
 | Docker daemon | `docker info` | 不可自愈 | `question` 用户（需宿主介入）→ 用户处理后重试或裁定降级跳过 |
 | docker-compose | `docker compose version` | 不可自愈 | `question` 用户 → 用户处理后重试或裁定降级跳过 |
-| SonarQube 服务 | `curl -sf http://localhost:9000/api/system/status \| grep -q UP` | 可自愈 | 先 `docker compose ... up -d sonarqube` 自愈；失败则 `question` 用户 → 裁定降级 |
+| SonarQube 服务 | `curl -sf http://localhost:9000/api/system/status \| grep -q UP` | 可自愈 | 先 `docker compose -p <namespace> -f <docker-compose-file> up -d sonarqube` 自愈；失败则 `question` 用户 → 裁定降级 |
 | sonar-scanner CLI | `sonar-scanner --version` | 不可自愈 | `question` 用户（需安装 CLI）→ 用户处理后重试或裁定降级 |
 
 ## 1. 编译检查
@@ -147,7 +149,7 @@ cat target/site/jacoco/jacoco.csv
 
 ### 前置条件
 
-本地 SonarQube Server 通过 `docker compose -f <docker-compose-file> up -d sonarqube` 启动。
+本地 SonarQube Server 通过 `docker compose -p <namespace> -f <docker-compose-file> up -d sonarqube` 启动。
 
 ### 配置
 
@@ -156,8 +158,10 @@ cat target/site/jacoco/jacoco.csv
 ### 执行
 
 ```bash
-sonar-scanner
+sonar-scanner -Dsonar.projectKey=<项目原key>-<namespace>
 ```
+
+MUST 使用 `-Dsonar.projectKey` 指定含隔离标识 `<namespace>` 的项目 key（原始 key 从 `sonar-project.properties` 读取后追加 `-<namespace>`），禁止不加 `-Dsonar.projectKey` 覆盖直接执行 `sonar-scanner`。隔离标识来自编排会话上下文。
 
 ### 违规项 → issue 映射
 
@@ -237,3 +241,5 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 - issues：统一 issue 结构列表（每条携带 dimension）
 - passed：true/false
 - fixed_issue_ids / exempt_issue_ids：酌情传入
+
+完成后清理隔离环境：`docker compose -p <namespace> down`（不影响其他 change 的容器）。

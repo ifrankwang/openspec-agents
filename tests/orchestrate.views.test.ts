@@ -35,6 +35,7 @@ function mockIssue(id: string): IssueItem {
 function mockState(overrides?: Partial<OrchestrateState>): OrchestrateState {
   return {
     changeId: "test-change",
+    isolationNamespace: "a1b2c3",
     baseBranch: "main",
     taskGroups: [],
     taskGroupId: "1",
@@ -100,6 +101,20 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("遵循所有已加载 skill")
     expect(output).toContain("api-test")
     expect(output).not.toContain("涉及 API 变更")
+  })
+
+  test("视图 Worktree 区块展示隔离标识与建议端口", () => {
+    const state = mockState()
+    const tg = baseTg({
+      status: "dev_impl",
+      worktreePath: "/wt",
+      branchName: "tg-1",
+      baseRef: "base",
+    })
+    const output = renderDeveloperView(state, tg)
+    expect(output).toContain("## Worktree")
+    expect(output).toContain("**隔离标识**: `a1b2c3`")
+    expect(output).toContain("建议端口: 27059")
   })
 
   test("renderToolReviewView 含操作指引", () => {

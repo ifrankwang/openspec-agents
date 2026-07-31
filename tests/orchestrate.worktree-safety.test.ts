@@ -326,6 +326,7 @@ describe("W5. 锁路径 worktree 归一化", () => {
 
     const sampleState: OrchestrateState = {
       changeId: CID,
+      isolationNamespace: "a1b2c3",
       taskGroupId: "1",
       baseBranch: "main",
       taskGroups: [],

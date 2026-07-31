@@ -42,6 +42,7 @@ function freshWt(root: string): string {
 function makeState(overrides?: Partial<OrchestrateState>): OrchestrateState {
   return {
     changeId: CID,
+    isolationNamespace: "a1b2c3",
     taskGroupId: "1",
     baseBranch: "main",
     taskGroups: [],

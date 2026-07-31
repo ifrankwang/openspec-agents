@@ -111,6 +111,7 @@ export interface TaskGroupState {
 
 export interface OrchestrateState {
   changeId: string
+  isolationNamespace: string
   taskGroupId: string
   baseBranch: string
   taskGroups: TaskGroupState[]

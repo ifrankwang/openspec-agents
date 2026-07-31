@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { readStateByChangeId, writeState } from "../src/core/state"
+import { generateIsolationNamespace } from "../src/core/namespace"
 import type { OrchestrateState } from "../src/core/types"
 
 const CID = "legacy-state"
@@ -31,6 +32,25 @@ describe("state 兼容性", () => {
 
     await expect(readStateByChangeId(root, CID)).resolves.toBeNull()
   })
+
+  test("旧 state 缺 isolationNamespace 时自动补全", async () => {
+    const root = `/tmp/orchestrate-state-test/${Date.now()}-ns`
+    writeFileSync(
+      statePath(root),
+      JSON.stringify({
+        changeId: CID,
+        taskGroupId: "1",
+        baseBranch: "main",
+        taskGroups: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+    )
+
+    const state = await readStateByChangeId(root, CID)
+    expect(state).not.toBeNull()
+    expect(state!.isolationNamespace).toBe(generateIsolationNamespace(CID))
+  })
 })
 
 describe("writeState worktree 回写", () => {
@@ -41,6 +61,7 @@ describe("writeState worktree 回写", () => {
   function makeSampleState(changeId: string): OrchestrateState {
     return {
       changeId,
+      isolationNamespace: "a1b2c3",
       taskGroupId: "1",
       baseBranch: "main",
       taskGroups: [],

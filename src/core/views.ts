@@ -2,6 +2,7 @@ import type { TaskGroupState, OrchestrateState, TaskItem, IssueItem, ReviewDimen
 import { REVIEW_DIMENSIONS } from "./types.js"
 import { SEVERITY_LEVELS, DIMENSION_AGENT_MAP, MAX_RETRIES } from "./constants.js"
 import { deriveStatus, isReviewCompleted, allTasksVerified, deriveCurrentAgents, isBlockingIssue, isStatusUnresolved } from "./derive.js"
+import { derivePortFromNamespace } from "./namespace.js"
 import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { findSkillPath, SKILL_SCAN_ROOTS } from "../skills/scan.js"
@@ -134,7 +135,7 @@ function renderEfficiencySteps(tagMap: Map<string, string[]>, startNum: number):
   return { lines, nextNum: n }
 }
 
-function renderWorktreeSection(tg: TaskGroupState): string[] {
+function renderWorktreeSection(state: OrchestrateState, tg: TaskGroupState): string[] {
   const lines: string[] = []
   lines.push("## Worktree", "")
   if (tg.worktreePath) {
@@ -145,6 +146,8 @@ function renderWorktreeSection(tg: TaskGroupState): string[] {
   } else {
     lines.push("- (worktree 尚未设置)")
   }
+  lines.push(`- **隔离标识**: \`${state.isolationNamespace}\``)
+  lines.push(`  - 建议端口: ${derivePortFromNamespace(state.isolationNamespace)}`)
   lines.push("")
   return lines
 }
@@ -468,7 +471,7 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
     : ""
   lines.push(`**当前阶段**: ${tg.status}${arcReviewLayer}`, "")
   lines.push(...renderSkillSuggestions("openspec-architect", AGENT_CAPABILITY_SUGGESTIONS["openspec-architect"]))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg))
   lines.push("## 推荐阅读文档", "")
   lines.push(`- \`openspec/changes/${state.changeId}/clarify.md\``)
   lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
@@ -533,7 +536,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("# 开发上下文", "")
   lines.push(`当前阶段: ${tg.status}`, "")
   lines.push(...renderSkillSuggestions("openspec-developer", AGENT_CAPABILITY_SUGGESTIONS["openspec-developer"]))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg))
   lines.push("## 执行边界", "")
   if (tg.executionBoundary) {
     const b = tg.executionBoundary
@@ -606,7 +609,7 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   const lines: string[] = []
   lines.push("# 工具审核上下文", "")
   lines.push(...renderSkillSuggestions("openspec-reviewer-tool", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-tool"]))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg))
   renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
   const toolIssues = renderLayerIssues(tg.issues, "tool")
   renderOptionalSection(lines, "全部 Issue（tool 层可见）", toolIssues)
@@ -636,7 +639,7 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push("# 任务审核上下文", "")
   lines.push(`**tool 层**: ${tg.phases.review.tool.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
   lines.push(...renderSkillSuggestions("openspec-reviewer-task", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-task"]))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg))
   renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
   lines.push("## 推荐阅读文档", "")
   lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
@@ -686,7 +689,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   lines.push(`# AI 审查上下文 — ${dimension}`, "")
   lines.push(`**task 层**: ${tg.phases.review.task.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
   lines.push(...renderSkillSuggestions(agent, AGENT_CAPABILITY_SUGGESTIONS[agent] || []))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg))
   renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
   if (dimension === "architecture") {
     lines.push("## 推荐阅读文档", "")

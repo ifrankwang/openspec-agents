@@ -4,6 +4,7 @@ import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIME
 import { REVIEW_DIMENSIONS } from "../types.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
+import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import { createEmptyPhases, assertOrchestrator, findTaskGroup, isReviewCompleted, deriveCurrentAgents } from "../derive.js"
 import {
@@ -86,6 +87,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   const originalCtgStatus = state?.taskGroups.find(g => g.id === args.task_group_id)?.status ?? null
   if (state) {
     state.baseBranch = state.baseBranch || baseBranch
+    state.isolationNamespace = state.isolationNamespace || generateIsolationNamespace(state.changeId)
     const existingMap = new Map(state.taskGroups.map((g) => [g.id, g]))
     state.taskGroups = parsedGroups.map((p) => {
       const existing = existingMap.get(p.id)
@@ -167,6 +169,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   } else {
     state = {
       changeId: args.change_id,
+      isolationNamespace: generateIsolationNamespace(args.change_id),
       taskGroupId: args.task_group_id,
       baseBranch,
       taskGroups: parsedGroups.map((p) => {

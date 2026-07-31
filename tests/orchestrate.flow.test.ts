@@ -12,6 +12,7 @@ import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
 import { MAX_RETRIES } from "../src/core/constants"
+import { generateIsolationNamespace } from "../src/core/namespace"
 import {
   init, status, set_worktree, complete_task_group,
   arch_submit, dev_submit, tool_review_submit, task_review_submit,
@@ -1874,5 +1875,59 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
+  })
+})
+
+// ═══════════════════════════════════════════════════
+//  Scenario 19: init isolationNamespace 补全
+// ═══════════════════════════════════════════════════
+
+describe("19. init isolationNamespace 补全", () => {
+  test("新建 init 生成确定性的 isolationNamespace", async () => {
+    const root = `/tmp/ft19a-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    const state = readStateSync(wt, CID)
+    expect(state.isolationNamespace).toBe(generateIsolationNamespace(CID))
+    expect(state.isolationNamespace).toMatch(/^[0-9a-f]{6}$/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("旧 state 缺 isolationNamespace 时 init 补全；既有值保留", async () => {
+    const root = `/tmp/ft19b-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    const stateDir = join(wt, ".opencode", ".orchestrate_state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const legacyState = {
+      changeId: CID,
+      taskGroupId: "1",
+      baseBranch: "main",
+      taskGroups: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacyState))
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    let state = readStateSync(wt, CID)
+    expect(state.isolationNamespace).toBe(generateIsolationNamespace(CID))
+
+    state.isolationNamespace = "custom-ns"
+    writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(state))
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    state = readStateSync(wt, CID)
+    expect(state.isolationNamespace).toBe("custom-ns")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 })

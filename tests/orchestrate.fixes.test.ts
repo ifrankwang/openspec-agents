@@ -43,6 +43,7 @@ function readStateSync(wt: string): any {
 function mockStateForUnit(overrides?: Partial<OrchestrateState>): OrchestrateState {
   return {
     changeId: "fix-unit",
+    isolationNamespace: "a1b2c3",
     taskGroupId: "1",
     baseBranch: "main",
     taskGroups: [],
