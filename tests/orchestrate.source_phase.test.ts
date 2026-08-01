@@ -100,14 +100,11 @@ describe("sourcePhase A: quality blocking issue does not block tool layer", () =
     )
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const raw = await tool_review_submit.execute({change_id: CID, passed: true,
+    const result = await tool_review_submit.execute({change_id: CID, passed: true,
       issues: [{ severity: "Info", file: "d.md", line: 1, dimension: "style" as any, description: "Minor style", suggestion: "Consider" }],
       fixed_issue_ids: [],}, toolR)
-    const result = JSON.parse(typeof raw === "string" ? raw : raw.output)
 
-    expect(result.status).toBe("ok")
-    expect(result.passed !== false).toBe(true)
-    expect(result.phase).toContain("tool=completed")
+    expect(result).toContain("审核通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -139,14 +136,12 @@ describe("sourcePhase B: tool blocking issue causes tool rollback", () => {
     )
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const raw = await tool_review_submit.execute({change_id: CID, passed: false,
+    const result = await tool_review_submit.execute({change_id: CID, passed: false,
       issues: [],
       fixed_issue_ids: [],}, toolR)
-    const result = JSON.parse(typeof raw === "string" ? raw : raw.output)
 
-    expect(result.status).toBe("recorded")
-    expect(result.passed).toBe(false)
-    expect(result.message).toContain("t1")
+    expect(result).toContain("需回退开发")
+    expect(result).toContain("t1")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -213,18 +208,16 @@ describe("sourcePhase D: quality 层按 dimension 过滤 blocking issue", () => 
 
     // style 维度先提交 passed=false 并报 1 个 Low+ quality issue
     const styleR = makeCtx("openspec-reviewer-style", wt)
-    const raw1 = await quality_review_submit.execute({ change_id: CID, passed: false,
+    const r1 = await quality_review_submit.execute({ change_id: CID, passed: false,
       issues: [{ severity: "Low", file: "d.md", line: 1, dimension: "style" as any,
         description: "Style residual issue", suggestion: "Fix naming" }],
       fixed_issue_ids: [] }, styleR)
-    const r1 = JSON.parse(typeof raw1 === "string" ? raw1 : raw1.output)
-    expect(r1.status).toBe("partial")
+    expect(r1).toContain("已提交")
 
     // architecture 维度提交 passed=true 不应被 style 的 open issue 阻塞
     const archR = makeCtx("openspec-reviewer-architecture", wt)
-    const raw2 = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
-    const r2 = JSON.parse(typeof raw2 === "string" ? raw2 : raw2.output)
-    expect(r2.status).toBe("partial")
+    const r2 = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
+    expect(r2).toContain("已提交")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -289,7 +282,7 @@ describe("sourcePhase D: quality 层按 dimension 过滤 blocking issue", () => 
     const archR = makeCtx("openspec-reviewer-architecture", wt)
     await expect(
       quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
-    ).rejects.toThrow(/passed=true.*Low\+.*#a1\(High\/rejected\/architecture\).*被驳回（rejected）的 issue 仍为未解决阻塞.*fixed_issue_ids/)
+    ).rejects.toThrow(/passed=true[\s\S]*Low\+[\s\S]*#a1\(High\/rejected\/architecture\)[\s\S]*被驳回（rejected）的 issue 仍为未解决阻塞[\s\S]*fixed_issue_ids/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

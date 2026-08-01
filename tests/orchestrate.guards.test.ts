@@ -26,13 +26,13 @@ const FORBIDDEN_ORCHESTRATION = [
   "下一步：",
 ]
 
-function expectNoOrchestration(msg: string | undefined) {
-  expect(msg).toBeDefined()
-  expect(typeof msg).toBe("string")
+function expectNoOrchestration(msg: unknown) {
+  const text = String(msg)
+  expect(text).toBeDefined()
   for (const p of FORBIDDEN_ORCHESTRATION) {
-    expect(msg!).not.toContain(p)
+    expect(text).not.toContain(p)
   }
-  expect(msg).toContain("职责已完成，请立即结束当前会话")
+  expect(text).toContain("职责已完成，请立即结束当前会话")
 }
 
 function setupWt(root: string, wt: string): string {
@@ -87,7 +87,6 @@ describe("G1. set_worktree 守卫已移除", () => {
     const result = await set_worktree.execute({ change_id: CID }, o)
     expect(result).toContain("已创建 worktree")
     expect(result).toContain("**路径**")
-    expect(result).toContain("**基准提交**")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -326,10 +325,10 @@ describe("G4.1. init 重入", () => {
     await arch_submit.execute({change_id: CID, outcome: "ready",
       execution_boundary: { allowed_directories: ["src"], allowed_packages: [], notes: "" }}, a)
 
-    const result = JSON.parse(await init.execute({ change_id: CID, task_group_id: "1" }, o))
+    const result = await init.execute({ change_id: CID, task_group_id: "1" }, o)
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(result.active_phase).toBe("dev_impl")
+    expect(result).toBe("编排会话已初始化。")
     expect(tg.status).toBe("dev_impl")
     expect(tg.phases.architect_review.completed).toBe(true)
 
@@ -510,12 +509,12 @@ describe("G6. task_review_submit 完整性门禁", () => {
       { step: "UT 测试质量审查", completed: true, evidence: "覆盖率和质量达标" },
     ]
 
-    const result = JSON.parse(await task_review_submit.execute({change_id: CID, passed: true,
+    const result = await task_review_submit.execute({change_id: CID, passed: true,
       verified_task_ids: ["1", "2"],
       failed_task_ids: [],
       fixed_issue_ids: [],
-      validation_steps: valSteps,}, taskR))
-    expect(result.status).toBe("ok")
+      validation_steps: valSteps,}, taskR)
+    expect(result).toContain("审核通过")
 
     // Verify stored in state
     const savedState = readStateSync(wt, CID)
@@ -591,15 +590,15 @@ describe("G6. task_review_submit 完整性门禁", () => {
     await set_worktree.execute({ change_id: CID }, o)
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
-    const result = JSON.parse(await task_review_submit.execute({change_id: CID, passed: true,
+    const result = await task_review_submit.execute({change_id: CID, passed: true,
       verified_task_ids: ["1", "2"],
       failed_task_ids: [],
       fixed_issue_ids: [],
       validation_steps: [
         { step: "Task 产出验证", completed: true, evidence: "编译通过" },
         { step: "API 测试验证", completed: false, skip_reason: "本次变更为内部重构，非 API 契约变更" },
-      ],}, taskR))
-    expect(result.status).toBe("ok")
+      ],}, taskR)
+    expect(result).toContain("审核通过")
 
     // Verify stored in state
     const savedState = readStateSync(wt, CID)
@@ -918,8 +917,8 @@ describe("G14. task 层重复提交守卫", () => {
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
     // Re-submission with all tasks verified → idempotent (no throw)
-    const reResult = JSON.parse(await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: []}, taskR))
-    expect(reResult.status).toBe("ok")
+    const reResult = await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: []}, taskR)
+    expect(reResult).toContain("审核通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1015,13 +1014,11 @@ describe("G16. 层失败回退 dev_impl", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    const toolOut = await tool_review_submit.execute({ change_id: CID, passed: false,
+    const r = await tool_review_submit.execute({ change_id: CID, passed: false,
       issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
       fixed_issue_ids: [] }, toolR)
-    const r = typeof toolOut === "string" ? toolOut : toolOut.output
-    const parsed = JSON.parse(r)
-    expect(parsed.status).toBe("recorded")
-    expectNoOrchestration(parsed.message)
+    expectNoOrchestration(r)
+    expect(r).toContain("需回退开发")
 
     const state2 = readStateSync(wt, CID)
     const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
@@ -1061,13 +1058,11 @@ describe("G16. 层失败回退 dev_impl", () => {
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
     // task fails — rely on state assertions for type safety
-    const toolOut = await task_review_submit.execute({change_id: CID, passed: false,
+    const r = await task_review_submit.execute({change_id: CID, passed: false,
       verified_task_ids: ["1"], failed_task_ids: [{ task_id: "2", reason: "Incomplete" }],
       fixed_issue_ids: []}, taskR)
-    const jsonStr = typeof toolOut === "string" ? toolOut : toolOut.output
-    const parsed = JSON.parse(jsonStr)
-    expect(parsed.status).toBe("recorded")
-    expectNoOrchestration(parsed.message)
+    expectNoOrchestration(r)
+    expect(r).toContain("审核报告已记录")
 
     const state2 = readStateSync(wt, CID)
     const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
@@ -1245,9 +1240,7 @@ describe("G18. tool_review_submit test_results 参数", () => {
 
     const result = await tool_review_submit.execute({change_id: CID, passed: true, issues: [], fixed_issue_ids: [],
       test_results: "Tests run: 42, Passed: 42, Failed: 0"}, toolR)
-
-    const parsed = typeof result === "string" ? JSON.parse(result) : JSON.parse(result.output)
-    expect(parsed.status).toBe("ok")
+    expect(result).toContain("审核通过")
 
     const state2 = readStateSync(wt, CID)
     const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
@@ -1289,8 +1282,7 @@ describe("G20. passed=false 守卫放宽 + B2 task.completed 不 auto-set", () =
       verified_task_ids: ["1", "2"], failed_task_ids: [],
       issues: [{ severity: "Medium", file: "x.java", line: 1, description: "Task issue", suggestion: "Fix" }],
       fixed_issue_ids: []}, taskR)
-    const parsed = typeof result === "string" ? JSON.parse(result) : JSON.parse(result.output)
-    expect(parsed.status).toBe("recorded")
+    expect(result).toContain("审核报告已记录")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1436,7 +1428,7 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
 
     await expect(
       dev_submit.execute({ change_id: CID, completed_task_ids: ["1"] }, d)
-    ).rejects.toThrow(/以下 task 处于 open\/rejected 状态且未在 completed_task_ids 中.*#2.*T2/)
+    ).rejects.toThrow(/以下 task 处于 open\/rejected 状态且未在 completed_task_ids 中[\s\S]*#2[\s\S]*T2/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1457,9 +1449,7 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
 
     const result = await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-    const parsed = JSON.parse(typeof result === "string" ? result : (result as any).output)
-    expect(parsed.status).toBe("ok")
-    expect(parsed.active_phase).toBe("review")
+    expect(result).toContain("提交完成")
 
     const st = readStateSync(wt)
     const tg = st.taskGroups.find((g: any) => g.id === "1")
@@ -1496,8 +1486,7 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
 
     // 再次提交，不传 completed_task_ids → 应成功（所有 task 已 verified）
     const result = await dev_submit.execute({ change_id: CID }, d)
-    const parsed = JSON.parse(typeof result === "string" ? result : (result as any).output)
-    expect(parsed.status).toBe("ok")
+    expect(result).toContain("提交完成")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1519,8 +1508,7 @@ describe("G21. dev_submit completed_task_ids 校验", () => {
 
     const result = await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"],
       self_check_results: "lint: pass, typecheck: pass, tests: 42/42 passed"}, d)
-    const parsed = JSON.parse(typeof result === "string" ? result : (result as any).output)
-    expect(parsed.status).toBe("ok")
+    expect(result).toContain("提交完成")
 
     const s2 = readStateSync(wt)
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")

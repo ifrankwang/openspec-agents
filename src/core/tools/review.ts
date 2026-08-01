@@ -5,7 +5,7 @@ import { DIMENSION_AGENT_MAP, MAX_RETRIES, BLOCKING_SEVERITIES, ORCHESTRATOR_AGE
 import {
   findTaskGroup, assertOrchestrator, assertAgent, assertPassWithIssues,
   blockingIssues, isBlockingIssue, handleRetryCheckpoint, allTasksVerified,
-  isReviewCompleted, computeRequiredDims, dimsWithPendingAction, isStatusUnresolved,
+  isReviewCompleted, dimsWithPendingAction, isStatusUnresolved,
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
 import { readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock } from "../state.js"
@@ -45,9 +45,12 @@ function assertPassedConsistency(
 ): void {
   if (passed && blockingIssues.length > 0) {
     throw new Error(
-      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue：${blockingIssues.map((i) => `#${i.id}(${i.severity}/${i.status || "open"}/${i.dimension || "-"})`).join("、")}。` +
-      `有阻塞问题时请设 passed=false；被驳回（rejected）的 issue 仍为未解决阻塞，驳回修复须设 passed=false。` +
-      `若某 submitted 待确认 issue 判据不成立且当前代码已正确，可列入 fixed_issue_ids 确认关闭（仅 submitted 状态可标记 fixed；rejected/open 状态的 issue 须先由 developer 提交修复）。`
+      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue：\n` +
+      blockingIssues.map((i) => `- #${i.id}(${i.severity}/${i.status || "open"}/${i.dimension || "-"})`).join("\n") +
+      `\n处理指引：\n` +
+      `- 有阻塞问题时请设 passed=false\n` +
+      `- 被驳回（rejected）的 issue 仍为未解决阻塞，驳回修复须设 passed=false\n` +
+      `- 若某 submitted 待确认 issue 判据不成立且当前代码已正确，可列入 fixed_issue_ids 确认关闭（仅 submitted 状态可标记 fixed；rejected/open 状态的 issue 须先由 developer 提交修复）`
     )
   }
   if (!passed && blockingIssues.length === 0) {
@@ -99,16 +102,7 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
     }
   }
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok",
-      phase: "dev_impl",
-      execution_boundary: params.execution_boundary,
-      message: "复核通过，职责已完成，请立即结束当前会话。",
-    },
-    null,
-    2
-  )
+  return "复核通过，职责已完成，请立即结束当前会话。"
 }
 
 export async function archBlockerExecute(params: ArchBlockerParams, ctx: ToolContext): Promise<string> {
@@ -207,10 +201,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     resetForBlocker(tg)
     tg.status = "task_analysis"
     await writeState(ctx.worktree, state)
-    return JSON.stringify({ status: "blocked", outcome, message: "已记录 blocker，职责已完成，请立即结束当前会话。" })
+    return "已记录 blocker，职责已完成，请立即结束当前会话。"
   }
-
-  let requiredDims: ReviewDimension[] = []
 
   if (params.completed_task_ids && params.completed_task_ids.length > 0) {
     const validIds = new Set(tg.tasks.map((t) => t.id))
@@ -218,7 +210,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
       if (!validIds.has(id)) {
         const sortedIds = Array.from(validIds).sort((a, b) => Number(a) - Number(b))
         throw new Error(
-          `completed_task_ids 中包含无效 task id: "${id}"。有效的 task ID 为: ${sortedIds.join(", ")}`
+          `completed_task_ids 中包含无效 task id: "${id}"。\n有效的 task ID 为:\n` +
+          `- ${sortedIds.join("\n- ")}`
         )
       }
     }
@@ -237,9 +230,9 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   )
   if (remainingTasks.length > 0) {
     throw new Error(
-      `以下 task 处于 open/rejected 状态且未在 completed_task_ids 中：` +
-      remainingTasks.map((t) => `#${t.id}(${t.status}) ${t.title}`).join("\n") +
-      `。请将未完成的 task 列在 completed_task_ids 中，或改用 outcome="blocked" 提交 blocker。`
+      `以下 task 处于 open/rejected 状态且未在 completed_task_ids 中：\n` +
+      remainingTasks.map((t) => `- #${t.id}(${t.status}) ${t.title}`).join("\n") +
+      `\n请将未完成的 task 列在 completed_task_ids 中，或改用 outcome="blocked" 提交 blocker。`
     )
   }
 
@@ -277,8 +270,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   )
   if (remainingBlocking.length > 0) {
     throw new Error(
-      `存在 ${remainingBlocking.length} 个 Low 及以上的 open/rejected issue 未处理，无法提交（请逐条修复或申请豁免）：` +
-        remainingBlocking.map((i) => `#${i.id}(${i.severity}/${i.dimension})`).join("; ")
+      `存在 ${remainingBlocking.length} 个 Low 及以上的 open/rejected issue 未处理，无法提交（请逐条修复或申请豁免）：\n` +
+      remainingBlocking.map((i) => `- #${i.id}(${i.severity}/${i.dimension})`).join("\n")
     )
   }
 
@@ -290,12 +283,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
         tg.phases.review.quality.progress[d] = "pending"
       }
     }
-    tg.status = "review"
-    requiredDims = computeRequiredDims(tg)
-  } else {
-    tg.status = "review"
-    requiredDims = computeRequiredDims(tg)
   }
+  tg.status = "review"
 
   if (allTasksVerified(tg.tasks)) {
     const hasPendingTaskIssues = tg.issues.some(i => i.sourcePhase === "task" && isStatusUnresolved(i.status))
@@ -309,16 +298,7 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   }
 
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok", outcome,
-      active_phase: tg.status,
-      required_dimensions: requiredDims,
-      message: "提交完成。职责已完成，请立即结束当前会话。",
-    },
-    null,
-    2
-  )
+  return "提交完成。职责已完成，请立即结束当前会话。"
 }
 
 export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: ToolContext): Promise<string> {
@@ -387,28 +367,15 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
   await writeState(ctx.worktree, state)
 
   if (params.passed) {
-    return JSON.stringify({
-      status: "ok",
-      phase: "review(tool=completed)",
-      message: `审核通过。职责已完成，请立即结束当前会话。${
-        dedupedCount > 0 ? `${dedupedCount} 个重复 issue 已自动跳过` : ""
-      }`,
-    })
+    const dedupedSuffix = dedupedCount > 0 ? ` ${dedupedCount} 个重复 issue 已自动跳过。` : ""
+    return `审核通过。职责已完成，请立即结束当前会话。${dedupedSuffix}`
   }
 
-  const retryResult = handleRetryCheckpoint(tg, state.unattended)
-  if (retryResult === null) {
+  if (handleRetryCheckpoint(tg, state.unattended) === null) {
     tg.phases.review.tool.completed = false
     await writeState(ctx.worktree, state)
-    return JSON.stringify({
-      status: "recorded",
-      layer: "tool",
-      passed: false,
-      retry_count: tg.phases.review.retryCount,
-      message: "职责已完成，请立即结束当前会话。",
-    })
+    return "审核报告已记录。职责已完成，请立即结束当前会话。"
   }
-  const retryCount = retryResult.retryCount
   tg.phases.review.tool.completed = false
   tg.status = "dev_impl"
   await writeState(ctx.worktree, state)
@@ -418,13 +385,7 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
   const issueSummary = rollbackBlocking.slice(0, 3)
     .map((i) => `#${i.id}(dimension:${i.dimension} status:${i.status || "open"})`)
     .join("、")
-  return JSON.stringify({
-    status: "recorded",
-    layer: "tool",
-    passed: false,
-    retry_count: retryCount,
-    message: `职责已完成，请立即结束当前会话。因遗留跨层阻塞 issue ${issueSummary} 等 ${rollbackBlocking.length} 个，需回退开发。`,
-  })
+  return `职责已完成，请立即结束当前会话。\n\n因遗留跨层阻塞 issue ${issueSummary} 等 ${rollbackBlocking.length} 个，需回退开发。`
 }
 
 export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: ToolContext): Promise<string> {
@@ -460,8 +421,9 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   const unknownFailed = failed.filter((f) => !validIds.has(f.task_id))
   if (unknownVerified.length > 0 || unknownFailed.length > 0) {
     throw new Error(
-      `非法 task id：${[...unknownVerified.map((id) => `"${id}"`), ...unknownFailed.map((f) => `"${f.task_id}"`)].join(", ")}。` +
-      `合法 id：${Array.from(validIds).join(", ")}。`
+      `非法 task id：\n` +
+      [...unknownVerified.map((id) => `- "${id}"`), ...unknownFailed.map((f) => `- "${f.task_id}"`)].join("\n") +
+      `\n合法 id：${Array.from(validIds).join(", ")}。`
     )
   }
 
@@ -470,8 +432,8 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   const uncovered = submittedTasks.filter((t) => !coveredIds.has(t.id))
   if (uncovered.length > 0) {
     throw new Error(
-      `以下 submitted task 未被 verified_task_ids 或 failed_task_ids 覆盖：` +
-      uncovered.map((t) => `#${t.id} ${t.title}`).join("; ")
+      `以下 submitted task 未被 verified_task_ids 或 failed_task_ids 覆盖：\n` +
+      uncovered.map((t) => `- #${t.id} ${t.title}`).join("\n")
     )
   }
 
@@ -552,36 +514,18 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
     if (tg.worktreePath) {
       await markTaskGroupCheckboxesComplete(tg.worktreePath, state.changeId, state.taskGroupId)
     }
-    return JSON.stringify({
-      status: "ok",
-      phase: "review(task=completed)",
-      message: "审核通过。职责已完成，请立即结束当前会话。",
-    })
+    return "审核通过。职责已完成，请立即结束当前会话。"
   }
 
-  const retryResult = handleRetryCheckpoint(tg, state.unattended)
-  if (retryResult === null) {
+  if (handleRetryCheckpoint(tg, state.unattended) === null) {
     tg.phases.review.task.completed = false
     await writeState(ctx.worktree, state)
-    return JSON.stringify({
-      status: "recorded",
-      layer: "task",
-      passed: false,
-      retry_count: tg.phases.review.retryCount,
-      message: "职责已完成，请立即结束当前会话。",
-    })
+    return "审核报告已记录。职责已完成，请立即结束当前会话。"
   }
-  const retryCount = retryResult.retryCount
   tg.phases.review.task.completed = false
   tg.status = "dev_impl"
   await writeState(ctx.worktree, state)
-  return JSON.stringify({
-    status: "recorded",
-    layer: "task",
-    passed: false,
-    retry_count: retryCount,
-    message: "职责已完成，请立即结束当前会话。",
-  })
+  return "审核报告已记录。职责已完成，请立即结束当前会话。"
 }
 
 export async function qualityReviewSubmitExecute(params: QualityReviewParams, ctx: ToolContext): Promise<string> {
@@ -682,14 +626,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
 
     tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"
     await writeState(ctx.worktree, state)
-    const resultStr = await finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree)
-    if (dedupedCount > 0) {
-      const result = JSON.parse(resultStr)
-      result.deduped = dedupedCount
-      result.message = result.message.replace(/([。！])\s*$/, `；${dedupedCount} 个重复 issue 已自动跳过。`)
-      return JSON.stringify(result)
-    }
-    return resultStr
+    return finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree, dedupedCount)
   } finally {
     releaseLock(lockPath)
   }
@@ -721,16 +658,7 @@ export async function resolveReviewExecute(params: ResolveReviewParams, ctx: Too
       }
     }
     await writeState(ctx.worktree, state)
-    return JSON.stringify(
-      {
-        status: "ok",
-        decision: "continue",
-        phase: "review(in_progress)",
-        message: "已重置各层审查进度，回到 tool 层基线。编排者请调用 opx_status 确认下一步。",
-      },
-      null,
-      2
-    )
+    return "已重置各层审查进度，回到 tool 层基线。编排者请调用 opx_status 确认下一步。"
   }
 
   let exemptedCount = 0
@@ -754,15 +682,5 @@ export async function resolveReviewExecute(params: ResolveReviewParams, ctx: Too
     }
   }
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok",
-      decision: "giveup",
-      exempted_count: exemptedCount,
-      phase: "review=completed",
-      message: `已将剩余 ${exemptedCount} 个 Low+ open/rejected 及待裁定 issue 置为 exempted。请调用 opx_orch_complete_task_group 收尾。`,
-    },
-    null,
-    2
-  )
+  return `已将剩余 ${exemptedCount} 个 Low+ open/rejected 及待裁定 issue 置为 exempted。请调用 opx_orch_complete_task_group 收尾。`
 }

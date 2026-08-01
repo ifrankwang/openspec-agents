@@ -77,11 +77,15 @@ describe("改进项3：submit 工具检查点路径 completed 回置", () => {
           await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
             fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
         }
-        const r = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: false,
+        const r = await tool_review_submit.execute({ change_id: CID, passed: false,
           issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any,
             description: "Tool issue", suggestion: "Fix" }],
-          fixed_issue_ids: prevIssue ? [prevIssue] : [] }, toolR))
-        expect(r.status).toBe("recorded")
+          fixed_issue_ids: prevIssue ? [prevIssue] : [] }, toolR)
+        if (round === MAX_RETRIES) {
+          expect(r).toContain("审核报告已记录")
+        } else {
+          expect(r).toContain("需回退开发")
+        }
 
         const state = readStateSync(wt, CID)
         const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -126,12 +130,12 @@ describe("改进项3：submit 工具检查点路径 completed 回置", () => {
             fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
           await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
         }
-        const r = JSON.parse(await task_review_submit.execute({ change_id: CID, passed: false,
+        const r = await task_review_submit.execute({ change_id: CID, passed: false,
           issues: [{ severity: "Low", file: "src/x.java", line: 1,
             description: `Task issue round ${round}`, suggestion: "Fix" }],
           verified_task_ids: ["1", "2"], failed_task_ids: [],
-          fixed_issue_ids: prevIssue ? [prevIssue] : [] }, taskR))
-        expect(r.status).toBe("recorded")
+          fixed_issue_ids: prevIssue ? [prevIssue] : [] }, taskR)
+        expect(r).toContain("审核报告已记录")
 
         const state = readStateSync(wt, CID)
         const tg = state.taskGroups.find((g: any) => g.id === "1")

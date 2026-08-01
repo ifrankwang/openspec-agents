@@ -756,8 +756,7 @@ describe("B4. 空 issue 正常提交回归", () => {
     await set_worktree.execute({ change_id: CID }, o)
 
     const result = await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: []}, toolR)
-    const parsed = typeof result === "string" ? JSON.parse(result) : JSON.parse(result.output)
-    expect(parsed.status).toBe("ok")
+    expect(result).toContain("审核通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -773,8 +772,7 @@ describe("B4. 空 issue 正常提交回归", () => {
     const { orch } = await setupThroughReviewReady(wt, fakeGit)
 
     const result = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, styleR)
-    const parsed = typeof result === "string" ? JSON.parse(result) : JSON.parse(result.output)
-    expect(parsed.status).toBe("partial") // 仍有 4 维未提交
+    expect(result).toContain("已提交") // 仍有 4 维未提交
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -816,16 +814,15 @@ describe("B8. submit 工具支持数字类型 ID", () => {
 
     // tool_review_submit: fixed_issue_ids 传数字
     const r1 = await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    expect(typeof r1 === "string" ? JSON.parse(r1).status : JSON.parse(r1.output).status).toBe("ok")
+    expect(r1).toContain("审核通过")
 
     // task_review_submit: verified_task_ids 传数字
     const r2 = await task_review_submit.execute({change_id: CID, passed: true, verified_task_ids: [1, 2] as any, failed_task_ids: [], fixed_issue_ids: []}, taskR)
-    expect(typeof r2 === "string" ? JSON.parse(r2).status : JSON.parse(r2.output).status).toBe("ok")
+    expect(r2).toContain("审核通过")
 
     // quality_review_submit: 数字 passed 亦通过（非关键，但验证 type coercion 无副作用）
     const r3 = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, styleR)
-    const parsed3 = typeof r3 === "string" ? JSON.parse(r3) : JSON.parse(r3.output)
-    expect(parsed3.status).toBe("partial")
+    expect(r3).toContain("已提交")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1011,9 +1008,9 @@ describe("B9. retryCount>0 但 baseline 未建 → 全维门禁", () => {
 
     // 提交全部 5 维 → 基线建立，全部通过
     for (let i = 0; i < dims.length; i++) {
-      const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
-      if (i < dims.length - 1) expect(res.status).toBe("partial")
-      else expect(res.status).toBe("ok")
+      const res = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+      if (i < dims.length - 1) expect(res).toContain("已提交")
+      else expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
     }
 
     state = readStateSync(wt, CID)

@@ -37,7 +37,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   }
   const targetGroup = parsedGroups.find((g) => g.id === args.task_group_id)
   if (!targetGroup) {
-    throw new Error(`task_group_id "${args.task_group_id}" 不在 tasks.md 中。可用 ID: [${parsedGroups.map((g) => g.id).join(", ")}]。`)
+    throw new Error(
+      `task_group_id "${args.task_group_id}" 不在 tasks.md 中。\n可用 ID:\n` +
+      `- ${parsedGroups.map((g) => g.id).join("\n- ")}`
+    )
   }
 
   const parsedTasks = await parseTasksMdForGroup(ctx.worktree, args.change_id, args.task_group_id)
@@ -237,22 +240,9 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
 
   await writeState(ctx.worktree, state)
 
-  const recoveryMsg = args.recovery
-    ? `已恢复到 ${args.recovery.phase} 阶段。`
-    : ""
-  return JSON.stringify(
-    {
-      status: "initialized",
-      change_id: state.changeId,
-      task_group_count: state.taskGroups.length,
-      current_task_group: targetGroup,
-      active_phase: ctg.status,
-      task_count: newTasks.length,
-      message: `编排会话已初始化。${recoveryMsg}`,
-    },
-    null,
-    2
-  )
+  return args.recovery
+    ? `编排会话已初始化。已恢复到 ${args.recovery.phase} 阶段。`
+    : "编排会话已初始化。"
 }
 
 async function bindWorktreeRefs(
@@ -310,8 +300,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
       const clean = await isWorktreeClean(existingPath)
       if (!clean) {
         throw new Error(
-          `已有 worktree "${existingPath}" 与 ${state.baseBranch} 分叉且有未提交变更，` +
-          `无法自动 fast-forward。请手动处理后重试。`
+          `已有 worktree "${existingPath}" 与 ${state.baseBranch} 分叉且有未提交变更，无法自动 fast-forward。\n` +
+          `请手动处理后重试。`
         )
       }
       const localCommitCount = parseInt(
@@ -351,7 +341,6 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     `- **状态**: ${reused ? "复用已有 worktree" : "已创建 worktree"}`,
     `- **路径**: \`${tg.worktreePath}\``,
     `- **分支**: \`${branch}\``,
-    `- **基准提交**: \`${tg.baseRef?.slice(0, 7)}\``,
   ].join("\n")
 }
 
@@ -372,7 +361,7 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
         return lines.join("\n")
       }
     }
-    return JSON.stringify({ initialized: false, message: "编排会话尚未初始化。" }, null, 2)
+    return "编排会话尚未初始化。请先调用 opx_orch_init。"
   }
 
   const tg = findTaskGroup(state, state.taskGroupId)
@@ -438,7 +427,9 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   const tg = findTaskGroup(state, state.taskGroupId)
   if (!isReviewCompleted(tg) || tg.status === "completed") {
     throw new Error(
-      `阶段顺序错误：opx_orch_complete_task_group 需在 review 完成后调用，当前 isReviewCompleted=${isReviewCompleted(tg)}，tg.status=${tg.status}。`
+      `阶段顺序错误：opx_orch_complete_task_group 需在 review 完成后调用。\n` +
+      `- isReviewCompleted=${isReviewCompleted(tg)}\n` +
+      `- tg.status=${tg.status}`
     )
   }
   if (tg.worktreePath) {
@@ -465,18 +456,12 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   if (tg.branchName) {
     const mergeResult = await mergeBranchToTarget(ctx.worktree, tg.branchName, mergeTarget)
     if (!mergeResult.success) {
-      return JSON.stringify(
-        {
-          status: "blocked",
-          merge_conflict: true,
-          message:
-            `合并到 "${mergeTarget}" 时发生冲突，已中止合并。` +
-            `请手动在目标分支解决冲突后完成合并 (git merge ${tg.branchName})，` +
-            `完成后重新调 opx_orch_complete_task_group 完成收尾。worktree 与分支已保留。`,
-        },
-        null,
-        2
-      )
+      return [
+        `- **status**: blocked`,
+        `- **merge_conflict**: true`,
+        `- **说明**: 合并到 "${mergeTarget}" 时发生冲突，已中止合并。`,
+        `- **处理**: 请手动在目标分支解决冲突后完成合并 (git merge ${tg.branchName})，完成后重新调 opx_orch_complete_task_group 完成收尾。worktree 与分支已保留。`,
+      ].join("\n")
     }
   }
   if (tg.worktreePath && tg.branchName) {
@@ -488,16 +473,7 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   }
   tg.status = "completed"
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok",
-      completed_task_group: tg.id,
-      merge_target: mergeTarget,
-      message: `任务组已完成并合并到 "${mergeTarget}"。`,
-    },
-    null,
-    2
-  )
+  return `任务组已完成并合并到 "${mergeTarget}"。`
 }
 
 export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolContext): Promise<string> {

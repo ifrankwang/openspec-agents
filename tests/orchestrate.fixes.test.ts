@@ -176,11 +176,8 @@ describe("修复项4: finalizeQualityPhase 不被 tool 层遗留 blocking issue 
     }
     const state = mockStateForUnit({ taskGroups: [tg] })
 
-    const raw = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
-    const result = JSON.parse(raw)
-
-    expect(result.status).toBe("ok")
-    expect(result.phase).toBe("review=completed")
+    const result = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
+    expect(result).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
 
     try { rmSync(tmpRoot, { recursive: true, force: true }) } catch {}
   })
@@ -197,11 +194,8 @@ describe("修复项4: finalizeQualityPhase 不被 tool 层遗留 blocking issue 
     }
     const state = mockStateForUnit({ taskGroups: [tg] })
 
-    const raw = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
-    const result = JSON.parse(raw)
-
-    expect(result.status).toBe("recorded")
-    expect(result.passed).toBe(false)
+    const result = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
+    expect(result).toContain("审查未通过")
 
     try { rmSync(tmpRoot, { recursive: true, force: true }) } catch {}
   })
