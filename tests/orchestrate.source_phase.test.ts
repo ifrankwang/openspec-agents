@@ -261,6 +261,39 @@ describe("sourcePhase D: quality 层按 dimension 过滤 blocking issue", () => 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  test("同维度遗留 rejected quality issue → passed=true rejects（枚举 issue + 引导文案）", async () => {
+    const root = `/tmp/sourcePhase-D2b-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+
+    await setupToReview(root, wt, fakeGit)
+    await completeToolTask(wt)
+
+    const state = readStateSync(wt)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    tg.issues.push(makeSeedIssue({
+      id: "a1",
+      dimension: "architecture",
+      sourcePhase: "quality",
+      severity: "High",
+      status: "rejected",
+      rejectReason: "修复不达标",
+      description: "Architecture rejected issue",
+    }))
+    writeFileSync(
+      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
+      JSON.stringify(state), "utf-8"
+    )
+
+    const archR = makeCtx("openspec-reviewer-architecture", wt)
+    await expect(
+      quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
+    ).rejects.toThrow(/passed=true.*Low\+.*#a1\(High\/rejected\/architecture\).*被驳回（rejected）的 issue 仍为未解决阻塞.*fixed_issue_ids/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("5 维 dispatch 完成（4 passed + style failed）→ retry 回 dev_impl，遗留 style issue 未逃逸", async () => {
     const root = `/tmp/sourcePhase-D3-${Date.now()}`
     const wt = setupWt(root, join(root, "w"))

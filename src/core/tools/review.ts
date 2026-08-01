@@ -4,7 +4,7 @@ import { REVIEW_DIMENSIONS } from "../types.js"
 import { DIMENSION_AGENT_MAP, MAX_RETRIES, BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT, SEVERITY_LEVELS } from "../constants.js"
 import {
   findTaskGroup, assertOrchestrator, assertAgent, assertPassWithIssues,
-  hasBlockingIssues, isBlockingIssue, handleRetryCheckpoint, allTasksVerified,
+  blockingIssues, isBlockingIssue, handleRetryCheckpoint, allTasksVerified,
   isReviewCompleted, computeRequiredDims, dimsWithPendingAction, isStatusUnresolved,
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
@@ -40,15 +40,17 @@ function resetForBlocker(tg: TaskGroupState): void {
 
 function assertPassedConsistency(
   passed: boolean,
-  blockingExists: boolean,
+  blockingIssues: Array<{ id: string; severity: string; status?: string; dimension?: string }>,
   layerName: string,
 ): void {
-  if (passed && blockingExists) {
+  if (passed && blockingIssues.length > 0) {
     throw new Error(
-      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue。有阻塞问题时请设 passed=false。`
+      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue：${blockingIssues.map((i) => `#${i.id}(${i.severity}/${i.status || "open"}/${i.dimension || "-"})`).join("、")}。` +
+      `有阻塞问题时请设 passed=false；被驳回（rejected）的 issue 仍为未解决阻塞，驳回修复须设 passed=false。` +
+      `若某 submitted 待确认 issue 判据不成立且当前代码已正确，可列入 fixed_issue_ids 确认关闭（仅 submitted 状态可标记 fixed；rejected/open 状态的 issue 须先由 developer 提交修复）。`
     )
   }
-  if (!passed && !blockingExists) {
+  if (!passed && blockingIssues.length === 0) {
     throw new Error(
       `${layerName} 审核声称 passed=false，但不存在未解决的阻塞 issue。passed=false 时必须提供至少一个 Low+ issue 或 failed_task_id 作为不通过理由。`
     )
@@ -377,7 +379,7 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
     mergeExecutionBoundary(tg, params.boundary_expansion)
   }
 
-  const remainingToolBlocking = hasBlockingIssues(tg.issues, "tool")
+  const remainingToolBlocking = blockingIssues(tg.issues, "tool")
   assertPassedConsistency(params.passed, remainingToolBlocking, "工具层")
 
   tg.phases.review.tool.completed = true
@@ -410,10 +412,10 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
   tg.phases.review.tool.completed = false
   tg.status = "dev_impl"
   await writeState(ctx.worktree, state)
-  const blockingIssues = tg.issues.filter(
+  const rollbackBlocking = tg.issues.filter(
     (i) => (!i.sourcePhase || i.sourcePhase === "tool") && isBlockingIssue(i)
   )
-  const issueSummary = blockingIssues.slice(0, 3)
+  const issueSummary = rollbackBlocking.slice(0, 3)
     .map((i) => `#${i.id}(dimension:${i.dimension} status:${i.status || "open"})`)
     .join("、")
   return JSON.stringify({
@@ -421,7 +423,7 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
     layer: "tool",
     passed: false,
     retry_count: retryCount,
-    message: `职责已完成，请立即结束当前会话。因遗留跨层阻塞 issue ${issueSummary} 等 ${blockingIssues.length} 个，需回退开发。`,
+    message: `职责已完成，请立即结束当前会话。因遗留跨层阻塞 issue ${issueSummary} 等 ${rollbackBlocking.length} 个，需回退开发。`,
   })
 }
 
@@ -534,8 +536,14 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
     }))
   }
 
-  const remainingTaskBlocking = hasBlockingIssues(tg.issues, "task")
-  assertPassedConsistency(params.passed, remainingTaskBlocking || failed.length > 0, "任务层")
+  if (params.passed && failed.length > 0) {
+    throw new Error("passed=true 时不允许提供 failed_task_ids；有任务未通过必须设 passed=false。")
+  }
+
+  const remainingTaskBlocking = blockingIssues(tg.issues, "task")
+  if (failed.length === 0 || remainingTaskBlocking.length > 0) {
+    assertPassedConsistency(params.passed, remainingTaskBlocking, "任务层")
+  }
 
   tg.phases.review.task.completed = true
   await writeState(ctx.worktree, state)
@@ -669,7 +677,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
       mergeExecutionBoundary(tg, params.boundary_expansion)
     }
 
-    const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality", dimension)
+    const remainingQualityBlocking = blockingIssues(tg.issues, "quality", dimension)
     assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
 
     tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"

@@ -246,7 +246,7 @@ export function renderLayerIssues(
   if (submitted.length > 0) {
     lines.push("### 待确认", "")
     lines.push(
-      "> 待确认核验：逐条核验上述「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入，工具将自动回退为 rejected 交 developer 重修。",
+      "> 待确认核验：逐条核验上述「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标须显式列入 rejected_issue_ids 驳回重修；漏裁定将报错。",
       ""
     )
     for (const i of submitted) lines.push(renderIssueItem(i))
@@ -630,7 +630,7 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
     lines.push(`${stepNum++}. 自愈超限后用 question 提请用户裁定，或按质量门 skill 降级`)
   }
   lines.push(`${stepNum++}. 按质量门 skill 映射表将工具输出翻译为统一 issue`)
-  lines.push(`${stepNum++}. 核验「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入（工具自动回退为 rejected）`)
+  lines.push(`${stepNum++}. 核验「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标须显式列入 rejected_issue_ids 驳回重修`)
   lines.push(`${stepNum++}. 汇总 → opx_tool_review_submit`)
   return lines.join("\n")
 }
@@ -726,8 +726,12 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   if (dimension === "architecture") {
     lines.push(`${stepNum++}. 对照 design.md 架构方案基线，验证代码实施忠实度——偏离且违规时报 issue`)
   }
-  lines.push(`${stepNum++}. 核验「本维度 Issue (待确认)」中每条是否真已修复 → fixed_issue_ids（未达标的不列入）`)
-  lines.push(`${stepNum++}. 裁定「本维度 Issue (豁免裁定中)」→ exempt_issue_ids / rejected_issue_ids`)
+  lines.push(`${stepNum++}. 核验并裁定「本维度 Issue (待确认)」— submitted（待确认）必须有明确裁定，漏裁定将报错：`)
+  lines.push("   - 确认已修复（或判据不成立但当前代码已正确）→ fixed_issue_ids")
+  lines.push("   - 修复不达标 → rejected_issue_ids（退回 developer 重修）")
+  lines.push(`${stepNum++}. 裁定「本维度 Issue (豁免裁定中)」— exemption_requested（豁免裁定中）必须有明确裁定：`)
+  lines.push("   - 批准豁免（问题存在但不修）→ exempt_issue_ids")
+  lines.push("   - 驳回豁免（必须修复）→ rejected_issue_ids")
   if (tiSkills.length > 0) {
     lines.push(`${stepNum++}. 新发现的本维度问题：`)
     lines.push("   - 优先判断此问题是否可通过工具配置统一解决")
