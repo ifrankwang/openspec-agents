@@ -9,7 +9,7 @@ import { findSkillPath, SKILL_SCAN_ROOTS } from "../skills/scan.js"
 
 const AGENT_CAPABILITY_SUGGESTIONS: Record<string, string[]> = {
   "openspec-architect": ["efficiency", "architecture", "api-design", "db-design"],
-  "openspec-developer": ["efficiency", "api-testing", "style", "maintainability", "performance"],
+  "openspec-developer": ["efficiency", "quality-gate", "api-testing", "style", "maintainability", "performance"],
   "openspec-reviewer-tool": ["efficiency", "quality-gate"],
   "openspec-reviewer-task": ["efficiency", "api-testing"],
   "openspec-reviewer-architecture": ["efficiency", "tool-improvement", "architecture"],
@@ -599,7 +599,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push(`${stepNum++}. 实施「Task (待完成)」的全部任务——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${stepNum++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
   lines.push(`${stepNum++}. 用上方「变更范围」命令确认本次变更涉及文件，据此按已加载的 API 测试规范核对变更接口的测试脚本——文件存在、内容已更新`)
-  lines.push(`${stepNum++}. 按已加载的技术栈 skill 运行项目级构建验证（编译、单元测试、质量门等）`)
+  lines.push(`${stepNum++}. 按已加载的质量门类 skill 在本地执行构建验证，并本地核对覆盖率门禁达标后再提交（避免提交后由审核层复核发现不达标来回返工）`)
   lines.push(`${stepNum++}. 全部完成 → commit → opx_dev_submit(outcome=\"completed\")`)
   lines.push(`${stepNum++}. 遇外部依赖/凭证/真实输入缺失无法继续 → opx_dev_submit(outcome=\"blocked\")`)
   return lines.join("\n")

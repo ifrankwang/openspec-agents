@@ -396,6 +396,7 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
 
   const retryResult = handleRetryCheckpoint(tg, state.unattended)
   if (retryResult === null) {
+    tg.phases.review.tool.completed = false
     await writeState(ctx.worktree, state)
     return JSON.stringify({
       status: "recorded",
@@ -552,6 +553,7 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
 
   const retryResult = handleRetryCheckpoint(tg, state.unattended)
   if (retryResult === null) {
+    tg.phases.review.task.completed = false
     await writeState(ctx.worktree, state)
     return JSON.stringify({
       status: "recorded",
