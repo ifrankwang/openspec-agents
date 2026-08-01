@@ -667,7 +667,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
       mergeExecutionBoundary(tg, params.boundary_expansion)
     }
 
-    const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality")
+    const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality", dimension)
     assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
 
     tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"

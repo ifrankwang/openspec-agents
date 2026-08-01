@@ -13,7 +13,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import {
   init, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit
+  tool_review_submit, task_review_submit, quality_review_submit
 } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx } from "./helpers"
 
@@ -185,6 +185,111 @@ describe("sourcePhase C: task blocking issue causes task throw", () => {
         verified_task_ids: ["1", "2"], failed_task_ids: [],
         fixed_issue_ids: [],}, taskR)
     ).rejects.toThrow(/passed=true.*Low\+/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
+
+// ── Scene D: quality 层维度过滤（仅同维度 quality blocking issue 阻塞） ──
+
+describe("sourcePhase D: quality 层按 dimension 过滤 blocking issue", () => {
+  async function completeToolTask(wt: string): Promise<void> {
+    const toolR = makeCtx("openspec-reviewer-tool", wt),
+      taskR = makeCtx("openspec-reviewer-task", wt)
+    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+    await task_review_submit.execute({
+      change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: []
+    }, taskR)
+  }
+
+  test("style failed 遗留 open issue 不阻塞 architecture passed=true（status=partial）", async () => {
+    const root = `/tmp/sourcePhase-D1-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+
+    await setupToReview(root, wt, fakeGit)
+    await completeToolTask(wt)
+
+    // style 维度先提交 passed=false 并报 1 个 Low+ quality issue
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    const raw1 = await quality_review_submit.execute({ change_id: CID, passed: false,
+      issues: [{ severity: "Low", file: "d.md", line: 1, dimension: "style" as any,
+        description: "Style residual issue", suggestion: "Fix naming" }],
+      fixed_issue_ids: [] }, styleR)
+    const r1 = JSON.parse(typeof raw1 === "string" ? raw1 : raw1.output)
+    expect(r1.status).toBe("partial")
+
+    // architecture 维度提交 passed=true 不应被 style 的 open issue 阻塞
+    const archR = makeCtx("openspec-reviewer-architecture", wt)
+    const raw2 = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
+    const r2 = JSON.parse(typeof raw2 === "string" ? raw2 : raw2.output)
+    expect(r2.status).toBe("partial")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("同维度遗留 open quality issue → passed=true rejects（抛错含 passed=true/Low+）", async () => {
+    const root = `/tmp/sourcePhase-D2-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+
+    await setupToReview(root, wt, fakeGit)
+    await completeToolTask(wt)
+
+    // 注入 architecture 同维度遗留 open quality issue
+    const state = readStateSync(wt)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    tg.issues.push(makeSeedIssue({
+      id: "a1",
+      dimension: "architecture",
+      sourcePhase: "quality",
+      severity: "High",
+      description: "Architecture residual issue",
+    }))
+    writeFileSync(
+      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
+      JSON.stringify(state), "utf-8"
+    )
+
+    const archR = makeCtx("openspec-reviewer-architecture", wt)
+    await expect(
+      quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
+    ).rejects.toThrow(/passed=true.*Low\+/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("5 维 dispatch 完成（4 passed + style failed）→ retry 回 dev_impl，遗留 style issue 未逃逸", async () => {
+    const root = `/tmp/sourcePhase-D3-${Date.now()}`
+    const wt = setupWt(root, join(root, "w"))
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+
+    await setupToReview(root, wt, fakeGit)
+    await completeToolTask(wt)
+
+    // style failed 报 1 个 Low+ issue
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    await quality_review_submit.execute({ change_id: CID, passed: false,
+      issues: [{ severity: "Low", file: "d.md", line: 1, dimension: "style" as any,
+        description: "Style residual issue", suggestion: "Fix naming" }],
+      fixed_issue_ids: [] }, styleR)
+
+    // 其余 4 维 passed=true
+    for (const d of ["architecture", "performance", "security", "maintainability"]) {
+      await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
+    }
+
+    const state = readStateSync(wt)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    expect(tg.status).toBe("dev_impl")
+    expect(tg.phases.review.retryCount).toBe(1)
+    const residual = tg.issues.find((i: any) => i.sourcePhase === "quality" && i.dimension === "style")
+    expect(residual).toBeTruthy()
+    expect(residual.status).toBe("open")
+    expect(tg.phases.review.quality.progress.style).toBe("failed")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
