@@ -41,6 +41,8 @@ sonar-scanner --version
 | SonarQube 服务 | `curl -sf http://localhost:9000/api/system/status \| grep -q UP` | 可自愈 | 先 `docker compose -p <namespace> -f <docker-compose-file> up -d sonarqube` 自愈；失败则 `question` 用户 → 裁定降级 |
 | sonar-scanner CLI | `sonar-scanner --version` | 不可自愈 | `question` 用户（需安装 CLI）→ 用户处理后重试或裁定降级 |
 
+`<docker-compose-file>` 优先取项目根目录下含 sonarqube 服务的 `docker-compose*.yaml`。
+
 ## 1. 编译检查
 
 ```bash
@@ -120,7 +122,7 @@ mvn test
 
 说明：`mvn verify` 已包含本阶段（生命周期内自动调用 `mvn test` + JaCoCo 覆盖率检查）。
 
-排除 `ArchitectureTest`（已在第 3 节单独跑）。
+`mvn test` 实际全量运行全部测试，其中 `ArchitectureTest` 已在第 3 节单独执行，本节不重复计数、不重复报告其执行结果。
 
 - 通过：所有测试通过
 - 不通过：→ 工具层 issue，severity 按测试类型区分
@@ -142,6 +144,14 @@ cat target/site/jacoco/jacoco.csv
 | BRANCH_MISSED/COVERED | 分支覆盖率 |
 | LINE_MISSED/COVERED | 行覆盖率 |
 
+`jacoco.csv` 的完整列序为 `GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED`，每个计数器按 MISSED 在前、COVERED 在后排列。
+
+覆盖率聚合按计数器列求和后计算：`LINE 覆盖率 = ΣLINE_COVERED / (ΣLINE_MISSED + ΣLINE_COVERED)`，INSTRUCTION、BRANCH 同理。
+
+`jacoco.csv` 每行对应一个含代码的 class，不包含汇总行，对所有数据行按计数器列求和即为总体统计；若数据中出现 `CLASS=Total` 行（由部分工具导出），跳过该行避免双计数。
+
+核心包过滤：核心包范围以 `<project-specific:jacoco-core-packages>` 占位符表示，由项目填充具体包路径；项目未填充该占位符时仅报告整体覆盖率。
+
 覆盖率检查以 pom.xml 中 JaCoCo `<check>` 配置为准。可按包路径定义多层策略（如整体保底 + 核心包高要求），各层阈值从 pom.xml 中读取。
 双层检查均在 `mvn verify` 中自动执行，任何一层不达标即 build 失败。
 
@@ -154,6 +164,16 @@ cat target/site/jacoco/jacoco.csv
 ### 扫描前准备
 
 以 `<项目原key>-<namespace>` 作为 project key，经 SonarQube Web API 完成 project 预创建、new code 定义设置与一次性认证 token 生成。
+
+#### admin 凭据来源
+
+Web API 管理操作（project 预创建、new code 定义设置、token 生成与回收）所用的 admin 凭据按以下回退链取得：
+
+1. 项目 `sonar-project.properties` 的 `sonar.login` / `sonar.password`
+2. docker-compose 中 SonarQube 服务环境变量（如 `SONAR_SECURITY_LOCALSTARTUPPASSWORD`）
+3. 社区版本地部署默认 `admin/admin`
+
+这些凭据仅用于本地 dev 部署的 project 预创建与一次性 token 生命周期。禁止把 admin 凭据写进扫描参数（扫描本身走 token 注入）；`sonar.login` 语义是 scanner 侧认证，Web API 管理操作须以用户名+密码形态使用。
 
 #### 判断 project 存在性并预创建
 
@@ -190,7 +210,7 @@ curl -sf -u admin:<admin密码> "http://localhost:9000/api/new_code_periods/show
 curl -sf -X POST -u admin:<admin密码> "http://localhost:9000/api/user_tokens/generate?name=<唯一token名>"
 ```
 
-MUST token 名唯一（如附时间戳或随机后缀），token 值只在生成响应中返回一次，须在后续扫描命令中引用。admin 凭据取自本地 SonarQube 部署配置。
+MUST token 名唯一（如附时间戳或随机后缀），token 值只在生成响应中返回一次，须在后续扫描命令中引用。admin 凭据按上方 `admin 凭据来源` 回退链取得。
 
 ### 配置
 
@@ -207,9 +227,9 @@ SONAR_TOKEN=<token> sonar-scanner \
 
 MUST 使用 `-Dsonar.projectKey` 指定含隔离标识 `<namespace>` 的项目 key（原始 key 从 `sonar-project.properties` 读取后追加 `-<namespace>`），禁止不加 `-Dsonar.projectKey` 覆盖直接执行 `sonar-scanner`。隔离标识来自编排会话上下文。
 
-MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，禁止改动 `sonar-project.properties`，避免影响质量门配置检查。若因 SCM 集成故障导致扫描失败或 new code 期数据异常，按下方降级判据降级。
+非 worktree 场景下，MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，禁止改动 `sonar-project.properties`，避免影响质量门配置检查。若因 SCM 集成故障导致扫描失败或 new code 期数据异常，按下方降级判据降级。
 
-当项目 `sonar-project.properties` 含 `sonar.scm.disabled=true` 时，需在上方命令显式追加 `-Dsonar.scm.disabled=false` 覆盖（`sonar.scm.disabled` 是 SCM 集成总开关，`-Dsonar.scm.enabled=true` 会被其压制）；覆盖失败按下方降级判据降级。
+非 worktree 场景下，当项目 `sonar-project.properties` 含 `sonar.scm.disabled=true` 时，需在上方命令显式追加 `-Dsonar.scm.disabled=false` 覆盖（`sonar.scm.disabled` 是 SCM 集成总开关，`-Dsonar.scm.enabled=true` 会被其压制）；覆盖失败按下方降级判据降级。
 
 token 经 `SONAR_TOKEN` 环境变量注入（等价写法：`-Dsonar.token=<token>`）。
 
@@ -253,6 +273,8 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 - `severity`（BLOCKER/CRITICAL/MAJOR/MINOR/INFO）
 
 ### 降级条件
+
+判定条件（扫描前预判）：`[ -f .git ]`（`.git` 为 gitdir 文件，指向 worktree 关联的仓库）或 `git rev-parse --git-dir` 返回含 `/worktrees/` 的路径时，判定当前部署形态为 git worktree。命中 worktree 时跳过 SCM-enabled 扫描尝试，直接进入降级全量扫描；预跳过后的首次扫描即本次全量扫描结果，按第 8 节 dimension 映射统一提交，并在报告注明 SCM 因 worktree 跳过、按降级口径处理。
 
 当 SCM 时间戳不可靠导致 new code 期无法正确识别时，降级为全量 issue 口径。
 
