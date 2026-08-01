@@ -160,8 +160,8 @@ cat target/site/jacoco/jacoco.csv
 先经 Web API 查询 project 是否已存在，不存在才创建：
 
 ```bash
-curl -sf "http://localhost:9000/api/projects/search?project=<项目原key>-<namespace>"
-curl -sf -X POST "http://localhost:9000/api/projects/create?key=<项目原key>-<namespace>&name=<项目原key>-<namespace>"
+curl -sf -u admin:<admin密码> "http://localhost:9000/api/projects/search?project=<项目原key>-<namespace>"
+curl -sf -X POST -u admin:<admin密码> "http://localhost:9000/api/projects/create?key=<项目原key>-<namespace>&name=<项目原key>-<namespace>"
 ```
 
 MUST 先 search 再 create：create 对已存在的 key 返回 HTTP 400，必须以 search 结果判断存在性，禁止直接 create。project key 即 `<项目原key>-<namespace>`。
@@ -171,10 +171,16 @@ MUST 先 search 再 create：create 对已存在的 key 返回 HTTP 400，必须
 将 project 的 new code 定义设置为 `NUMBER_OF_DAYS`，天数固定 30：
 
 ```bash
-curl -sf -X POST "http://localhost:9000/api/new_code_periods/set?project=<项目原key>-<namespace>&type=NUMBER_OF_DAYS&value=30"
+curl -sf -X POST -u admin:<admin密码> "http://localhost:9000/api/new_code_periods/set?project=<项目原key>-<namespace>&type=NUMBER_OF_DAYS&value=30"
 ```
 
-设置后下一次分析自动按此 period 计算 new code，无需触发重算。
+set 后须验证定义生效：
+
+```bash
+curl -sf -u admin:<admin密码> "http://localhost:9000/api/new_code_periods/show?project=<项目原key>-<namespace>&branch=main"
+```
+
+验证命令返回 `type=NUMBER_OF_DAYS` 且 `value=30` 即生效。Community Edition 下 new code 定义为 branch 级存储，set 时未指定 branch 即落 main branch 级；`show` 不带 `branch` 参数只读取 project 级定义（branch_uuid 为空），恒返回全局继承的 `PREVIOUS_VERSION`，属正常现象，不作为设置失败判据。扫描 main branch 时读取 main branch 级定义，new code 期判定不受影响。
 
 #### 生成一次性认证 token
 
@@ -212,10 +218,10 @@ token 经 `SONAR_TOKEN` 环境变量注入（等价写法：`-Dsonar.token=<toke
 经 Web API 查询 new code 期 issue：
 
 ```bash
-curl -sf "http://localhost:9000/api/issues/search?inNewCodePeriod=true&componentKeys=<项目原key>-<namespace>"
+curl -sf -u <token>: "http://localhost:9000/api/issues/search?inNewCodePeriod=true&componentKeys=<项目原key>-<namespace>"
 ```
 
-MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。
+MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。查询须携带认证，token 复用本流程生成的一次性 token，以 Basic auth 形式经 `-u <token>:` 传入（token 作用户名、密码留空），否则默认开启 forceAuthentication 时返回 401。
 
 ### 回收一次性认证 token
 
