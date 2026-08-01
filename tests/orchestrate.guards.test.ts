@@ -51,6 +51,8 @@ function readStateSync(wt: string, cid: string): any {
   return JSON.parse(readFileSync(p, "utf-8"))
 }
 
+// 注：真实推荐时序为 init → set_worktree → arch_submit → dev_submit（set_worktree 无阶段守卫）；
+// 本 helper 中 arch_submit 先于 set_worktree 属兼容路径验证。
 async function setupToReview(wt: string, fakeGit: FakeGitRunner) {
   const o = makeCtx("openspec-orchestrator", wt), a = makeCtx("openspec-architect", wt),
        d = makeCtx("openspec-developer", wt),

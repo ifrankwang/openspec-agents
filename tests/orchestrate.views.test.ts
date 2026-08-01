@@ -73,10 +73,12 @@ describe("视图「操作指引」段", () => {
     const tg = baseTg({ status: "task_analysis", tasks: [mockTask("1")] })
     const output = renderArchitectView(state, tg)
     expect(output).toContain("## Worktree")
-    expect(output).toContain("(worktree 尚未设置)")
+    expect(output).toContain("(worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)")
     expect(output).toContain("## 操作指引")
     expect(output).toContain("交叉比对")
     expect(output).toContain("opx_arch_submit")
+    expect(output).not.toContain("**隔离标识**")
+    expect(output).not.toContain("建议端口")
   })
 
   test("renderDeveloperView 含操作指引", () => {
@@ -102,6 +104,9 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("**变更范围**")
     expect(output).toContain("diff --name-only base..HEAD")
     expect(output).not.toContain("涉及 API 变更")
+    expect(output).not.toContain("Task (待验证)")
+    expect(output).not.toContain("Issue (已修复待验证)")
+    expect(output).not.toContain("Issue (豁免裁定中)")
   })
 
   test("视图 Worktree 区块展示隔离标识与建议端口", () => {
@@ -131,6 +136,8 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("质量门 skill")
     expect(output).toContain("opx_tool_review_submit")
     expect(output).toContain("变更范围")
+    expect(output).toContain("**隔离标识**")
+    expect(output).not.toContain("建议端口")
     expect(output).not.toContain("上轮变更文件")
   })
 
@@ -151,6 +158,9 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("初始化仅是前置")
     expect(output).toContain("不可将初始化视为终点")
     expect(output).toContain("变更范围")
+    expect(output).toContain("**隔离标识**")
+    expect(output).toContain("建议端口")
+    expect(output).not.toContain("Task (已驳回)")
     expect(output).not.toContain("上轮变更文件")
   })
 
@@ -220,6 +230,8 @@ describe("视图「操作指引」段", () => {
     expect(output).toContain("opx_quality_review_submit")
     expect(output).toContain("按本维度审查标准")
     expect(output).toContain("变更范围")
+    expect(output).not.toContain("**隔离标识**")
+    expect(output).not.toContain("建议端口")
     expect(output).not.toContain("上轮变更文件")
   })
 

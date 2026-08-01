@@ -76,6 +76,8 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
     throw new Error("存在 awaiting_user blocker，请先用 opx_arch_blocker 逐个处理后再提交 outcome=ready。")
   }
   tg.executionBoundary = params.execution_boundary
+  // `tg.worktreePath || ctx.worktree` 仅兼容 worktree 尚未就绪的初始化场景（同一函数后续 git 操作同此约定）；
+  // 推荐时序为架构师分派前 worktree 已就绪（orchestrator 先调 opx_orch_set_worktree）。
   const parsedTasks = await parseTasksMdForGroup(tg.worktreePath || ctx.worktree, state.changeId, state.taskGroupId)
   tg.tasks = parsedTasks.map((task, index) => ({ id: String(index + 1), specTrace: task.specTrace, title: task.title, status: "open", taskNumber: task.taskNumber, rejectReason: null }))
   tg.relevantSpecs = extractRelevantSpecsFromTasks(parsedTasks)

@@ -135,7 +135,11 @@ function renderEfficiencySteps(tagMap: Map<string, string[]>, startNum: number):
   return { lines, nextNum: n }
 }
 
-function renderWorktreeSection(state: OrchestrateState, tg: TaskGroupState): string[] {
+function renderWorktreeSection(
+  state: OrchestrateState,
+  tg: TaskGroupState,
+  opts?: { showNamespace?: boolean; showPort?: boolean },
+): string[] {
   const lines: string[] = []
   lines.push("## Worktree", "")
   if (tg.worktreePath) {
@@ -144,10 +148,14 @@ function renderWorktreeSection(state: OrchestrateState, tg: TaskGroupState): str
     if (tg.baseRef) lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
     lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行")
   } else {
-    lines.push("- (worktree 尚未设置)")
+    lines.push("- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)")
   }
-  lines.push(`- **隔离标识**: \`${state.isolationNamespace}\``)
-  lines.push(`  - 建议端口: ${derivePortFromNamespace(state.isolationNamespace)}`)
+  if (opts?.showNamespace) {
+    lines.push(`- **隔离标识**: \`${state.isolationNamespace}\``)
+    if (opts?.showPort) {
+      lines.push(`  - 建议端口: ${derivePortFromNamespace(state.isolationNamespace)}`)
+    }
+  }
   lines.push("")
   return lines
 }
@@ -536,7 +544,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("# 开发上下文", "")
   lines.push(`当前阶段: ${tg.status}`, "")
   lines.push(...renderSkillSuggestions("openspec-developer", AGENT_CAPABILITY_SUGGESTIONS["openspec-developer"]))
-  lines.push(...renderWorktreeSection(state, tg))
+  lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 执行边界", "")
   if (tg.executionBoundary) {
     const b = tg.executionBoundary
@@ -569,8 +577,6 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("")
   const openTasks = tg.tasks.filter((t) => t.status === "open")
   renderOptionalSection(lines, "Task (待完成)", openTasks.map(renderTaskItem))
-  const devSubmitted = tg.tasks.filter((t) => t.status === "submitted")
-  renderOptionalSection(lines, "Task (待验证)", devSubmitted.map(renderTaskItem))
   const rejectedTasks = tg.tasks.filter((t) => t.status === "rejected")
   renderOptionalSection(lines, "Task (已驳回)", rejectedTasks.map(t => {
     const reason = t.rejectReason ? `  - 驳回原因：${t.rejectReason}` : ""
@@ -584,10 +590,6 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
     (i) => (i.status === "open" || i.status === "rejected") && !isBlockingIssue(i)
   )
   renderOptionalSection(lines, "Issue (待修复 · Info，建议修复，不阻塞提交)", sortIssuesByCategory(infoFix).map(renderIssueItem))
-  const submittedIssues = tg.issues.filter((i) => i.status === "submitted")
-  renderOptionalSection(lines, "Issue (已修复待验证)", sortIssuesByCategory(submittedIssues).map(renderIssueItem))
-  const exemptionIssues = tg.issues.filter((i) => i.status === "exemption_requested")
-  renderOptionalSection(lines, "Issue (豁免裁定中)", sortIssuesByCategory(exemptionIssues).map(renderIssueItem))
   const { tagMap } = scanSkills()
   lines.push("## 操作指引", "")
   lines.push("")
@@ -609,7 +611,7 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   const lines: string[] = []
   lines.push("# 工具审核上下文", "")
   lines.push(...renderSkillSuggestions("openspec-reviewer-tool", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-tool"]))
-  lines.push(...renderWorktreeSection(state, tg))
+  lines.push(...renderWorktreeSection(state, tg, { showNamespace: true }))
   const toolIssues = renderLayerIssues(tg.issues, "tool")
   renderOptionalSection(lines, "全部 Issue（tool 层可见）", toolIssues)
   const { tagMap } = scanSkills()
@@ -640,7 +642,7 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push("# 任务审核上下文", "")
   lines.push(`**tool 层**: ${tg.phases.review.tool.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
   lines.push(...renderSkillSuggestions("openspec-reviewer-task", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-task"]))
-  lines.push(...renderWorktreeSection(state, tg))
+  lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 推荐阅读文档", "")
   lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
   for (const s of tg.relevantSpecs) lines.push(`- \`openspec/changes/${state.changeId}/specs/${s}/spec.md\``)
@@ -652,11 +654,6 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   }
   const reviewSubmitted = tg.tasks.filter((t) => t.status === "submitted")
   renderOptionalSection(lines, "Task (待验证)", reviewSubmitted.map(renderTaskItem))
-  const reviewRejected = tg.tasks.filter((t) => t.status === "rejected")
-  renderOptionalSection(lines, "Task (已驳回)", reviewRejected.map(t => {
-    const reason = t.rejectReason ? `  - 驳回原因：${t.rejectReason}` : ""
-    return `${renderTaskItem(t)}${reason ? `\n${reason}` : ""}`
-  }))
   const taskIssues = renderLayerIssues(tg.issues, "task")
   renderOptionalSection(lines, "审查 Issue", taskIssues)
   const { tagMap } = scanSkills()

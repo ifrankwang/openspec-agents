@@ -44,7 +44,9 @@ function findTg(wt: string): any {
   return readStateSync(wt).taskGroups.find((g: any) => g.id === "1")
 }
 
-/** init → arch_submit → set_worktree → dev_submit → recovery review → tool/task 通过（review 就绪） */
+/** init → arch_submit → set_worktree → dev_submit → recovery review → tool/task 通过（review 就绪）。
+ *  注：真实推荐时序为 init → set_worktree → arch_submit → dev_submit（set_worktree 无阶段守卫，G1 已验证）；
+ *  本 helper 中 arch_submit 先于 set_worktree 属兼容路径验证。 */
 async function setupThroughReviewReady(wt: string, fakeGit: FakeGitRunner): Promise<void> {
   const o = makeCtx("openspec-orchestrator", wt)
   const a = makeCtx("openspec-architect", wt)
