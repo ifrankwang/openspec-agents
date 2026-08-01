@@ -246,7 +246,7 @@ export function renderLayerIssues(
   if (submitted.length > 0) {
     lines.push("### 待确认", "")
     lines.push(
-      "> 存量确认：逐条核验上述「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入，工具将自动回退为 rejected 交 developer 重修。",
+      "> 待确认核验：逐条核验上述「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入，工具将自动回退为 rejected 交 developer 重修。",
       ""
     )
     for (const i of submitted) lines.push(renderIssueItem(i))
@@ -630,7 +630,7 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
     lines.push(`${stepNum++}. 自愈超限后用 question 提请用户裁定，或按质量门 skill 降级`)
   }
   lines.push(`${stepNum++}. 按质量门 skill 映射表将工具输出翻译为统一 issue`)
-  lines.push(`${stepNum++}. 核验「待确认」存量 issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入（工具自动回退为 rejected）`)
+  lines.push(`${stepNum++}. 核验「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入（工具自动回退为 rejected）`)
   lines.push(`${stepNum++}. 汇总 → opx_tool_review_submit`)
   return lines.join("\n")
 }
@@ -681,7 +681,7 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   lines.push(`${stepNum++}. UT 测试质量审查：按已加载的测试技能规范审查单元测试质量`)
   lines.push(`${stepNum++}. 全部验证完成后清理隔离环境`)
   lines.push(`${stepNum++}. 发现本轮验证过程中的非本轮引入缺陷 → 按统一严重级别体系提交 issue（至少 Low）`)
-  lines.push(`${stepNum++}. 核验「审查 Issue」中「待确认」存量 issue 是否真已修复`)
+  lines.push(`${stepNum++}. 核验「审查 Issue」中「待确认」issue 是否真已修复`)
   lines.push(`${stepNum++}. 缺少验证所需真实资源（隔离环境无法正常搭建亦属此类）→ opx_task_review_submit(passed=false)；禁止静默降级复用共享库`)
   lines.push(`${stepNum++}. 汇总 → opx_task_review_submit`)
   return lines.join("\n")

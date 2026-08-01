@@ -65,7 +65,7 @@ Authorization: Bearer {{TOKEN}}
 %}
 ```
 
-## 存量迁移
+## 旧脚本迁移
 
 若 `api-tests/script/` 目录已存在 shell（`.sh`）+ curl + jq 旧版脚本，逐文件转为 `.http` 格式：
 - 每个 `curl` 命令及其 headers 和 body 转为一条 `###` 分隔的请求
