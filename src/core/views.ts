@@ -224,7 +224,7 @@ function formatSeverity(severity: string): string {
 
 export function renderIssueItem(i: IssueItem): string {
   const lines: string[] = []
-  lines.push(`- Issue #${i.id} | ${formatSeverity(i.severity)} | ${i.dimension} | [${i.sourcePhase}]`)
+  lines.push(`- Issue #${i.id} | ${formatSeverity(i.severity)} | ${i.dimension} | [${i.sourcePhase}]${i.rule ? ` | ${i.rule}` : ""}`)
   lines.push(`  - 文件：${formatFilePath(i.file, i.line)}`)
   lines.push(`  - 描述：${i.description}`)
   if (i.suggestion) lines.push(`  - 建议：${i.suggestion}`)
@@ -232,6 +232,27 @@ export function renderIssueItem(i: IssueItem): string {
   if (i.status === "rejected" && i.rejectReason) lines.push(`  - 驳回原因：${i.rejectReason}`)
   lines.push(`  - 修复未过次数：${i.refixCount}`)
   return lines.join("\n")
+}
+
+export function renderIssueItemsGrouped(issues: IssueItem[]): string[] {
+  if (issues.length === 0) return []
+  const groups = new Map<string, IssueItem[]>()
+  for (const i of issues) {
+    const key = i.rule || "未分类"
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(i)
+  }
+  const lines: string[] = []
+  for (const [rule, items] of groups) {
+    const dupHint = items.length > 1 ? `（${items.length} 条同类）` : ""
+    lines.push(`**${rule}**${dupHint}`, "")
+    if (items.length > 1) {
+      lines.push("> 同类问题建议一次批量修复、一次提交一次重验，避免逐条触发全量复查。", "")
+    }
+    for (const i of items) lines.push(renderIssueItem(i))
+    lines.push("")
+  }
+  return lines
 }
 
 export function renderLayerIssues(
@@ -267,6 +288,17 @@ export function renderLayerIssues(
     lines.push("")
   }
 
+  return lines
+}
+
+function renderAgentSummaries(tg: TaskGroupState): string[] {
+  const summaries = tg.agentSummaries
+  if (!summaries || Object.keys(summaries).length === 0) return []
+  const lines: string[] = ["## 上轮会话摘要", ""]
+  for (const [agent, summary] of Object.entries(summaries)) {
+    lines.push(`- **${agent}**：${summary}`)
+  }
+  lines.push("")
   return lines
 }
 
@@ -543,6 +575,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   const lines: string[] = []
   lines.push("# 开发上下文", "")
   lines.push(`当前阶段: ${tg.status}`, "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions("openspec-developer", AGENT_CAPABILITY_SUGGESTIONS["openspec-developer"]))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 执行边界", "")
@@ -585,11 +618,11 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   const blockingIssues = tg.issues.filter(
     (i) => (i.status === "open" || i.status === "rejected") && isBlockingIssue(i)
   )
-  renderOptionalSection(lines, "Issue (待修复 · Low 及以上，必办)", sortIssuesByCategory(blockingIssues).map(renderIssueItem))
+  renderOptionalSection(lines, "Issue (待修复 · Low 及以上，必办)", renderIssueItemsGrouped(sortIssuesByCategory(blockingIssues)))
   const infoFix = tg.issues.filter(
     (i) => (i.status === "open" || i.status === "rejected") && !isBlockingIssue(i)
   )
-  renderOptionalSection(lines, "Issue (待修复 · Info，建议修复，不阻塞提交)", sortIssuesByCategory(infoFix).map(renderIssueItem))
+  renderOptionalSection(lines, "Issue (待修复 · Info，建议修复，不阻塞提交)", renderIssueItemsGrouped(sortIssuesByCategory(infoFix)))
   const { tagMap } = scanSkills()
   lines.push("## 操作指引", "")
   lines.push("")
@@ -610,6 +643,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
 export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState): string {
   const lines: string[] = []
   lines.push("# 工具审核上下文", "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions("openspec-reviewer-tool", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-tool"]))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true }))
   const toolIssues = renderLayerIssues(tg.issues, "tool")
@@ -641,6 +675,7 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   const lines: string[] = []
   lines.push("# 任务审核上下文", "")
   lines.push(`**tool 层**: ${tg.phases.review.tool.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions("openspec-reviewer-task", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-task"]))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 推荐阅读文档", "")
@@ -690,6 +725,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   const tiSkills = getToolImprovementSkills(agent)
   lines.push(`# AI 审查上下文 — ${dimension}`, "")
   lines.push(`**task 层**: ${tg.phases.review.task.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions(agent, AGENT_CAPABILITY_SUGGESTIONS[agent] || []))
   lines.push(...renderWorktreeSection(state, tg))
   if (dimension === "architecture") {

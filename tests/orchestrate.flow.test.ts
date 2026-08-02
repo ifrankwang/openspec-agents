@@ -380,15 +380,13 @@ describe("4. 豁免裁定 — tool 层通过 exempt_issue_ids 授权", () => {
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exemption_requested")
 
-    // dev_submit reset layers. Re-run with exemption handling.
-    await transitionToReview(wt, o, toolR, taskR, [issueId])
+    // quality 层豁免由发起维度（style）quality reviewer 裁定，tool/task 层不重置不重验
+    const res = await quality_review_submit.execute({ change_id: CID, passed: true,
+      issues: [], exempt_issue_ids: [issueId] }, makeCtx("openspec-reviewer-style", wt))
+    expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
 
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exempted")
-
-    // Quality re-run — only affected dim
-    const res = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx("openspec-reviewer-style", wt))
-    expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
 
     try { rmSync(root, { recursive: true, force: true })} catch {}
   })
@@ -736,11 +734,9 @@ describe("10. quality 层豁免 — quality reviewer 裁定", () => {
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exemption_requested")
 
-    // dev_submit reset layers. Re-run with exemption.
-    await transitionToReview(wt, o, toolR, taskR, [issueId])
-
-    // Quality — only affected dim, issue already exempted
-    const res = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx("openspec-reviewer-style", wt))
+    // quality 层豁免由发起维度（style）quality reviewer 裁定，tool/task 层不重置不重验
+    const res = await quality_review_submit.execute({ change_id: CID, passed: true,
+      issues: [], exempt_issue_ids: [issueId] }, makeCtx("openspec-reviewer-style", wt))
     expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
 
     state = readStateSync(wt, CID)
@@ -1031,7 +1027,7 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     state = readStateSync(wt, CID)
     const tgFinal = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgFinal.status).toBe("review")
-    expect(tgFinal.phases.review.tool.completed).toBe(false)
+    expect(tgFinal.phases.review.tool.completed).toBe(true)
     expect(tgFinal.phases.review.task.completed).toBe(true)
     expect(tgFinal.issues.find((i: any) => i.id === issueId).status).toBe("submitted")
 
@@ -1103,14 +1099,13 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     expect(tgFix.phases.review.retryCount).toBe(1) // dev_submit 不再清零
     expect(tgFix.tasks.every((t: any) => t.status === "verified")).toBe(true)
 
-    // --- 4. Tool review passes (with fixed issue) ---
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [issueId] }, toolR)
+    // --- 4. quality-only 修复：tool/task 层不重验，由发起维度 style reviewer 确认修复 ---
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    const result = await quality_review_submit.execute({ change_id: CID, passed: true,
+      fixed_issue_ids: [issueId], issues: [] }, styleR)
+    expect(result).toContain("全部审查维度通过")
 
-    // --- 5. Task review with no verified/failed tasks → auto-skip ---
-    const result = await task_review_submit.execute({ change_id: CID, passed: true }, taskR)
-    expect(result).toContain("审核通过")
-
-    // --- 6. State reflects auto-completed task layer ---
+    // --- 5. State: task 层保持已完成（自动跳过，不重验）---
     state = readStateSync(wt, CID)
     const tgFinal = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgFinal.phases.review.task.completed).toBe(true)

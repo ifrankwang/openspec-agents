@@ -84,6 +84,7 @@ export interface ToolReviewParams {
     line: number
     description: string
     suggestion?: string
+    rule?: string
   }>
   fixed_issue_ids?: string[]
   exempt_issue_ids?: string[]
@@ -107,6 +108,7 @@ export interface TaskReviewParams {
     description: string
     suggestion?: string
     root_cause_guess?: string
+    rule?: string
   }>
   fixed_issue_ids?: string[]
   exempt_issue_ids?: string[]
@@ -133,6 +135,7 @@ export interface QualityReviewParams {
     description: string
     suggestion?: string
     root_cause_guess?: string
+    rule?: string
   }>
   fixed_issue_ids?: string[]
   exempt_issue_ids?: string[]

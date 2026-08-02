@@ -163,6 +163,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
         tasks: tgTasks,
         issues: tgIssues,
         blockers: existing?.blockers ?? [],
+        agentSummaries: existing?.agentSummaries,
       }
 
       return base

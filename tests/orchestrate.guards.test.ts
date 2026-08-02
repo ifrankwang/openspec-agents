@@ -750,17 +750,17 @@ describe("G10. 重复操作守卫", () => {
     await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Lib" }]}, d)
 
-    // dev_submit reset layers. Re-run tool+task with exemption.
+    // dev_submit 后已进入 review（quality 豁免不重置 tool/task 层）。
     const s2 = readStateSync(wt, CID)
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
       change_id: CID, task_group_id: "1",
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
-    await tool_review_submit.execute({change_id: CID, passed: true, issues: [], fixed_issue_ids: [],
-      exempt_issue_ids: [issueId]}, toolR)
-    await task_review_submit.execute({change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [],
-      fixed_issue_ids: []}, taskR)
+    // quality 层豁免由发起维度（style）quality reviewer 裁定，tool/task 层不重验
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    await quality_review_submit.execute({change_id: CID, passed: true, issues: [],
+      exempt_issue_ids: [issueId]}, styleR)
 
     // Now issue is exempted. Try duplicate exemption → throws.
     await expect(
@@ -977,10 +977,7 @@ describe("G15. 豁免完整性门禁", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    // tool 层仅看到 sourcePhase="tool" 的 exemption，quality 层 issue 的 exemption 跳过
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    // task 层仅看到 sourcePhase="task" 的 exemption，同样跳过
-    await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
+    // quality-only 豁免申请：tool/task 层不重置不重验（tool.completed 保持 true）
     // quality（style）层必须处理自己维度的 exemption 才能提交
     await expect(
       quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt))

@@ -58,6 +58,7 @@ export function deduplicateAndAddIssues(
       exemptReason: null,
       rejectReason: null,
       sourcePhase,
+      rule: iss.rule || undefined,
     })
   }
   return { newIssues, nextIssueId, dedupedCount }

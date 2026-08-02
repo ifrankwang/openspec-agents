@@ -65,7 +65,7 @@ export {
   renderOrchestratorView, renderArchitectView, renderDeveloperView,
   renderToolReviewView, renderTaskReviewView, renderQualityReviewView,
   formatFilePath, taskSummary, issueSummary, renderTaskItem,
-  renderIssueItem, renderLayerIssues, sortIssuesByCategory,
+  renderIssueItem, renderIssueItemsGrouped, renderLayerIssues, sortIssuesByCategory,
 } from "./views.js"
 
 // dashboard

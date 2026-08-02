@@ -5,7 +5,7 @@ import { DIMENSION_AGENT_MAP, MAX_RETRIES, BLOCKING_SEVERITIES, ORCHESTRATOR_AGE
 import {
   findTaskGroup, assertOrchestrator, assertAgent, assertPassWithIssues,
   blockingIssues, isBlockingIssue, handleRetryCheckpoint, allTasksVerified,
-  isReviewCompleted, dimsWithPendingAction, isStatusUnresolved,
+  isReviewCompleted, isStatusUnresolved,
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
 import { readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock } from "../state.js"
@@ -18,6 +18,10 @@ import type {
 
 function idsToStrings(ids: string[] | undefined): string[] {
   return (ids || []).map(String)
+}
+
+function updateAgentSummary(tg: TaskGroupState, agent: string, summary: string): void {
+  tg.agentSummaries = { ...(tg.agentSummaries || {}), [agent]: summary }
 }
 
 function addBlockers(tg: TaskGroupState, blockers: Array<Omit<BlockerItem, "id" | "status" | "userResponse" | "architectConclusion">>, status: BlockerItem["status"]): void {
@@ -103,6 +107,7 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
       throw new Error(`git commit openspec docs 失败：${commitResult.stderr}`)
     }
   }
+  updateAgentSummary(tg, "openspec-architect", "预检通过，已输出执行边界")
   await writeState(ctx.worktree, state)
   return "复核通过，职责已完成，请立即结束当前会话。"
 }
@@ -239,12 +244,16 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   }
 
   let touchedAnyIssue = false
+  const touchedSourcePhases = new Set<string>()
+  const touchedQualityDims = new Set<ReviewDimension>()
   const fixedIds = params.fixed_issue_ids || []
   for (const id of fixedIds) {
     const issue = tg.issues.find((i) => i.id === id)
     if (issue && (issue.status === "open" || issue.status === "rejected")) {
       issue.status = "submitted"
       touchedAnyIssue = true
+      touchedSourcePhases.add(issue.sourcePhase)
+      if (issue.sourcePhase === "quality") touchedQualityDims.add(issue.dimension)
     }
   }
 
@@ -265,6 +274,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     issue.exemptReason = r.reason
     requestedIds.push(r.issue_id)
     touchedAnyIssue = true
+    touchedSourcePhases.add(issue.sourcePhase)
+    if (issue.sourcePhase === "quality") touchedQualityDims.add(issue.dimension)
   }
 
   const remainingBlocking = tg.issues.filter(
@@ -278,12 +289,16 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   }
 
   if (touchedAnyIssue) {
-    tg.phases.review.tool.completed = false
-    tg.phases.review.task.completed = false
-    for (const d of REVIEW_DIMENSIONS) {
-      if (dimsWithPendingAction(tg).has(d)) {
-        tg.phases.review.quality.progress[d] = "pending"
-      }
+    if (touchedSourcePhases.has("task")) {
+      // task 层修复可能影响代码实现，tool+task 层均需重验
+      tg.phases.review.tool.completed = false
+      tg.phases.review.task.completed = false
+    } else if (touchedSourcePhases.has("tool")) {
+      // 仅 tool 层 issue 修复，task 层已验证结论保留
+      tg.phases.review.tool.completed = false
+    }
+    for (const d of touchedQualityDims) {
+      tg.phases.review.quality.progress[d] = "pending"
     }
   }
   tg.status = "review"
@@ -298,6 +313,10 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   if (params.self_check_results) {
     tg.devSelfCheckResults = params.self_check_results
   }
+
+  const devSummary = `完成 task ${params.completed_task_ids?.length || 0} 个，修复 issue ${fixedIds.length} 个，申请豁免 ${requestedIds.length} 个。` +
+    (params.self_check_results ? ` 自检摘要：${params.self_check_results.slice(0, 200)}` : "")
+  updateAgentSummary(tg, "openspec-developer", devSummary)
 
   await writeState(ctx.worktree, state)
   return "提交完成。职责已完成，请立即结束当前会话。"
@@ -366,6 +385,11 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
 
   tg.phases.review.tool.completed = true
   if (params.test_results) tg.phases.review.tool.testResults = params.test_results
+  updateAgentSummary(
+    tg,
+    "openspec-reviewer-tool",
+    `${params.passed ? "通过" : "未通过"}，确认修复 ${tlFixedIds.length} 条，豁免 ${tlExemptIds.length} 条，驳回 ${tlRejected.length} 条，新报 ${issues.length} 条。`,
+  )
   await writeState(ctx.worktree, state)
 
   if (params.passed) {
@@ -510,6 +534,11 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   }
 
   tg.phases.review.task.completed = true
+  updateAgentSummary(
+    tg,
+    "openspec-reviewer-task",
+    `${params.passed ? "通过" : "未通过"}，验证通过 ${verified.length} 个 task，失败 ${failed.length} 个，新报 ${rawIssues.length} 条。`,
+  )
   await writeState(ctx.worktree, state)
 
   if (params.passed) {
@@ -627,6 +656,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
     assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
 
     tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"
+    updateAgentSummary(tg, DIMENSION_AGENT_MAP[dimension], `[${dimension}] ${passed ? "通过" : "未通过"}，新报 ${issues.length} 条。`)
     await writeState(ctx.worktree, state)
     return finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree, dedupedCount)
   } finally {
