@@ -1,5 +1,5 @@
 import path from "path"
-import type { TaskGroupState, IssueItem, Dimension, ReviewDimension, OrchestrateState, BlockerItem, ValidationStep } from "../types.js"
+import type { TaskGroupState, TaskItem, IssueItem, Dimension, ReviewDimension, OrchestrateState, BlockerItem, ValidationStep } from "../types.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import { DIMENSION_AGENT_MAP, MAX_RETRIES, BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT, SEVERITY_LEVELS } from "../constants.js"
 import {
@@ -17,7 +17,12 @@ import type {
 } from "./types.js"
 
 function idsToStrings(ids: string[] | undefined): string[] {
-  return (ids || []).map(String)
+  return (ids || []).map((id) => String(id).trim().replace(/^#/, ""))
+}
+
+function normalizeTaskIds(rawIds: string[], tasks: TaskItem[]): string[] {
+  const byNumber = new Map(tasks.map((t) => [t.taskNumber, t.id]))
+  return rawIds.map((id) => byNumber.get(id) ?? id)
 }
 
 function updateAgentSummary(tg: TaskGroupState, agent: string, summary: string): void {
@@ -182,10 +187,11 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   assertAgent(ctx.agent, "opx_dev_submit", ["openspec-developer"])
   if (params.completed_task_ids) params.completed_task_ids = params.completed_task_ids.map(String)
   if (params.fixed_issue_ids) params.fixed_issue_ids = idsToStrings(params.fixed_issue_ids)
-  if (params.request_exempts) params.request_exempts = params.request_exempts.map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  if (params.request_exempts) params.request_exempts = params.request_exempts.map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
+  if (params.completed_task_ids) params.completed_task_ids = normalizeTaskIds(params.completed_task_ids, tg.tasks)
   if (tg.status !== "dev_impl" && tg.status !== "review") {
     throw new Error(`dev_submit 仅在 dev_impl 或 review 阶段可用，当前阶段为 "${tg.status}"。`)
   }
@@ -326,7 +332,7 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
   assertAgent(ctx.agent, "opx_tool_review_submit", ["openspec-reviewer-tool"])
   const tlFixedIds = idsToStrings(params.fixed_issue_ids)
   const tlExemptIds = idsToStrings(params.exempt_issue_ids)
-  const tlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  const tlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
@@ -420,10 +426,12 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   if (params.failed_task_ids) params.failed_task_ids = params.failed_task_ids.map(f => ({ ...f, task_id: String(f.task_id) }))
   const tkFixedIds = idsToStrings(params.fixed_issue_ids)
   const tkExemptIds = idsToStrings(params.exempt_issue_ids)
-  const tkRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  const tkRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
+  if (params.verified_task_ids) params.verified_task_ids = normalizeTaskIds(params.verified_task_ids, tg.tasks)
+  if (params.failed_task_ids) params.failed_task_ids = params.failed_task_ids.map(f => ({ ...f, task_id: normalizeTaskIds([f.task_id], tg.tasks)[0] }))
   if (tg.status !== "review") {
     throw new Error(`task_review_submit 需在 review 阶段调用，当前阶段为 "${tg.status}"。`)
   }
@@ -449,7 +457,8 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
     throw new Error(
       `非法 task id：\n` +
       [...unknownVerified.map((id) => `- "${id}"`), ...unknownFailed.map((f) => `- "${f.task_id}"`)].join("\n") +
-      `\n合法 id：${Array.from(validIds).join(", ")}。`
+      `\n合法 id：${Array.from(validIds).join(", ")}。\n` +
+      `task 支持用任务编号（如 4.1）自动映射到数字 id。`
     )
   }
 
@@ -587,7 +596,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
 
   const qlFixedIds = idsToStrings(params.fixed_issue_ids)
   const qlExemptIds = idsToStrings(params.exempt_issue_ids)
-  const qlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  const qlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
 
   const stateBefore = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!stateBefore) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")

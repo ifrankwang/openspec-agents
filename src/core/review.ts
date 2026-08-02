@@ -112,7 +112,8 @@ export function applyReviewGate(
     throw new Error(
       `以下 ${uncovered.length} 个活跃 issue（submitted/exemption）未被 fixed_issue_ids、exempt_issue_ids 或 rejected_issue_ids 覆盖：\n` +
       uncovered.map((i) => `- #${i.id}(${i.status})`).join("\n") +
-      `\n所有活跃 issue 必须有明确裁定。`
+      `\n所有活跃 issue 必须有明确裁定。\n` +
+      `issue id 使用纯数字，不带 # 前缀。`
     )
   }
 

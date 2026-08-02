@@ -635,6 +635,7 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push(`${stepNum++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
   lines.push(`${stepNum++}. 用上方「变更范围」命令确认本次变更涉及文件，据此按已加载的 API 测试规范核对变更接口的测试脚本——文件存在、内容已更新`)
   lines.push(`${stepNum++}. 按已加载的质量门类 skill 在本地执行构建验证，并本地核对覆盖率门禁达标后再提交（避免提交后由审核层复核发现不达标来回返工）`)
+  lines.push(`${stepNum++}. 验证失败时先完整读取失败输出、定位全部失败项后统一修复再重跑；禁止仅查看报错尾部片段反复全量重试`)
   lines.push(`${stepNum++}. 全部完成 → commit → opx_dev_submit(outcome=\"completed\")`)
   lines.push(`${stepNum++}. 遇外部依赖/凭证/真实输入缺失无法继续 → opx_dev_submit(outcome=\"blocked\")`)
   return lines.join("\n")
@@ -658,6 +659,7 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   stepNum = eff.nextNum
   lines.push(`${stepNum++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为审查范围`)
   lines.push(`${stepNum++}. 加载质量门 skill，获取工具清单、执行命令与 issue 映射表`)
+  lines.push(`${stepNum++}. 先按质量门 skill 定义检查运行环境与目标项目是否已就绪（容器/服务在运行、项目已初始化），已就绪则跳过重复的环境初始化步骤，直接进入检查`)
   lines.push(`${stepNum++}. 按质量门 skill 定义顺序逐项执行工具检查（环境检查 → 编译 → 格式 → 架构约束 → 静态分析 → 测试编译与覆盖率 → 深度扫描 → 工具配置检查）`)
   lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复——同一环境/技术故障自愈尝试上限 3 次`)
   if (state.unattended) {
