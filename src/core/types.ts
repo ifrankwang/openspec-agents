@@ -43,6 +43,7 @@ export interface IssueItem {
   rootCauseGuess: string | null
   exemptReason: string | null
   rejectReason: string | null
+  rule?: string   // 工具规则名（如 PMD Rule / SonarQube rule），非工具来源可为空
 }
 
 export type BlockerStatus = "awaiting_user" | "resolved"
@@ -100,17 +101,18 @@ export interface TaskGroupState {
   baseRef: string | null
   executionBoundary: ExecutionBoundary | null
   relevantSpecs: string[]
-  lastFilesChanged: string[]
   devSelfCheckResults?: string
   status: Phase
   phases: Phases
   tasks: TaskItem[]
   issues: IssueItem[]
   blockers: BlockerItem[]
+  agentSummaries?: Record<string, string>   // agent 名 → 最近一次提交摘要（单值覆盖）
 }
 
 export interface OrchestrateState {
   changeId: string
+  isolationNamespace: string
   taskGroupId: string
   baseBranch: string
   taskGroups: TaskGroupState[]

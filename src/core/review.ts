@@ -58,6 +58,7 @@ export function deduplicateAndAddIssues(
       exemptReason: null,
       rejectReason: null,
       sourcePhase,
+      rule: iss.rule || undefined,
     })
   }
   return { newIssues, nextIssueId, dedupedCount }
@@ -109,9 +110,10 @@ export function applyReviewGate(
   const uncovered = filtered.filter((i) => !fixedSet.has(i.id) && !exemptSet.has(i.id) && !rejectedSet.has(i.id))
   if (uncovered.length > 0) {
     throw new Error(
-      `以下 ${uncovered.length} 个活跃 issue（submitted/exemption）未被 fixed_issue_ids、exempt_issue_ids 或 rejected_issue_ids 覆盖：` +
-      uncovered.map((i) => `#${i.id}(${i.status})`).join(", ") +
-      `。所有活跃 issue 必须有明确裁定。`
+      `以下 ${uncovered.length} 个活跃 issue（submitted/exemption）未被 fixed_issue_ids、exempt_issue_ids 或 rejected_issue_ids 覆盖：\n` +
+      uncovered.map((i) => `- #${i.id}(${i.status})`).join("\n") +
+      `\n所有活跃 issue 必须有明确裁定。\n` +
+      `issue id 使用纯数字，不带 # 前缀。`
     )
   }
 
@@ -145,21 +147,15 @@ export async function finalizeQualityPhase(
   dimension: ReviewDimension,
   passed: boolean,
   worktree: string,
+  dedupedCount = 0,
 ): Promise<string> {
+  const dedupedSuffix = dedupedCount > 0 ? ` ${dedupedCount} 个重复 issue 已自动跳过。` : ""
   const allDims = [...REVIEW_DIMENSIONS] as ReviewDimension[]
   const nonPassedDims = allDims.filter(d => tg.phases.review.quality.progress[d] !== "passed")
   const allDispatchedDone = nonPassedDims.every(d => tg.phases.review.quality.progress[d] !== "pending")
 
   if (!allDispatchedDone) {
-    const dispatchedCount = allDims.filter(d => tg.phases.review.quality.progress[d] !== "pending").length
-    return JSON.stringify({
-      status: "partial",
-      dimension,
-      dimension_passed: passed,
-      submitted: `${dispatchedCount}/${allDims.length}`,
-      active_dimensions: nonPassedDims,
-      message: `[${dimension}] 已提交。职责已完成，请立即结束当前会话。`,
-    })
+    return `[${dimension}] 已提交。职责已完成，请立即结束当前会话。${dedupedSuffix}`
   }
 
   const failedDims = nonPassedDims.filter(d => tg.phases.review.quality.progress[d] === "failed")
@@ -167,37 +163,21 @@ export async function finalizeQualityPhase(
 
   if (failedDims.length === 0 && !hasResidualBlocking) {
     await writeState(worktree, state)
-    return JSON.stringify({
-      status: "ok",
-      phase: "review=completed",
-      message: "全部审查维度通过。职责已完成，请立即结束当前会话。",
-    })
+    return `全部审查维度通过。职责已完成，请立即结束当前会话。${dedupedSuffix}`
   }
+
+  const failedDesc = failedDims.length > 0
+    ? `未通过维度：${failedDims.join("、")}。`
+    : `存在残留的阻塞 issue。`
+  const failedMsg = `[${dimension}] 审查未通过。职责已完成，请立即结束当前会话。\n\n${failedDesc}`
 
   const retryResult = handleRetryCheckpoint(tg, state.unattended)
   if (retryResult === null) {
     await writeState(worktree, state)
-    return JSON.stringify({
-      status: "recorded",
-      layer: "quality",
-      passed: false,
-      retry_count: tg.phases.review.retryCount,
-      failed_dimensions: failedDims,
-      has_residual_blocking: hasResidualBlocking,
-      message: "职责已完成，请立即结束当前会话。",
-    })
+    return `${failedMsg}${dedupedSuffix}`
   }
 
-  const retryCount = retryResult.retryCount
   tg.status = "dev_impl"
   await writeState(worktree, state)
-  return JSON.stringify({
-    status: "recorded",
-    layer: "quality",
-    passed: false,
-    retry_count: retryCount,
-    failed_dimensions: failedDims,
-    has_residual_blocking: hasResidualBlocking,
-    message: "职责已完成，请立即结束当前会话。",
-  })
+  return `${failedMsg}${dedupedSuffix}`
 }

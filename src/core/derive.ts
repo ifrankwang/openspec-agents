@@ -56,13 +56,22 @@ export function phasesAllEmpty(tg: TaskGroupState): boolean {
     && !hasReviewActivity
 }
 
-export function hasBlockingIssues(issues: Array<{ severity: string; status?: string; sourcePhase?: string }>, sourcePhase?: string): boolean {
-  return issues.some(
+export function blockingIssues<T extends { severity: string; status?: string; sourcePhase?: string; dimension?: string }>(
+  issues: T[],
+  sourcePhase?: string,
+  dimension?: string,
+): T[] {
+  return issues.filter(
     (i) =>
       (!sourcePhase || i.sourcePhase === sourcePhase) &&
+      (!dimension || i.dimension === dimension) &&
       isStatusUnresolved(i.status) &&
       isBlockingIssue(i)
   )
+}
+
+export function hasBlockingIssues(issues: Array<{ severity: string; status?: string; sourcePhase?: string; dimension?: string }>, sourcePhase?: string, dimension?: string): boolean {
+  return blockingIssues(issues, sourcePhase, dimension).length > 0
 }
 
 export function isBlockingIssue(i: { severity: string }): boolean {

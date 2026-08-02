@@ -42,6 +42,7 @@ function freshWt(root: string): string {
 function makeState(overrides?: Partial<OrchestrateState>): OrchestrateState {
   return {
     changeId: CID,
+    isolationNamespace: "a1b2c3",
     taskGroupId: "1",
     baseBranch: "main",
     taskGroups: [],
@@ -62,7 +63,6 @@ function makeTg(overrides?: Partial<TaskGroupState>): TaskGroupState {
     baseRef: null,
     executionBoundary: null,
     relevantSpecs: [],
-    lastFilesChanged: [],
     devSelfCheckResults: undefined,
     phases: {
       architect_review: { completed: false },
@@ -161,7 +161,6 @@ describe("T2: unattended suppresses checkpoint in status", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     await set_unattended.execute({ change_id: CID, enabled: true }, o)
@@ -175,7 +174,6 @@ describe("T2: unattended suppresses checkpoint in status", () => {
           change_id: CID, task_group_id: "1",
           recovery: { phase: "review" }}, o)
         await set_worktree.execute({ change_id: CID }, o)
-        fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
         await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
           fixed_issue_ids: prevIssueT2 ? [prevIssueT2] : [] }, d)
       }
@@ -215,7 +213,6 @@ describe("T3: unattended mode suppresses question prompts", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
     })
     const output = renderToolReviewView(state, tg)
     expect(output).toContain("skipped")
@@ -241,7 +238,6 @@ describe("T4: normal mode shows question prompts", () => {
       worktreePath: "/wt",
       branchName: "tg-1",
       baseRef: "base",
-      lastFilesChanged: ["src/Foo.java"],
     })
     const output = renderToolReviewView(state, tg)
     expect(output).toContain("用 question 提请用户裁定")

@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — Quality Reviewer（规范维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从代码格式、命名规范、包结构等维度审查，使用统一严重级别（Critical/High/Medium/Low/Info），仅关注 style 维度。调用 opx_status 自查上下文 + 看本维度存量 issue 不重复报。
+description: OpenSpec 编排流程专用 — Quality Reviewer（规范维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从代码格式、命名规范、包结构等维度审查，使用统一严重级别（Critical/High/Medium/Low/Info），仅关注 style 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
 mode: subagent
 hidden: true
 steps: 200
@@ -67,7 +67,7 @@ AI 语义审查工具无法覆盖的规范维度问题（命名一致性、@Supp
 
 ## 已知问题
 
-本维度存量 issue 包含 tool review 阶段由工具（如格式化工具、静态分析）产生的、`dimension` 归属于本维度的 issue。审查新 issue 前须先查看存量 issue，避免语义重复。
+本维度既有 issue 包含 tool review 阶段由工具（如格式化工具、静态分析）产生的、`dimension` 归属于本维度的 issue。审查新 issue 前须先查看既有 issue，避免语义重复。
 
 ## 工具调用边界
 

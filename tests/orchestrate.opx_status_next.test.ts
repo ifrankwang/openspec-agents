@@ -40,7 +40,9 @@ function freshWt(root: string): string {
   return wt
 }
 
-/** 同 flow test 的 helper：tool+task pass 到 quality ready */
+/** 同 flow test 的 helper：tool+task pass 到 quality ready。
+ *  注：真实推荐时序为 init → set_worktree → arch_submit → dev_submit（set_worktree 无阶段守卫）；
+ *  本 helper 中 arch_submit 先于 set_worktree 属兼容路径验证。 */
 async function setupThroughQualityReady(
   wt: string,
   fakeGit: FakeGitRunner,
@@ -52,7 +54,6 @@ async function setupThroughQualityReady(
   await set_worktree.execute({ change_id: CID }, ctx.orch)
   const s1 = readStateSync(wt, CID)
   const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-  fakeGit.diffs.set(devWt, ["src/F1.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, ctx.dev)
 
   const s2 = readStateSync(wt, CID)
@@ -111,7 +112,6 @@ describe("S2: dev_submit 后", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const output = await status.execute({ change_id: CID }, o)
@@ -142,7 +142,6 @@ describe("S3: tool review passed", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
@@ -175,7 +174,6 @@ describe("S4: task review passed", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [],
@@ -245,7 +243,6 @@ describe("S6: tool review failed (non-checkpoint)", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     await tool_review_submit.execute({ change_id: CID, passed: false,
       issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
@@ -280,7 +277,6 @@ describe("S7: task review failed (non-checkpoint)", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
     await task_review_submit.execute({change_id: CID, passed: false, verified_task_ids: ["1"], failed_task_ids: [{ task_id: "2", reason: "Incomplete" }],
@@ -349,7 +345,6 @@ describe("S9: checkpoint (${MAX_RETRIES} tool failures)", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // 2. ${MAX_RETRIES} 轮 tool 失败
@@ -363,7 +358,6 @@ describe("S9: checkpoint (${MAX_RETRIES} tool failures)", () => {
           change_id: CID, task_group_id: "1",
           recovery: { phase: "review" }}, o)
         await set_worktree.execute({ change_id: CID }, o)
-        fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
         await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
           fixed_issue_ids: prevIssueS9 ? [prevIssueS9] : [] }, d)
       }
@@ -408,7 +402,6 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // 2. ${MAX_RETRIES} 轮 tool 失败（达到检查点，retryCount=${MAX_RETRIES}）
@@ -421,7 +414,6 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
           change_id: CID, task_group_id: "1",
           recovery: { phase: "review" }}, o)
         await set_worktree.execute({ change_id: CID }, o)
-        fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
         await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
           fixed_issue_ids: prevIssueS10 ? [prevIssueS10] : [] }, d)
       }
@@ -434,15 +426,10 @@ describe("S10: resolve_review(continue) 后正常推进", () => {
       prevIssueS10 = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
     }
 
-    // 3. resolve_review(continue) → lastResolvedRetryCount=${MAX_RETRIES}, status=dev_impl
+    // 3. resolve_review(continue) → lastResolvedRetryCount=${MAX_RETRIES}, status=review
     await resolve_review.execute({ change_id: CID, decision: "continue" }, o)
 
-    // 4. dev_submit → status=review, retryCount=${MAX_RETRIES}, lastResolvedRetryCount=${MAX_RETRIES}
-    fakeGit.diffs.set(devWt, ["src/FR${MAX_RETRIES}.java"])
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
-      fixed_issue_ids: prevIssueS10 ? [prevIssueS10] : [] }, d)
-
-    // 5. opx_status 不应含 "以上状态异常" 和 "recovery"
+    // 4. opx_status 下一步分派 tool 层复审，不应含 "以上状态异常" 和 "recovery"
     const output = await status.execute({ change_id: CID }, o)
     expect(output).not.toContain("以上状态异常")
     expect(output).not.toContain("recovery")

@@ -78,6 +78,7 @@ tests/                        — Bun 测试，使用 FakeGitRunner
 - **执行边界**：架构师限定 developer 的目录和包范围，reviewer 新报 issue 自动扩展
 - **豁免机制**：issue → developer 申请豁免 → 对应维度 reviewer 通过 `exempt_issue_ids` 裁定
 - **校验守卫**：多维度校验确保流程完整性
+- **资源隔离命名空间**：每个 change 分配稳定隔离标识（SHA256(changeId) 前 6 位 hex），Agent 通过 `opx_status` 视图获取；隔离标识派生 SonarQube projectKey 后缀、docker compose 项目名与应用端口，并发 change 在外部共享资源（扫描项目、应用端口、容器）上互不冲突。历史进行中 change 的状态读取时自动补全隔离标识，无需手动迁移；旧 key 产生的扫描数据不可追溯，但 issue 清单已固化在 state，不影响继续编排
 
 ## 关键技术约定
 

@@ -1,15 +1,15 @@
 import path from "path"
-import type { TaskGroupState, IssueItem, Dimension, ReviewDimension, OrchestrateState, BlockerItem, ValidationStep } from "../types.js"
+import type { TaskGroupState, TaskItem, IssueItem, Dimension, ReviewDimension, OrchestrateState, BlockerItem, ValidationStep } from "../types.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import { DIMENSION_AGENT_MAP, MAX_RETRIES, BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT, SEVERITY_LEVELS } from "../constants.js"
 import {
   findTaskGroup, assertOrchestrator, assertAgent, assertPassWithIssues,
-  hasBlockingIssues, isBlockingIssue, handleRetryCheckpoint, allTasksVerified,
-  isReviewCompleted, computeRequiredDims, dimsWithPendingAction, isStatusUnresolved,
+  blockingIssues, isBlockingIssue, handleRetryCheckpoint, allTasksVerified,
+  isReviewCompleted, isStatusUnresolved,
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
 import { readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock } from "../state.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, getDiffFileList, isWorktreeClean, markTaskGroupCheckboxesComplete } from "../git.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete } from "../git.js"
 import { parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import type {
   ToolContext, ArchSubmitParams, ArchBlockerParams, DevSubmitParams,
@@ -17,7 +17,16 @@ import type {
 } from "./types.js"
 
 function idsToStrings(ids: string[] | undefined): string[] {
-  return (ids || []).map(String)
+  return (ids || []).map((id) => String(id).trim().replace(/^#/, ""))
+}
+
+function normalizeTaskIds(rawIds: string[], tasks: TaskItem[]): string[] {
+  const byNumber = new Map(tasks.map((t) => [t.taskNumber, t.id]))
+  return rawIds.map((id) => byNumber.get(id) ?? id)
+}
+
+function updateAgentSummary(tg: TaskGroupState, agent: string, summary: string): void {
+  tg.agentSummaries = { ...(tg.agentSummaries || {}), [agent]: summary }
 }
 
 function addBlockers(tg: TaskGroupState, blockers: Array<Omit<BlockerItem, "id" | "status" | "userResponse" | "architectConclusion">>, status: BlockerItem["status"]): void {
@@ -40,15 +49,20 @@ function resetForBlocker(tg: TaskGroupState): void {
 
 function assertPassedConsistency(
   passed: boolean,
-  blockingExists: boolean,
+  blockingIssues: Array<{ id: string; severity: string; status?: string; dimension?: string }>,
   layerName: string,
 ): void {
-  if (passed && blockingExists) {
+  if (passed && blockingIssues.length > 0) {
     throw new Error(
-      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue。有阻塞问题时请设 passed=false。`
+      `${layerName} 审核声称 passed=true，但存在未解决的 Low+ issue：\n` +
+      blockingIssues.map((i) => `- #${i.id}(${i.severity}/${i.status || "open"}/${i.dimension || "-"})`).join("\n") +
+      `\n处理指引：\n` +
+      `- 有阻塞问题时请设 passed=false\n` +
+      `- 被驳回（rejected）的 issue 仍为未解决阻塞，驳回修复须设 passed=false\n` +
+      `- 若某 submitted 待确认 issue 判据不成立且当前代码已正确，可列入 fixed_issue_ids 确认关闭（仅 submitted 状态可标记 fixed；rejected/open 状态的 issue 须先由 developer 提交修复）`
     )
   }
-  if (!passed && !blockingExists) {
+  if (!passed && blockingIssues.length === 0) {
     throw new Error(
       `${layerName} 审核声称 passed=false，但不存在未解决的阻塞 issue。passed=false 时必须提供至少一个 Low+ issue 或 failed_task_id 作为不通过理由。`
     )
@@ -71,6 +85,8 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
     throw new Error("存在 awaiting_user blocker，请先用 opx_arch_blocker 逐个处理后再提交 outcome=ready。")
   }
   tg.executionBoundary = params.execution_boundary
+  // `tg.worktreePath || ctx.worktree` 仅兼容 worktree 尚未就绪的初始化场景（同一函数后续 git 操作同此约定）；
+  // 推荐时序为架构师分派前 worktree 已就绪（orchestrator 先调 opx_orch_set_worktree）。
   const parsedTasks = await parseTasksMdForGroup(tg.worktreePath || ctx.worktree, state.changeId, state.taskGroupId)
   tg.tasks = parsedTasks.map((task, index) => ({ id: String(index + 1), specTrace: task.specTrace, title: task.title, status: "open", taskNumber: task.taskNumber, rejectReason: null }))
   tg.relevantSpecs = extractRelevantSpecsFromTasks(parsedTasks)
@@ -96,17 +112,9 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
       throw new Error(`git commit openspec docs 失败：${commitResult.stderr}`)
     }
   }
+  updateAgentSummary(tg, "openspec-architect", "预检通过，已输出执行边界")
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok",
-      phase: "dev_impl",
-      execution_boundary: params.execution_boundary,
-      message: "复核通过，职责已完成，请立即结束当前会话。",
-    },
-    null,
-    2
-  )
+  return "复核通过，职责已完成，请立即结束当前会话。"
 }
 
 export async function archBlockerExecute(params: ArchBlockerParams, ctx: ToolContext): Promise<string> {
@@ -179,10 +187,11 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   assertAgent(ctx.agent, "opx_dev_submit", ["openspec-developer"])
   if (params.completed_task_ids) params.completed_task_ids = params.completed_task_ids.map(String)
   if (params.fixed_issue_ids) params.fixed_issue_ids = idsToStrings(params.fixed_issue_ids)
-  if (params.request_exempts) params.request_exempts = params.request_exempts.map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  if (params.request_exempts) params.request_exempts = params.request_exempts.map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
+  if (params.completed_task_ids) params.completed_task_ids = normalizeTaskIds(params.completed_task_ids, tg.tasks)
   if (tg.status !== "dev_impl" && tg.status !== "review") {
     throw new Error(`dev_submit 仅在 dev_impl 或 review 阶段可用，当前阶段为 "${tg.status}"。`)
   }
@@ -205,11 +214,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     resetForBlocker(tg)
     tg.status = "task_analysis"
     await writeState(ctx.worktree, state)
-    return JSON.stringify({ status: "blocked", outcome, message: "已记录 blocker，职责已完成，请立即结束当前会话。" })
+    return "已记录 blocker，职责已完成，请立即结束当前会话。"
   }
-  tg.lastFilesChanged = await getDiffFileList(tg.worktreePath, tg.baseRef)
-
-  let requiredDims: ReviewDimension[] = []
 
   if (params.completed_task_ids && params.completed_task_ids.length > 0) {
     const validIds = new Set(tg.tasks.map((t) => t.id))
@@ -217,7 +223,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
       if (!validIds.has(id)) {
         const sortedIds = Array.from(validIds).sort((a, b) => Number(a) - Number(b))
         throw new Error(
-          `completed_task_ids 中包含无效 task id: "${id}"。有效的 task ID 为: ${sortedIds.join(", ")}`
+          `completed_task_ids 中包含无效 task id: "${id}"。\n有效的 task ID 为:\n` +
+          `- ${sortedIds.join("\n- ")}`
         )
       }
     }
@@ -236,19 +243,24 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   )
   if (remainingTasks.length > 0) {
     throw new Error(
-      `以下 task 处于 open/rejected 状态且未在 completed_task_ids 中：` +
-      remainingTasks.map((t) => `#${t.id}(${t.status}) ${t.title}`).join("\n") +
-      `。请将未完成的 task 列在 completed_task_ids 中，或改用 outcome="blocked" 提交 blocker。`
+      `以下 task 处于 open/rejected 状态且未在 completed_task_ids 中：\n` +
+      remainingTasks.map((t) => `- #${t.id}(${t.status}) ${t.title}`).join("\n") +
+      `\n请将未完成的 task 列在 completed_task_ids 中，或改用 outcome="blocked" 提交 blocker。`
     )
   }
 
   let touchedAnyIssue = false
+  const fixedSourcePhases = new Set<string>()
+  const exemptSourcePhases = new Set<string>()
+  const touchedQualityDims = new Set<ReviewDimension>()
   const fixedIds = params.fixed_issue_ids || []
   for (const id of fixedIds) {
     const issue = tg.issues.find((i) => i.id === id)
     if (issue && (issue.status === "open" || issue.status === "rejected")) {
       issue.status = "submitted"
       touchedAnyIssue = true
+      fixedSourcePhases.add(issue.sourcePhase)
+      if (issue.sourcePhase === "quality") touchedQualityDims.add(issue.dimension)
     }
   }
 
@@ -269,6 +281,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     issue.exemptReason = r.reason
     requestedIds.push(r.issue_id)
     touchedAnyIssue = true
+    exemptSourcePhases.add(issue.sourcePhase)
+    if (issue.sourcePhase === "quality") touchedQualityDims.add(issue.dimension)
   }
 
   const remainingBlocking = tg.issues.filter(
@@ -276,25 +290,33 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   )
   if (remainingBlocking.length > 0) {
     throw new Error(
-      `存在 ${remainingBlocking.length} 个 Low 及以上的 open/rejected issue 未处理，无法提交（请逐条修复或申请豁免）：` +
-        remainingBlocking.map((i) => `#${i.id}(${i.severity}/${i.dimension})`).join("; ")
+      `存在 ${remainingBlocking.length} 个 Low 及以上的 open/rejected issue 未处理，无法提交（请逐条修复或申请豁免）：\n` +
+      remainingBlocking.map((i) => `- #${i.id}(${i.severity}/${i.dimension})`).join("\n")
     )
   }
 
   if (touchedAnyIssue) {
-    tg.phases.review.tool.completed = false
-    tg.phases.review.task.completed = false
-    for (const d of REVIEW_DIMENSIONS) {
-      if (dimsWithPendingAction(tg).has(d)) {
-        tg.phases.review.quality.progress[d] = "pending"
-      }
+    if (fixedSourcePhases.size > 0) {
+      // 实际修复（fixed）即代码变更：tool 层确定性检查必须基于最新代码重跑
+      tg.phases.review.tool.completed = false
     }
-    tg.status = "review"
-    requiredDims = computeRequiredDims(tg)
-  } else {
-    tg.status = "review"
-    requiredDims = computeRequiredDims(tg)
+    if (fixedSourcePhases.has("task")) {
+      // fixed 中属于 task 层的再重置 task 层，tool 层已重置
+      tg.phases.review.task.completed = false
+    }
+    if (exemptSourcePhases.has("task")) {
+      // task 层豁免：须重置对应层以便裁定者被分派
+      tg.phases.review.tool.completed = false
+      tg.phases.review.task.completed = false
+    } else if (exemptSourcePhases.has("tool")) {
+      // tool 层豁免：须重置 tool 层以便裁定者被分派
+      tg.phases.review.tool.completed = false
+    }
+    for (const d of touchedQualityDims) {
+      tg.phases.review.quality.progress[d] = "pending"
+    }
   }
+  tg.status = "review"
 
   if (allTasksVerified(tg.tasks)) {
     const hasPendingTaskIssues = tg.issues.some(i => i.sourcePhase === "task" && isStatusUnresolved(i.status))
@@ -307,24 +329,19 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     tg.devSelfCheckResults = params.self_check_results
   }
 
+  const devSummary = `完成 task ${params.completed_task_ids?.length || 0} 个，修复 issue ${fixedIds.length} 个，申请豁免 ${requestedIds.length} 个。` +
+    (params.self_check_results ? ` 自检摘要：${params.self_check_results.slice(0, 200)}` : "")
+  updateAgentSummary(tg, "openspec-developer", devSummary)
+
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok", outcome,
-      active_phase: tg.status,
-      required_dimensions: requiredDims,
-      message: "提交完成。职责已完成，请立即结束当前会话。",
-    },
-    null,
-    2
-  )
+  return "提交完成。职责已完成，请立即结束当前会话。"
 }
 
 export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: ToolContext): Promise<string> {
   assertAgent(ctx.agent, "opx_tool_review_submit", ["openspec-reviewer-tool"])
   const tlFixedIds = idsToStrings(params.fixed_issue_ids)
   const tlExemptIds = idsToStrings(params.exempt_issue_ids)
-  const tlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  const tlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
@@ -378,51 +395,38 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
     mergeExecutionBoundary(tg, params.boundary_expansion)
   }
 
-  const remainingToolBlocking = hasBlockingIssues(tg.issues, "tool")
+  const remainingToolBlocking = blockingIssues(tg.issues, "tool")
   assertPassedConsistency(params.passed, remainingToolBlocking, "工具层")
 
   tg.phases.review.tool.completed = true
   if (params.test_results) tg.phases.review.tool.testResults = params.test_results
+  updateAgentSummary(
+    tg,
+    "openspec-reviewer-tool",
+    `${params.passed ? "通过" : "未通过"}，确认修复 ${tlFixedIds.length} 条，豁免 ${tlExemptIds.length} 条，驳回 ${tlRejected.length} 条，新报 ${issues.length} 条。`,
+  )
   await writeState(ctx.worktree, state)
 
   if (params.passed) {
-    return JSON.stringify({
-      status: "ok",
-      phase: "review(tool=completed)",
-      message: `审核通过。职责已完成，请立即结束当前会话。${
-        dedupedCount > 0 ? `${dedupedCount} 个重复 issue 已自动跳过` : ""
-      }`,
-    })
+    const dedupedSuffix = dedupedCount > 0 ? ` ${dedupedCount} 个重复 issue 已自动跳过。` : ""
+    return `审核通过。职责已完成，请立即结束当前会话。${dedupedSuffix}`
   }
 
-  const retryResult = handleRetryCheckpoint(tg, state.unattended)
-  if (retryResult === null) {
+  if (handleRetryCheckpoint(tg, state.unattended) === null) {
+    tg.phases.review.tool.completed = false
     await writeState(ctx.worktree, state)
-    return JSON.stringify({
-      status: "recorded",
-      layer: "tool",
-      passed: false,
-      retry_count: tg.phases.review.retryCount,
-      message: "职责已完成，请立即结束当前会话。",
-    })
+    return "审核报告已记录。职责已完成，请立即结束当前会话。"
   }
-  const retryCount = retryResult.retryCount
   tg.phases.review.tool.completed = false
   tg.status = "dev_impl"
   await writeState(ctx.worktree, state)
-  const blockingIssues = tg.issues.filter(
+  const rollbackBlocking = tg.issues.filter(
     (i) => (!i.sourcePhase || i.sourcePhase === "tool") && isBlockingIssue(i)
   )
-  const issueSummary = blockingIssues.slice(0, 3)
+  const issueSummary = rollbackBlocking.slice(0, 3)
     .map((i) => `#${i.id}(dimension:${i.dimension} status:${i.status || "open"})`)
     .join("、")
-  return JSON.stringify({
-    status: "recorded",
-    layer: "tool",
-    passed: false,
-    retry_count: retryCount,
-    message: `职责已完成，请立即结束当前会话。因遗留跨层阻塞 issue ${issueSummary} 等 ${blockingIssues.length} 个，需回退开发。`,
-  })
+  return `职责已完成，请立即结束当前会话。\n\n因遗留跨层阻塞 issue ${issueSummary} 等 ${rollbackBlocking.length} 个，需回退开发。`
 }
 
 export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: ToolContext): Promise<string> {
@@ -431,10 +435,12 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   if (params.failed_task_ids) params.failed_task_ids = params.failed_task_ids.map(f => ({ ...f, task_id: String(f.task_id) }))
   const tkFixedIds = idsToStrings(params.fixed_issue_ids)
   const tkExemptIds = idsToStrings(params.exempt_issue_ids)
-  const tkRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  const tkRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const tg = findTaskGroup(state, state.taskGroupId)
+  if (params.verified_task_ids) params.verified_task_ids = normalizeTaskIds(params.verified_task_ids, tg.tasks)
+  if (params.failed_task_ids) params.failed_task_ids = params.failed_task_ids.map(f => ({ ...f, task_id: normalizeTaskIds([f.task_id], tg.tasks)[0] }))
   if (tg.status !== "review") {
     throw new Error(`task_review_submit 需在 review 阶段调用，当前阶段为 "${tg.status}"。`)
   }
@@ -458,8 +464,10 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   const unknownFailed = failed.filter((f) => !validIds.has(f.task_id))
   if (unknownVerified.length > 0 || unknownFailed.length > 0) {
     throw new Error(
-      `非法 task id：${[...unknownVerified.map((id) => `"${id}"`), ...unknownFailed.map((f) => `"${f.task_id}"`)].join(", ")}。` +
-      `合法 id：${Array.from(validIds).join(", ")}。`
+      `非法 task id：\n` +
+      [...unknownVerified.map((id) => `- "${id}"`), ...unknownFailed.map((f) => `- "${f.task_id}"`)].join("\n") +
+      `\n合法 id：${Array.from(validIds).join(", ")}。\n` +
+      `task 支持用任务编号（如 4.1）自动映射到数字 id。`
     )
   }
 
@@ -468,8 +476,8 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   const uncovered = submittedTasks.filter((t) => !coveredIds.has(t.id))
   if (uncovered.length > 0) {
     throw new Error(
-      `以下 submitted task 未被 verified_task_ids 或 failed_task_ids 覆盖：` +
-      uncovered.map((t) => `#${t.id} ${t.title}`).join("; ")
+      `以下 submitted task 未被 verified_task_ids 或 failed_task_ids 覆盖：\n` +
+      uncovered.map((t) => `- #${t.id} ${t.title}`).join("\n")
     )
   }
 
@@ -534,45 +542,39 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
     }))
   }
 
-  const remainingTaskBlocking = hasBlockingIssues(tg.issues, "task")
-  assertPassedConsistency(params.passed, remainingTaskBlocking || failed.length > 0, "任务层")
+  if (params.passed && failed.length > 0) {
+    throw new Error("passed=true 时不允许提供 failed_task_ids；有任务未通过必须设 passed=false。")
+  }
+
+  const remainingTaskBlocking = blockingIssues(tg.issues, "task")
+  if (failed.length === 0 || remainingTaskBlocking.length > 0) {
+    assertPassedConsistency(params.passed, remainingTaskBlocking, "任务层")
+  }
 
   tg.phases.review.task.completed = true
+  updateAgentSummary(
+    tg,
+    "openspec-reviewer-task",
+    `${params.passed ? "通过" : "未通过"}，验证通过 ${verified.length} 个 task，失败 ${failed.length} 个，新报 ${rawIssues.length} 条。`,
+  )
   await writeState(ctx.worktree, state)
 
   if (params.passed) {
     if (tg.worktreePath) {
       await markTaskGroupCheckboxesComplete(tg.worktreePath, state.changeId, state.taskGroupId)
     }
-    return JSON.stringify({
-      status: "ok",
-      phase: "review(task=completed)",
-      message: "审核通过。职责已完成，请立即结束当前会话。",
-    })
+    return "审核通过。职责已完成，请立即结束当前会话。"
   }
 
-  const retryResult = handleRetryCheckpoint(tg, state.unattended)
-  if (retryResult === null) {
+  if (handleRetryCheckpoint(tg, state.unattended) === null) {
+    tg.phases.review.task.completed = false
     await writeState(ctx.worktree, state)
-    return JSON.stringify({
-      status: "recorded",
-      layer: "task",
-      passed: false,
-      retry_count: tg.phases.review.retryCount,
-      message: "职责已完成，请立即结束当前会话。",
-    })
+    return "审核报告已记录。职责已完成，请立即结束当前会话。"
   }
-  const retryCount = retryResult.retryCount
   tg.phases.review.task.completed = false
   tg.status = "dev_impl"
   await writeState(ctx.worktree, state)
-  return JSON.stringify({
-    status: "recorded",
-    layer: "task",
-    passed: false,
-    retry_count: retryCount,
-    message: "职责已完成，请立即结束当前会话。",
-  })
+  return "审核报告已记录。职责已完成，请立即结束当前会话。"
 }
 
 export async function qualityReviewSubmitExecute(params: QualityReviewParams, ctx: ToolContext): Promise<string> {
@@ -603,7 +605,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
 
   const qlFixedIds = idsToStrings(params.fixed_issue_ids)
   const qlExemptIds = idsToStrings(params.exempt_issue_ids)
-  const qlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: String(r.issue_id) }))
+  const qlRejected = (params.rejected_issue_ids || []).map(r => ({ ...r, issue_id: idsToStrings([r.issue_id])[0] }))
 
   const stateBefore = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!stateBefore) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
@@ -668,19 +670,13 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
       mergeExecutionBoundary(tg, params.boundary_expansion)
     }
 
-    const remainingQualityBlocking = hasBlockingIssues(tg.issues, "quality")
+    const remainingQualityBlocking = blockingIssues(tg.issues, "quality", dimension)
     assertPassedConsistency(passed, remainingQualityBlocking, `AI 审查层(${dimension})`)
 
     tg.phases.review.quality.progress[dimension] = passed ? "passed" : "failed"
+    updateAgentSummary(tg, DIMENSION_AGENT_MAP[dimension], `[${dimension}] ${passed ? "通过" : "未通过"}，新报 ${issues.length} 条。`)
     await writeState(ctx.worktree, state)
-    const resultStr = await finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree)
-    if (dedupedCount > 0) {
-      const result = JSON.parse(resultStr)
-      result.deduped = dedupedCount
-      result.message = result.message.replace(/([。！])\s*$/, `；${dedupedCount} 个重复 issue 已自动跳过。`)
-      return JSON.stringify(result)
-    }
-    return resultStr
+    return finalizeQualityPhase(state, tg, dimension, passed, ctx.worktree, dedupedCount)
   } finally {
     releaseLock(lockPath)
   }
@@ -711,18 +707,8 @@ export async function resolveReviewExecute(params: ResolveReviewParams, ctx: Too
         tg.phases.review.quality.progress[d] = "pending"
       }
     }
-    tg.status = "dev_impl"
     await writeState(ctx.worktree, state)
-    return JSON.stringify(
-      {
-        status: "ok",
-        decision: "continue",
-        phase: "review(in_progress)",
-        message: "已重置各层审查进度，回到 tool 层基线。编排者请调用 opx_status 确认下一步。",
-      },
-      null,
-      2
-    )
+    return "已重置各层审查进度，回到 tool 层基线。编排者请调用 opx_status 确认下一步。"
   }
 
   let exemptedCount = 0
@@ -746,15 +732,5 @@ export async function resolveReviewExecute(params: ResolveReviewParams, ctx: Too
     }
   }
   await writeState(ctx.worktree, state)
-  return JSON.stringify(
-    {
-      status: "ok",
-      decision: "giveup",
-      exempted_count: exemptedCount,
-      phase: "review=completed",
-      message: `已将剩余 ${exemptedCount} 个 Low+ open/rejected 及待裁定 issue 置为 exempted。请调用 opx_orch_complete_task_group 收尾。`,
-    },
-    null,
-    2
-  )
+  return `已将剩余 ${exemptedCount} 个 Low+ open/rejected 及待裁定 issue 置为 exempted。请调用 opx_orch_complete_task_group 收尾。`
 }

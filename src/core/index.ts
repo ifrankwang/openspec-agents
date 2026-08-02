@@ -33,7 +33,7 @@ export {
 // git
 export {
   runGit, runGitChecked, __setGitRunner,
-  getCurrentHead, getCurrentBranch, getMergeBase, getDiffFileList,
+  getCurrentHead, getCurrentBranch, getMergeBase,
   isWorktreeClean, markTaskGroupCheckboxesComplete,
   mergeBranchToTarget, discoverDiskWorktrees,
 } from "./git.js"
@@ -64,8 +64,8 @@ export {
 export {
   renderOrchestratorView, renderArchitectView, renderDeveloperView,
   renderToolReviewView, renderTaskReviewView, renderQualityReviewView,
-  formatFilePath, taskSummary, issueSummary, renderTaskItem,
-  renderIssueItem, renderLayerIssues, sortIssuesByCategory,
+  formatFilePath, renderTaskItem,
+  renderIssueItem, renderIssueItemsGrouped, renderLayerIssues, sortIssuesByCategory,
 } from "./views.js"
 
 // dashboard

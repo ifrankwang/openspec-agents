@@ -2,13 +2,14 @@ import type { TaskGroupState, OrchestrateState, TaskItem, IssueItem, ReviewDimen
 import { REVIEW_DIMENSIONS } from "./types.js"
 import { SEVERITY_LEVELS, DIMENSION_AGENT_MAP, MAX_RETRIES } from "./constants.js"
 import { deriveStatus, isReviewCompleted, allTasksVerified, deriveCurrentAgents, isBlockingIssue, isStatusUnresolved } from "./derive.js"
+import { derivePortFromNamespace } from "./namespace.js"
 import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { findSkillPath, SKILL_SCAN_ROOTS } from "../skills/scan.js"
 
 const AGENT_CAPABILITY_SUGGESTIONS: Record<string, string[]> = {
   "openspec-architect": ["efficiency", "architecture", "api-design", "db-design"],
-  "openspec-developer": ["efficiency", "api-testing", "style", "maintainability", "performance"],
+  "openspec-developer": ["efficiency", "quality-gate", "api-testing", "style", "maintainability", "performance"],
   "openspec-reviewer-tool": ["efficiency", "quality-gate"],
   "openspec-reviewer-task": ["efficiency", "api-testing"],
   "openspec-reviewer-architecture": ["efficiency", "tool-improvement", "architecture"],
@@ -134,16 +135,26 @@ function renderEfficiencySteps(tagMap: Map<string, string[]>, startNum: number):
   return { lines, nextNum: n }
 }
 
-function renderWorktreeSection(tg: TaskGroupState): string[] {
+function renderWorktreeSection(
+  state: OrchestrateState,
+  tg: TaskGroupState,
+  opts?: { showNamespace?: boolean; showPort?: boolean },
+): string[] {
   const lines: string[] = []
   lines.push("## Worktree", "")
   if (tg.worktreePath) {
     lines.push(`- **路径**: \`${tg.worktreePath}\``)
     lines.push(`- **分支**: \`${tg.branchName || "(none)"}\``)
-    if (tg.baseRef) lines.push(`- **diff 范围**: \`${tg.baseRef}..HEAD\``)
+    if (tg.baseRef) lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
     lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行")
   } else {
-    lines.push("- (worktree 尚未设置)")
+    lines.push("- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)")
+  }
+  if (opts?.showNamespace) {
+    lines.push(`- **隔离标识**: \`${state.isolationNamespace}\``)
+    if (opts?.showPort) {
+      lines.push(`  - 建议端口: ${derivePortFromNamespace(state.isolationNamespace)}`)
+    }
   }
   lines.push("")
   return lines
@@ -169,18 +180,6 @@ export function formatFilePath(file: string, line: number, maxLen = 60): string 
   const lastSeg = `${base}${suffix}`
   if (lastSeg.length <= maxLen) return lastSeg
   return lastSeg.slice(0, maxLen - 3) + "..."
-}
-
-export function taskSummary(tasks: TaskItem[]): Record<string, number> {
-  const counts: Record<string, number> = { open: 0, submitted: 0, rejected: 0, verified: 0 }
-  for (const t of tasks) counts[t.status]++
-  return counts
-}
-
-export function issueSummary(issues: IssueItem[]): Record<string, number> {
-  const counts: Record<string, number> = { open: 0, submitted: 0, rejected: 0, verified: 0, exemption_requested: 0, exempted: 0 }
-  for (const i of issues) counts[i.status]++
-  return counts
 }
 
 export function renderTaskItem(t: TaskItem): string {
@@ -213,7 +212,7 @@ function formatSeverity(severity: string): string {
 
 export function renderIssueItem(i: IssueItem): string {
   const lines: string[] = []
-  lines.push(`- Issue #${i.id} | ${formatSeverity(i.severity)} | ${i.dimension} | [${i.sourcePhase}]`)
+  lines.push(`- Issue #${i.id} | ${formatSeverity(i.severity)} | ${i.dimension} | [${i.sourcePhase}]${i.rule ? ` | ${i.rule}` : ""}`)
   lines.push(`  - 文件：${formatFilePath(i.file, i.line)}`)
   lines.push(`  - 描述：${i.description}`)
   if (i.suggestion) lines.push(`  - 建议：${i.suggestion}`)
@@ -221,6 +220,27 @@ export function renderIssueItem(i: IssueItem): string {
   if (i.status === "rejected" && i.rejectReason) lines.push(`  - 驳回原因：${i.rejectReason}`)
   lines.push(`  - 修复未过次数：${i.refixCount}`)
   return lines.join("\n")
+}
+
+export function renderIssueItemsGrouped(issues: IssueItem[]): string[] {
+  if (issues.length === 0) return []
+  const groups = new Map<string, IssueItem[]>()
+  for (const i of issues) {
+    const key = i.rule || "未分类"
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(i)
+  }
+  const lines: string[] = []
+  for (const [rule, items] of groups) {
+    const dupHint = items.length > 1 ? `（${items.length} 条同类）` : ""
+    lines.push(`**${rule}**${dupHint}`, "")
+    if (items.length > 1) {
+      lines.push("> 同类问题建议一次批量修复、一次提交一次重验，避免逐条触发全量复查。", "")
+    }
+    for (const i of items) lines.push(renderIssueItem(i))
+    lines.push("")
+  }
+  return lines
 }
 
 export function renderLayerIssues(
@@ -243,7 +263,7 @@ export function renderLayerIssues(
   if (submitted.length > 0) {
     lines.push("### 待确认", "")
     lines.push(
-      "> 存量确认：逐条核验上述「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入，工具将自动回退为 rejected 交 developer 重修。",
+      "> 待确认核验：逐条核验上述「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标须显式列入 rejected_issue_ids 驳回重修；漏裁定将报错。",
       ""
     )
     for (const i of submitted) lines.push(renderIssueItem(i))
@@ -259,9 +279,18 @@ export function renderLayerIssues(
   return lines
 }
 
+function renderAgentSummaries(tg: TaskGroupState): string[] {
+  const summaries = tg.agentSummaries
+  if (!summaries || Object.keys(summaries).length === 0) return []
+  const lines: string[] = ["## 上轮会话摘要", ""]
+  for (const [agent, summary] of Object.entries(summaries)) {
+    lines.push(`- **${agent}**：${summary}`)
+  }
+  lines.push("")
+  return lines
+}
+
 export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupState, diskWorktrees?: { branch: string; path: string }[]): string {
-  const ts = taskSummary(tg.tasks)
-  const is = issueSummary(tg.issues)
   const lines: string[] = []
   lines.push("# 编排进度", "")
   lines.push(`**变更**: ${state.changeId}`)
@@ -299,24 +328,6 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
     if (blocker.architectConclusion) blockerLines.push(`  - 架构结论：${blocker.architectConclusion}`)
   }
   renderOptionalSection(lines, "Blocker", blockerLines)
-  lines.push("## Task 摘要", "")
-  lines.push(`| 状态 | 数量 |`)
-  lines.push(`|------|------|`)
-  lines.push(`| open | ${ts.open} |`)
-  lines.push(`| submitted | ${ts.submitted} |`)
-  lines.push(`| rejected | ${ts.rejected} |`)
-  lines.push(`| verified | ${ts.verified} |`)
-  lines.push("")
-  lines.push("## Issue 摘要", "")
-  lines.push(`| 状态 | 数量 |`)
-  lines.push(`|------|------|`)
-  lines.push(`| open | ${is.open} |`)
-  lines.push(`| submitted | ${is.submitted} |`)
-  lines.push(`| rejected | ${is.rejected} |`)
-  lines.push(`| verified | ${is.verified} |`)
-  lines.push(`| exemption_requested | ${is.exemption_requested} |`)
-  lines.push(`| exempted | ${is.exempted} |`)
-  lines.push("")
   lines.push("## 审核进度", "")
   const rp = tg.phases.review.quality.progress
   const fmt = (k: ReviewDimension) => `${k}=${rp[k]}`
@@ -468,7 +479,7 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
     : ""
   lines.push(`**当前阶段**: ${tg.status}${arcReviewLayer}`, "")
   lines.push(...renderSkillSuggestions("openspec-architect", AGENT_CAPABILITY_SUGGESTIONS["openspec-architect"]))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg))
   lines.push("## 推荐阅读文档", "")
   lines.push(`- \`openspec/changes/${state.changeId}/clarify.md\``)
   lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
@@ -532,8 +543,9 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   const lines: string[] = []
   lines.push("# 开发上下文", "")
   lines.push(`当前阶段: ${tg.status}`, "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions("openspec-developer", AGENT_CAPABILITY_SUGGESTIONS["openspec-developer"]))
-  lines.push(...renderWorktreeSection(tg))
+  lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 执行边界", "")
   if (tg.executionBoundary) {
     const b = tg.executionBoundary
@@ -566,8 +578,6 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   lines.push("")
   const openTasks = tg.tasks.filter((t) => t.status === "open")
   renderOptionalSection(lines, "Task (待完成)", openTasks.map(renderTaskItem))
-  const devSubmitted = tg.tasks.filter((t) => t.status === "submitted")
-  renderOptionalSection(lines, "Task (待验证)", devSubmitted.map(renderTaskItem))
   const rejectedTasks = tg.tasks.filter((t) => t.status === "rejected")
   renderOptionalSection(lines, "Task (已驳回)", rejectedTasks.map(t => {
     const reason = t.rejectReason ? `  - 驳回原因：${t.rejectReason}` : ""
@@ -576,15 +586,11 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   const blockingIssues = tg.issues.filter(
     (i) => (i.status === "open" || i.status === "rejected") && isBlockingIssue(i)
   )
-  renderOptionalSection(lines, "Issue (待修复 · Low 及以上，必办)", sortIssuesByCategory(blockingIssues).map(renderIssueItem))
+  renderOptionalSection(lines, "Issue (待修复 · Low 及以上，必办)", renderIssueItemsGrouped(sortIssuesByCategory(blockingIssues)))
   const infoFix = tg.issues.filter(
     (i) => (i.status === "open" || i.status === "rejected") && !isBlockingIssue(i)
   )
-  renderOptionalSection(lines, "Issue (待修复 · Info，建议修复，不阻塞提交)", sortIssuesByCategory(infoFix).map(renderIssueItem))
-  const submittedIssues = tg.issues.filter((i) => i.status === "submitted")
-  renderOptionalSection(lines, "Issue (已修复待验证)", sortIssuesByCategory(submittedIssues).map(renderIssueItem))
-  const exemptionIssues = tg.issues.filter((i) => i.status === "exemption_requested")
-  renderOptionalSection(lines, "Issue (豁免裁定中)", sortIssuesByCategory(exemptionIssues).map(renderIssueItem))
+  renderOptionalSection(lines, "Issue (待修复 · Info，建议修复，不阻塞提交)", renderIssueItemsGrouped(sortIssuesByCategory(infoFix)))
   const { tagMap } = scanSkills()
   lines.push("## 操作指引", "")
   lines.push("")
@@ -595,8 +601,9 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   stepNum = eff.nextNum
   lines.push(`${stepNum++}. 实施「Task (待完成)」的全部任务——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${stepNum++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
-  lines.push(`${stepNum++}. 按已加载的 API 测试规范核对变更接口的测试脚本——文件存在、内容已更新`)
-  lines.push(`${stepNum++}. 按已加载的技术栈 skill 运行项目级构建验证（编译、单元测试、质量门等）`)
+  lines.push(`${stepNum++}. 用上方「变更范围」命令确认本次变更涉及文件，据此按已加载的 API 测试规范核对变更接口的测试脚本——文件存在、内容已更新`)
+  lines.push(`${stepNum++}. 按已加载的质量门类 skill 在本地执行构建验证，并本地核对覆盖率门禁达标后再提交（避免提交后由审核层复核发现不达标来回返工）`)
+  lines.push(`${stepNum++}. 验证失败时先完整读取失败输出、定位全部失败项后统一修复再重跑；禁止仅查看报错尾部片段反复全量重试`)
   lines.push(`${stepNum++}. 全部完成 → commit → opx_dev_submit(outcome=\"completed\")`)
   lines.push(`${stepNum++}. 遇外部依赖/凭证/真实输入缺失无法继续 → opx_dev_submit(outcome=\"blocked\")`)
   return lines.join("\n")
@@ -605,9 +612,9 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
 export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState): string {
   const lines: string[] = []
   lines.push("# 工具审核上下文", "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions("openspec-reviewer-tool", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-tool"]))
-  lines.push(...renderWorktreeSection(tg))
-  renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
+  lines.push(...renderWorktreeSection(state, tg, { showNamespace: true }))
   const toolIssues = renderLayerIssues(tg.issues, "tool")
   renderOptionalSection(lines, "全部 Issue（tool 层可见）", toolIssues)
   const { tagMap } = scanSkills()
@@ -618,15 +625,18 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   const eff = renderEfficiencySteps(tagMap, stepNum)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
+  lines.push(`${stepNum++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为审查范围`)
   lines.push(`${stepNum++}. 加载质量门 skill，获取工具清单、执行命令与 issue 映射表`)
+  lines.push(`${stepNum++}. 先按质量门 skill 定义检查运行环境与目标项目是否已就绪（容器/服务在运行、项目已初始化），已就绪则跳过重复的环境初始化步骤，直接进入检查`)
   lines.push(`${stepNum++}. 按质量门 skill 定义顺序逐项执行工具检查（环境检查 → 编译 → 格式 → 架构约束 → 静态分析 → 测试编译与覆盖率 → 深度扫描 → 工具配置检查）`)
+  lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复——同一环境/技术故障自愈尝试上限 3 次`)
   if (state.unattended) {
-    lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复，不可自愈时记 skipped 并说明理由（无人值守模式）`)
+    lines.push(`${stepNum++}. 自愈超限后记 skipped 并说明理由（无人值守模式）`)
   } else {
-    lines.push(`${stepNum++}. 每项检查先按质量门 skill 自愈步骤恢复，不可自愈用 question 提请用户裁定`)
+    lines.push(`${stepNum++}. 自愈超限后用 question 提请用户裁定，或按质量门 skill 降级`)
   }
   lines.push(`${stepNum++}. 按质量门 skill 映射表将工具输出翻译为统一 issue`)
-  lines.push(`${stepNum++}. 核验「待确认」存量 issue 是否真已修复——已修复列入 fixed_issue_ids；未达标则不列入（工具自动回退为 rejected）`)
+  lines.push(`${stepNum++}. 核验「待确认」issue 是否真已修复——已修复列入 fixed_issue_ids；未达标须显式列入 rejected_issue_ids 驳回重修`)
   lines.push(`${stepNum++}. 汇总 → opx_tool_review_submit`)
   return lines.join("\n")
 }
@@ -635,9 +645,9 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   const lines: string[] = []
   lines.push("# 任务审核上下文", "")
   lines.push(`**tool 层**: ${tg.phases.review.tool.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions("openspec-reviewer-task", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-task"]))
-  lines.push(...renderWorktreeSection(tg))
-  renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
+  lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 推荐阅读文档", "")
   lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
   for (const s of tg.relevantSpecs) lines.push(`- \`openspec/changes/${state.changeId}/specs/${s}/spec.md\``)
@@ -649,11 +659,6 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   }
   const reviewSubmitted = tg.tasks.filter((t) => t.status === "submitted")
   renderOptionalSection(lines, "Task (待验证)", reviewSubmitted.map(renderTaskItem))
-  const reviewRejected = tg.tasks.filter((t) => t.status === "rejected")
-  renderOptionalSection(lines, "Task (已驳回)", reviewRejected.map(t => {
-    const reason = t.rejectReason ? `  - 驳回原因：${t.rejectReason}` : ""
-    return `${renderTaskItem(t)}${reason ? `\n${reason}` : ""}`
-  }))
   const taskIssues = renderLayerIssues(tg.issues, "task")
   renderOptionalSection(lines, "审查 Issue", taskIssues)
   const { tagMap } = scanSkills()
@@ -664,17 +669,22 @@ export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState
   const eff = renderEfficiencySteps(tagMap, stepNum)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
+  lines.push(`${stepNum++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为审查范围`)
   const hasGuidance = !!tg.executionBoundary?.notes
   if (hasGuidance) {
     lines.push(`${stepNum++}. 校验实施内容是否遵循上方「实施指引」中的指引；发现违背时报 issue`)
   }
   lines.push(`${stepNum++}. Task 产出验证：逐条核验各 task 产出完整性，按已加载的技术栈 skill 验证编译`)
-  lines.push(`${stepNum++}. 服务启动验证：启动基础设施 → 启动应用 → 健康检查`)
+  lines.push(`${stepNum++}. 服务启动验证：`)
+  lines.push("   - 按上方 Worktree 区段的隔离标识与建议端口，按已加载 API 测试 skill 的隔离要求执行：搭建独立验证环境 → 启动应用 → 健康检查")
+  lines.push("   - validation_steps 须显式列出「隔离环境搭建/清理」项")
+  lines.push("   - **禁止复用或清空共享开发库**")
   lines.push(`${stepNum++}. **不可跳过** — API 测试验证：识别受影响 API，按已加载的 API 测试规范执行验证`)
   lines.push(`${stepNum++}. UT 测试质量审查：按已加载的测试技能规范审查单元测试质量`)
+  lines.push(`${stepNum++}. 全部验证完成后清理隔离环境`)
   lines.push(`${stepNum++}. 发现本轮验证过程中的非本轮引入缺陷 → 按统一严重级别体系提交 issue（至少 Low）`)
-  lines.push(`${stepNum++}. 核验「审查 Issue」中「待确认」存量 issue 是否真已修复`)
-  lines.push(`${stepNum++}. 缺少验证所需真实资源 → opx_task_review_submit(passed=false)`)
+  lines.push(`${stepNum++}. 核验「审查 Issue」中「待确认」issue 是否真已修复`)
+  lines.push(`${stepNum++}. 缺少验证所需真实资源（隔离环境无法正常搭建亦属此类）→ opx_task_review_submit(passed=false)；禁止静默降级复用共享库`)
   lines.push(`${stepNum++}. 汇总 → opx_task_review_submit`)
   return lines.join("\n")
 }
@@ -685,9 +695,9 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   const tiSkills = getToolImprovementSkills(agent)
   lines.push(`# AI 审查上下文 — ${dimension}`, "")
   lines.push(`**task 层**: ${tg.phases.review.task.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
+  lines.push(...renderAgentSummaries(tg))
   lines.push(...renderSkillSuggestions(agent, AGENT_CAPABILITY_SUGGESTIONS[agent] || []))
-  lines.push(...renderWorktreeSection(tg))
-  renderOptionalSection(lines, "上轮变更文件", tg.lastFilesChanged.map(f => `- \`${f}\``))
+  lines.push(...renderWorktreeSection(state, tg))
   if (dimension === "architecture") {
     lines.push("## 推荐阅读文档", "")
     lines.push(`- \`openspec/changes/${state.changeId}/design.md\``)
@@ -702,7 +712,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
     lines.push("")
   }
   lines.push(
-    "> 回归排查：对照上述「上轮变更文件」，检查本次修复是否在本维度引入了新问题；发现即在本维度报新 issue。",
+    "> 回归排查：对照上方「变更范围」命令输出的变更文件，检查本次修复是否在本维度引入了新问题；发现即在本维度报新 issue。",
     ""
   )
   const qualityIssues = renderLayerIssues(tg.issues, "quality", dimension)
@@ -715,12 +725,16 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   const eff = renderEfficiencySteps(tagMap, stepNum)
   lines.push(...eff.lines)
   stepNum = eff.nextNum
-  lines.push(`${stepNum++}. 逐文件审查「上轮变更文件」，按本维度审查标准发现问题`)
+  lines.push(`${stepNum++}. 用上方「变更范围」命令获取变更文件清单，逐文件审查，按本维度审查标准发现问题`)
   if (dimension === "architecture") {
     lines.push(`${stepNum++}. 对照 design.md 架构方案基线，验证代码实施忠实度——偏离且违规时报 issue`)
   }
-  lines.push(`${stepNum++}. 核验「本维度 Issue (待确认)」中每条是否真已修复 → fixed_issue_ids（未达标的不列入）`)
-  lines.push(`${stepNum++}. 裁定「本维度 Issue (豁免裁定中)」→ exempt_issue_ids / rejected_issue_ids`)
+  lines.push(`${stepNum++}. 核验并裁定「本维度 Issue (待确认)」— submitted（待确认）必须有明确裁定，漏裁定将报错：`)
+  lines.push("   - 确认已修复（或判据不成立但当前代码已正确）→ fixed_issue_ids")
+  lines.push("   - 修复不达标 → rejected_issue_ids（退回 developer 重修）")
+  lines.push(`${stepNum++}. 裁定「本维度 Issue (豁免裁定中)」— exemption_requested（豁免裁定中）必须有明确裁定：`)
+  lines.push("   - 批准豁免（问题存在但不修）→ exempt_issue_ids")
+  lines.push("   - 驳回豁免（必须修复）→ rejected_issue_ids")
   if (tiSkills.length > 0) {
     lines.push(`${stepNum++}. 新发现的本维度问题：`)
     lines.push("   - 优先判断此问题是否可通过工具配置统一解决")

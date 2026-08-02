@@ -68,12 +68,6 @@ export async function getMergeBase(worktree: string, baseBranch: string): Promis
   return runGit(worktree, ["merge-base", "HEAD", baseBranch])
 }
 
-export async function getDiffFileList(worktree: string, baseRef: string): Promise<string[]> {
-  const out = await runGit(worktree, ["diff", "--name-only", `${baseRef}..HEAD`])
-  if (!out) return []
-  return out.split("\n").map((s) => s.trim()).filter(Boolean)
-}
-
 export async function isWorktreeClean(worktree: string): Promise<boolean> {
   const out = await runGit(worktree, ["status", "--porcelain"])
   return out.length === 0

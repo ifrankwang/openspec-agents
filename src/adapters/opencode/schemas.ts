@@ -20,6 +20,7 @@ export const reviewIssue = tool.schema.object({
   description: tool.schema.string().min(1).describe("问题描述"),
   suggestion: tool.schema.string().optional().describe("修复建议"),
   root_cause_guess: tool.schema.string().optional().describe("根因猜测（仅特定维度需要）"),
+  rule: tool.schema.string().optional().describe("工具规则名（如 PMD Rule / SonarQube rule），无则省略"),
 })
 
 export const requestExemptItem = tool.schema.object({
@@ -44,6 +45,7 @@ export const toolIssueItem = tool.schema.object({
   line: tool.schema.number().int().min(0).describe("问题所在行号（0=整文件/待新建文件，如 tool 改进 issue 指向待建配置文件）"),
   description: tool.schema.string().min(1).describe("问题描述"),
   suggestion: tool.schema.string().optional().describe("修复建议"),
+  rule: tool.schema.string().optional().describe("工具规则名（如 PMD Rule / SonarQube rule），无则省略"),
 })
 
 export const taskVerifyResult = tool.schema.object({

@@ -104,6 +104,8 @@ agent 只按"能力类别"发起查找：读 available_skills，靠 skill 的 de
 
 opx_status 视图等工具产出的上下文文本不得硬编码技术栈名称、构建命令、框架约定、技术栈工具（如 Maven/PMD/ArchUnit）或任何 skill 名；skill 引用须通过 capability tag 动态解析。工具产出与 agent.md 内容准则一致，只用"能力类别"语言提示分流优先级与职责；具体技术栈实现方式由 agent 加载的技术栈 skill 指导。
 
+git 属编排基础设施而非技术栈，视图操作指引可给出 git 命令（如变更范围查询、分支操作）；技术栈构建/检查命令（如 Maven/PMD/ArchUnit）仍禁止。此界限与「三层职责分离」中"验证类别清单（不含具体 how）"一致——how 的豁免仅限编排基础设施本身。
+
 ### agent 职责边界清晰，禁止重复职责
 
 agent 之间职责边界必须清晰明确，禁止不同 agent 负责同一职责。发现职责重叠时，合并到单一 agent 或重新划分边界。

@@ -121,7 +121,7 @@ describe("blocker 生命周期", () => {
     tg.phases.review.lastResolvedRetryCount = 1
     writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state, null, 2))
 
-    const result = JSON.parse(output(await dev_submit.execute({change_id: CID, outcome: "blocked",
+    const result = output(await dev_submit.execute({change_id: CID, outcome: "blocked",
       blocker: {
         source_role: "openspec-developer",
         task_id: "1",
@@ -130,8 +130,8 @@ describe("blocker 生命周期", () => {
         evidence: "测试数据不可代表生产路径",
         attempted_actions: "检查现有 fixture",
         options: ["用户提供样本"],
-      },} as any, dev)))
-    expect(result.outcome).toBe("blocked")
+      },} as any, dev))
+    expect(result).toContain("已记录 blocker")
 
     tg = readState(wt).taskGroups[0]
     expect(tg.status).toBe("task_analysis")

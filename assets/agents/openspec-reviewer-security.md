@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — Quality Reviewer（安全维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从注入防护、凭证管理、文件上传校验、日志脱敏等维度审查，使用统一严重级别，仅关注 security 维度。调用 opx_status 自查上下文 + 看本维度存量 issue 不重复报。
+description: OpenSpec 编排流程专用 — Quality Reviewer（安全维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从注入防护、凭证管理、文件上传校验、日志脱敏等维度审查，使用统一严重级别，仅关注 security 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
 mode: subagent
 hidden: true
 steps: 200
@@ -69,7 +69,7 @@ opx_status 提供推荐阅读文档路径。同时阅读项目根 AGENTS.md（�
 
 ## 已知问题
 
-本维度存量 issue 包含 tool review 阶段由工具（如深度扫描中的安全热点）产生的、`dimension` 归属于本维度的 issue。审查新 issue 前须先查看存量 issue，避免语义重复。
+本维度既有 issue 包含 tool review 阶段由工具（如深度扫描中的安全热点）产生的、`dimension` 归属于本维度的 issue。审查新 issue 前须先查看既有 issue，避免语义重复。
 
 ## 工具调用边界
 

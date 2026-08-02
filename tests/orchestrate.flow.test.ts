@@ -12,6 +12,7 @@ import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
 import { MAX_RETRIES } from "../src/core/constants"
+import { generateIsolationNamespace } from "../src/core/namespace"
 import {
   init, status, set_worktree, complete_task_group,
   arch_submit, dev_submit, tool_review_submit, task_review_submit,
@@ -39,13 +40,13 @@ const FORBIDDEN_ORCHESTRATION = [
   "下一步：",
 ]
 
-function expectNoOrchestration(msg: string | undefined) {
-  expect(msg).toBeDefined()
-  expect(typeof msg).toBe("string")
+function expectNoOrchestration(msg: unknown) {
+  const text = String(msg)
+  expect(text).toBeDefined()
   for (const p of FORBIDDEN_ORCHESTRATION) {
-    expect(msg!).not.toContain(p)
+    expect(text).not.toContain(p)
   }
-  expect(msg).toContain("职责已完成，请立即结束当前会话")
+  expect(text).toContain("职责已完成，请立即结束当前会话")
 }
 
 function freshWt(root: string): string {
@@ -73,7 +74,6 @@ async function setupThroughQualityReady(
   await set_worktree.execute({ change_id: CID }, ctx.orch)
   const s1 = readStateSync(wt, CID)
   const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-  fakeGit.diffs.set(devWt, ["src/F1.java"])
   await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, ctx.dev)
 
   const s2 = readStateSync(wt, CID)
@@ -129,11 +129,8 @@ describe("1. Happy Path — 完整流程", () => {
          taskR = makeCtx("openspec-reviewer-task", wt)
 
     // 1. init
-    const r0 = JSON.parse(await init.execute({ change_id: CID, task_group_id: "1" }, o))
-    expect(r0.status).toBe("initialized")
-    expect(r0.active_phase).toBe("task_analysis")
-    expect(r0.current_task_group.id).toBe("1")
-    expect(r0.task_group_count).toBe(2)
+    const r0 = await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    expect(r0).toBe("编排会话已初始化。")
 
     let state = readStateSync(wt, CID)
     expect(state.taskGroupId).toBe("1")
@@ -143,11 +140,9 @@ describe("1. Happy Path — 完整流程", () => {
     expect(tg.tasks).toHaveLength(2)
 
     // 2. arch_submit passed
-    const r1 = JSON.parse(await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a))
-    expect(r1.status).toBe("ok")
-    expect(r1.phase).toBe("dev_impl")
-    expectNoOrchestration(r1.message)
+    const r1 = await arch_submit.execute({change_id: CID, outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+    expectNoOrchestration(r1)
 
     state = readStateSync(wt, CID)
     const tg1 = state.taskGroups.find((g: any) => g.id === "1")
@@ -167,30 +162,24 @@ describe("1. Happy Path — 完整流程", () => {
 
     // 4. dev_submit
     const devWt = tg2.worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
-    const r3 = JSON.parse(await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d))
-    expect(r3.status).toBe("ok")
-    expect(r3.active_phase).toBe("review")
-    expectNoOrchestration(r3.message)
+    const r3 = await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+    expectNoOrchestration(r3)
 
     state = readStateSync(wt, CID)
     const tg3 = state.taskGroups.find((g: any) => g.id === "1")
     expect(tg3.tasks.every((t: any) => t.status === "submitted")).toBe(true)
-    expect(tg3.lastFilesChanged).toContain("src/F1.java")
     expect(tg3.status).toBe("review")
 
 
 
-    const rr1 = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: []}, toolR))
-    expect(rr1.status).toBe("ok")
-    expect(rr1.phase).toBe("review(tool=completed)")
-    expectNoOrchestration(rr1.message)
+    const rr1 = await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: []}, toolR)
+    expect(rr1).toContain("审核通过")
+    expectNoOrchestration(rr1)
 
-    const rr2 = JSON.parse(await task_review_submit.execute({change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [],
-      fixed_issue_ids: []}, taskR))
-    expect(rr2.status).toBe("ok")
-    expect(rr2.phase).toBe("review(task=completed)")
-    expectNoOrchestration(rr2.message)
+    const rr2 = await task_review_submit.execute({change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [],
+      fixed_issue_ids: []}, taskR)
+    expect(rr2).toContain("审核通过")
+    expectNoOrchestration(rr2)
 
     state = readStateSync(wt, CID)
     const tg6 = state.taskGroups.find((g: any) => g.id === "1")
@@ -200,14 +189,12 @@ describe("1. Happy Path — 完整流程", () => {
     const dims = ["style", "architecture", "performance", "security", "maintainability"]
     for (let i = 0; i < dims.length; i++) {
       const agent = `openspec-reviewer-${dims[i]}`
-      const result = JSON.parse(await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(agent, wt)))
+      const result = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(agent, wt))
+      expectNoOrchestration(result)
       if (i < dims.length - 1) {
-        expect(result.status).toBe("partial")
-        expectNoOrchestration(result.message)
+        expect(result).toContain("已提交")
       } else {
-        expect(result.status).toBe("ok")
-        expect(result.phase).toBe("review=completed")
-        expectNoOrchestration(result.message)
+        expect(result).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
       }
     }
 
@@ -220,9 +207,8 @@ describe("1. Happy Path — 完整流程", () => {
     }
 
     // 7. complete_task_group
-    const r5 = JSON.parse(await complete_task_group.execute({ change_id: CID }, o))
-    expect(r5.status).toBe("ok")
-    expect(r5.completed_task_group).toBe("1")
+    const r5 = await complete_task_group.execute({ change_id: CID }, o)
+    expect(r5).toContain("任务组已完成并合并到")
 
     state = readStateSync(wt, CID)
     const tg8 = state.taskGroups.find((g: any) => g.id === "1")
@@ -271,7 +257,6 @@ describe("2. 完整流程（无驳回）", () => {
     expect(tgWt.worktreePath).not.toBeNull()
     const devWt = tgWt.worktreePath
 
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -287,8 +272,8 @@ describe("2. 完整流程（无驳回）", () => {
 
     const dims = ["style", "architecture", "performance", "security", "maintainability"]
     for (let i = 0; i < dims.length; i++) {
-      const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
-      if (i === dims.length - 1) expect(res.status).toBe("ok")
+      const res = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+      if (i === dims.length - 1) expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
     }
 
     state = readStateSync(wt, CID)
@@ -325,9 +310,9 @@ describe("3. 架构师通过 → 完成全部流程", () => {
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
-    const r1 = JSON.parse(await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a))
-    expect(r1.status).toBe("ok")
+    const r1 = await arch_submit.execute({change_id: CID, outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+    expect(r1).toContain("复核通过")
 
     let state = readStateSync(wt, CID)
     const tg1 = state.taskGroups.find((g: any) => g.id === "1")
@@ -335,16 +320,15 @@ describe("3. 架构师通过 → 完成全部流程", () => {
 
     await set_worktree.execute({ change_id: CID }, o)
     state = readStateSync(wt, CID)
-    fakeGit.diffs.set(state.taskGroups.find((g: any) => g.id === "1").worktreePath, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     await transitionToReview(wt, o, toolR, taskR)
 
     const dims = ["style", "architecture", "performance", "security", "maintainability"]
     for (let i = 0; i < dims.length; i++) {
-      const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
-      if (i < dims.length - 1) expect(res.status).toBe("partial")
-      else expect(res.status).toBe("ok")
+      const res = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+      if (i < dims.length - 1) expect(res).toContain("已提交")
+      else expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
     }
 
     await complete_task_group.execute({ change_id: CID }, o)
@@ -381,32 +365,28 @@ describe("4. 豁免裁定 — tool 层通过 exempt_issue_ids 授权", () => {
       if (i === 0) {
         args.issues = [{ severity: "Info", file: "src/x.java", line: 1, description: "Style info", suggestion: "Consider" }]
       }
-      const res = JSON.parse(await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
-      if (i < dims.length - 1) expect(res.status).toBe("partial")
-      else expect(res.status).toBe("ok")
+      const res = await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+      if (i < dims.length - 1) expect(res).toContain("已提交")
+      else expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
     }
 
     state = readStateSync(wt, CID)
     const issueId = state.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     // dev_submit in review: request exemption for Info issue
-    fakeGit.diffs.set(devWt, [])
     await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Trivial" }]}, d)
 
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exemption_requested")
 
-    // dev_submit reset layers. Re-run with exemption handling.
-    await transitionToReview(wt, o, toolR, taskR, [issueId])
+    // quality 层豁免由发起维度（style）quality reviewer 裁定，tool/task 层不重置不重验
+    const res = await quality_review_submit.execute({ change_id: CID, passed: true,
+      issues: [], exempt_issue_ids: [issueId] }, makeCtx("openspec-reviewer-style", wt))
+    expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
 
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exempted")
-
-    // Quality re-run — only affected dim
-    const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx("openspec-reviewer-style", wt)))
-    expect(res.status).toBe("ok")
-    expect(res.phase).toBe("review=completed")
 
     try { rmSync(root, { recursive: true, force: true })} catch {}
   })
@@ -432,17 +412,15 @@ describe("5. Recovery — dev_impl 阶段恢复", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").tasks.every((t: any) => t.status === "submitted")).toBe(true)
 
-    const r = JSON.parse(await init.execute({
+    const r = await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "dev_impl" }}, o))
-    expect(r.status).toBe("initialized")
-    expect(r.active_phase).toBe("dev_impl")
+      recovery: { phase: "dev_impl" }}, o)
+    expect(r).toBe("编排会话已初始化。已恢复到 dev_impl 阶段。")
     await set_worktree.execute({ change_id: CID }, o)
 
     state = readStateSync(wt, CID)
@@ -483,11 +461,10 @@ describe("6. Recovery — review 阶段恢复（保留 issues）", () => {
     const origIssueDesc = state.taskGroups.find((g: any) => g.id === "1").issues[0].description
 
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    const r = JSON.parse(await init.execute({
+    const r = await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o))
-    expect(r.status).toBe("initialized")
-    expect(r.active_phase).toBe("review")
+      recovery: { phase: "review" }}, o)
+    expect(r).toBe("编排会话已初始化。已恢复到 review 阶段。")
 
     state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -522,7 +499,6 @@ describe("7. 多任务组 — 完成 group1 → 初始化 group2", () => {
       execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
-    fakeGit.diffs.set(state.taskGroups.find((g: any) => g.id === "1").worktreePath, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     await transitionToReview(wt, o, toolR, taskR)
@@ -538,9 +514,8 @@ describe("7. 多任务组 — 完成 group1 → 初始化 group2", () => {
     expect(state.taskGroups.find((g: any) => g.id === "1").status).toBe("completed")
     expect(state.taskGroupId).toBe("1")
 
-    const r2 = JSON.parse(await init.execute({ change_id: CID, task_group_id: "2" }, o))
-    expect(r2.status).toBe("initialized")
-    expect(r2.current_task_group.id).toBe("2")
+    const r2 = await init.execute({ change_id: CID, task_group_id: "2" }, o)
+    expect(r2).toBe("编排会话已初始化。")
 
     state = readStateSync(wt, CID)
     const g1 = state.taskGroups.find((g: any) => g.id === "1")
@@ -569,11 +544,10 @@ describe("8. Recovery — task_analysis 阶段（回退）", () => {
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
-    const r = JSON.parse(await init.execute({
+    const r = await init.execute({
       change_id: CID, task_group_id: "1",
-      recovery: { phase: "task_analysis" }}, o))
-    expect(r.status).toBe("initialized")
-    expect(r.active_phase).toBe("task_analysis")
+      recovery: { phase: "task_analysis" }}, o)
+    expect(r).toBe("编排会话已初始化。已恢复到 task_analysis 阶段。")
 
     let state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -581,9 +555,9 @@ describe("8. Recovery — task_analysis 阶段（回退）", () => {
     expect(tg.phases.architect_review.completed).toBe(false)
     expect(tg.tasks.every((t: any) => t.status === "open")).toBe(true)
 
-    const r2 = JSON.parse(await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a))
-    expect(r2.status).toBe("ok")
+    const r2 = await arch_submit.execute({change_id: CID, outcome: "ready",
+      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
+    expect(r2).toContain("复核通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -611,7 +585,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
 
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
@@ -633,7 +606,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
     expect(issueId).toBeDefined()
 
     // Dev fixes + exemption via review phase dev_submit
-    fakeGit.diffs.set(devWt, ["src/F1.java", "src/F2.java"])
     const s2 = readStateSync(wt, CID)
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
@@ -673,7 +645,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
 
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
 
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
@@ -694,7 +665,6 @@ describe("9. 豁免裁定 — tool+task 层 via exempt_issue_ids", () => {
     const issueId = state.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     // Dev fixes + exemption via review phase
-    fakeGit.diffs.set(devWt, ["src/F1.java", "src/F2.java"])
     const s2 = readStateSync(wt, CID)
     const tg2 = s2.taskGroups.find((g: any) => g.id === "1")
     await init.execute({
@@ -749,29 +719,25 @@ describe("10. quality 层豁免 — quality reviewer 裁定", () => {
       if (i === 0) {
         args.issues = [{ severity: "Info", file: "src/x.java", line: 1, description: "Style info", suggestion: "Consider" }]
       }
-      const res = JSON.parse(await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt)))
-      if (i < dims.length - 1) expect(res.status).toBe("partial")
-      else expect(res.status).toBe("ok")
+      const res = await quality_review_submit.execute(args, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
+      if (i < dims.length - 1) expect(res).toContain("已提交")
+      else expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
     }
 
     state = readStateSync(wt, CID)
     const issueId = state.taskGroups.find((g: any) => g.id === "1").issues[0].id
 
     // dev_submit in review with exemption
-    fakeGit.diffs.set(devWt, [])
     await dev_submit.execute({change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId],
       request_exempts: [{ issue_id: issueId, reason: "Trivial" }]}, d)
 
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exemption_requested")
 
-    // dev_submit reset layers. Re-run with exemption.
-    await transitionToReview(wt, o, toolR, taskR, [issueId])
-
-    // Quality — only affected dim, issue already exempted
-    const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx("openspec-reviewer-style", wt)))
-    expect(res.status).toBe("ok")
-    expect(res.phase).toBe("review=completed")
+    // quality 层豁免由发起维度（style）quality reviewer 裁定，tool/task 层不重置不重验
+    const res = await quality_review_submit.execute({ change_id: CID, passed: true,
+      issues: [], exempt_issue_ids: [issueId] }, makeCtx("openspec-reviewer-style", wt))
+    expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
 
     state = readStateSync(wt, CID)
     expect(state.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.id === issueId).status).toBe("exempted")
@@ -800,16 +766,15 @@ describe("11. 守卫 — quality 阶段阻塞 issue", () => {
     let lastResult: any
     const passDims = ["architecture", "performance", "security", "maintainability"]
     for (const d of passDims) {
-      const res = JSON.parse(await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt)))
+      await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
     }
     // style 最后提交，此时已有阻塞 issue → passed=false 才合法
-    lastResult = JSON.parse(await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+    lastResult = await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
       issues: [{ severity: "High", file: "src/x.java", line: 1, description: "Critical issue", suggestion: "Fix it" }],
-      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt)))
-    expect(lastResult.status).toBe("recorded")
-    expectNoOrchestration(lastResult.message)
-    expect(lastResult.failed_dimensions).toBeDefined()
-    expect(lastResult.has_residual_blocking).toBe(true)
+      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt))
+    expectNoOrchestration(lastResult)
+    expect(lastResult).toContain("审查未通过")
+    expect(lastResult).toContain("style")
 
     const state = readStateSync(wt, CID)
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
@@ -849,7 +814,6 @@ describe("12. resolve_review — continue / giveup", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
       // 2. ${MAX_RETRIES} 轮 tool 失败（审查重试达到检查点 retryCount=${MAX_RETRIES}）：
@@ -867,21 +831,19 @@ describe("12. resolve_review — continue / giveup", () => {
         await set_worktree.execute({ change_id: CID }, o)
 
         if (round > 1) {
-          fakeGit.diffs.set(devWt, [`src/FR${round - 1}.java`])
           await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
             fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
         }
 
-        const r = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: false,
+        const r = await tool_review_submit.execute({ change_id: CID, passed: false,
           issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
-          fixed_issue_ids: prevIssue ? [prevIssue] : []}, toolR))
+          fixed_issue_ids: prevIssue ? [prevIssue] : []}, toolR)
 
-        expectNoOrchestration(r.message)
-        if (round < MAX_RETRIES) {
-          expect(r.status).toBe("recorded")
-          expect(r.retry_count).toBe(round)
+        expectNoOrchestration(r)
+        if (round === MAX_RETRIES) {
+          expect(r).toContain("审核报告已记录")
         } else {
-          expect(r.status).toBe("recorded")
+          expect(r).toContain("需回退开发")
         }
 
         state = readStateSync(wt, CID)
@@ -890,29 +852,29 @@ describe("12. resolve_review — continue / giveup", () => {
       }
 
       // 3. resolve_review(continue) — 不再重置 retryCount
-      const rc = JSON.parse(await resolve_review.execute({ change_id: CID, decision: "continue" }, o))
-      expect(rc.status).toBe("ok")
-      expect(rc.decision).toBe("continue")
+      const rc = await resolve_review.execute({ change_id: CID, decision: "continue" }, o)
+      expect(rc).toContain("已重置各层审查进度")
 
       state = readStateSync(wt, CID)
       const tgS = state.taskGroups.find((g: any) => g.id === "1")
       expect(tgS.phases.review.retryCount).toBe(MAX_RETRIES)
       expect(tgS.phases.review.tool.completed).toBe(false)
       expect(tgS.phases.review.task.completed).toBe(false)
-      expect(tgS.status).toBe("dev_impl")
+      expect(tgS.status).toBe("review")
 
-      // 验证 developer opx_status 通过门禁
-      const ds = await status.execute({ change_id: CID }, d)
-      expect(ds).toContain("当前轮到你执行")
+      // 验证 continue 后下一步分派 tool 层复审（而非 developer）
+      const os = await status.execute({ change_id: CID }, o)
+      expect(os).toContain("openspec-reviewer-tool")
 
-      // 4. 验证可重新从 tool 层开始
-      fakeGit.diffs.set(devWt, ["src/F5.java"])
+      // 4. 验证可重新从 tool 层开始。continue 已重置 tool.completed，
+      //    无需 dev_submit 推进阶段；dev_submit 仅将遗留 open issue 声明为已修（open→submitted），
+      //    使 tool 层可复核通过
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
         fixed_issue_ids: prevIssue ? [prevIssue] : [] }, d)
 
-      const r5 = JSON.parse(await tool_review_submit.execute({ change_id: CID, passed: true, issues: [],
-        fixed_issue_ids: prevIssue ? [prevIssue] : []}, toolR))
-      expect(r5.status).toBe("ok")
+      const r5 = await tool_review_submit.execute({ change_id: CID, passed: true, issues: [],
+        fixed_issue_ids: prevIssue ? [prevIssue] : []}, toolR)
+      expect(r5).toContain("审核通过")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -941,12 +903,11 @@ describe("12. resolve_review — continue / giveup", () => {
       for (const d of passDimsG) {
         await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
       }
-      lastRes = JSON.parse(await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
+      lastRes = await quality_review_submit.execute({ change_id: CID, task_group_id: "1", passed: false,
         issues: [{ severity: "Low", file: "src/x.java", line: 1, description: "Style blocking issue", suggestion: "Fix style" }],
-        fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt)))
-      expect(lastRes.status).toBe("recorded")
-      expectNoOrchestration(lastRes.message)
-      expect(lastRes.retry_count).toBe(1)
+        fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt))
+      expectNoOrchestration(lastRes)
+      expect(lastRes).toContain("审查未通过")
 
       // Rounds 2-5：recovery → dev_submit（重置 progress）→ quality submit（仅 style 维度）。
       for (let round = 2; round <= MAX_RETRIES; round++) {
@@ -958,7 +919,6 @@ describe("12. resolve_review — continue / giveup", () => {
         await set_worktree.execute({ change_id: CID }, o)
 
         // progress 不再自动清空，需 dev_submit 重置
-        fakeGit.diffs.set(devWt, ["src/F1.java"])
         const prevState = readStateSync(wt, CID)
         const prevIssueId = prevState.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.status === "open")?.id
         await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: prevIssueId ? [prevIssueId] : [] }, d)
@@ -967,24 +927,17 @@ describe("12. resolve_review — continue / giveup", () => {
         const afterDev = readStateSync(wt, CID)
         const submittedIssueId = afterDev.taskGroups.find((g: any) => g.id === "1").issues.find((i: any) => i.status === "submitted")?.id
 
-        lastRes = JSON.parse(await quality_review_submit.execute({change_id: CID, passed: false,
+        lastRes = await quality_review_submit.execute({change_id: CID, passed: false,
           issues: [{ severity: "Low", file: "src/x.java", line: round, description: `Blocking issue round ${round}`, suggestion: "Fix" }],
-          fixed_issue_ids: submittedIssueId ? [submittedIssueId] : []}, makeCtx("openspec-reviewer-style", wt)))
+          fixed_issue_ids: submittedIssueId ? [submittedIssueId] : []}, makeCtx("openspec-reviewer-style", wt))
 
-        expectNoOrchestration(lastRes.message)
-        if (round < MAX_RETRIES) {
-          expect(lastRes.status).toBe("recorded")
-          expect(lastRes.retry_count).toBe(round)
-        } else {
-          expect(lastRes.status).toBe("recorded")
-        }
+        expectNoOrchestration(lastRes)
+        expect(lastRes).toContain("审查未通过")
       }
 
       // 3. resolve_review(giveup)
-      const rg = JSON.parse(await resolve_review.execute({ change_id: CID, decision: "giveup" }, o))
-      expect(rg.status).toBe("ok")
-      expect(rg.decision).toBe("giveup")
-      expect(rg.exempted_count).toBeGreaterThan(0)
+      const rg = await resolve_review.execute({ change_id: CID, decision: "giveup" }, o)
+      expect(rg).toContain("置为 exempted")
 
       state = readStateSync(wt, CID)
       const tgG = state.taskGroups.find((g: any) => g.id === "1")
@@ -1031,7 +984,6 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review (orchestrator does recovery)
@@ -1069,13 +1021,13 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     expect(viewText).toContain("Fix naming")
 
     // --- 5. Developer fixes the issue ---
-    fakeGit.diffs.set(devWt, ["src/F1.java"]) // simulates new commit
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId]}, d)
 
     // --- 6. After dev_submit with issues → status should be review (Option Y) ---
     state = readStateSync(wt, CID)
     const tgFinal = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgFinal.status).toBe("review")
+    // 修复（代码变更）即重置 tool 层：tool 确定性检查须基于最新代码重跑
     expect(tgFinal.phases.review.tool.completed).toBe(false)
     expect(tgFinal.phases.review.task.completed).toBe(true)
     expect(tgFinal.issues.find((i: any) => i.id === issueId).status).toBe("submitted")
@@ -1113,7 +1065,6 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     state = readStateSync(wt, CID)
@@ -1140,7 +1091,6 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     const issueId = tgAfter.issues[0].id
 
     // --- 3. Developer fixes the issue → status=review, no submitted tasks ---
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, d)
 
     state = readStateSync(wt, CID)
@@ -1150,16 +1100,13 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     expect(tgFix.phases.review.retryCount).toBe(1) // dev_submit 不再清零
     expect(tgFix.tasks.every((t: any) => t.status === "verified")).toBe(true)
 
-    // --- 4. Tool review passes (with fixed issue) ---
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [issueId] }, toolR)
+    // --- 4. quality-only 修复触发 tool 层重验；task 层保持已验证结论，style reviewer 直接确认修复 ---
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    const result = await quality_review_submit.execute({ change_id: CID, passed: true,
+      fixed_issue_ids: [issueId], issues: [] }, styleR)
+    expect(result).toContain("全部审查维度通过")
 
-    // --- 5. Task review with no verified/failed tasks → auto-skip ---
-    const result = JSON.parse(await task_review_submit.execute({ change_id: CID, passed: true }, taskR))
-    expect(result.status).toBe("ok")
-    expect(result.phase).toBe("review(task=completed)")
-    expect(result.message).toContain("审核通过")
-
-    // --- 6. State reflects auto-completed task layer ---
+    // --- 5. State: task 层保持已完成（自动跳过，不重验）---
     state = readStateSync(wt, CID)
     const tgFinal = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgFinal.phases.review.task.completed).toBe(true)
@@ -1236,7 +1183,6 @@ describe("15. base_branch 自动推导与异常", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const state1 = readStateSync(wt, CID)
     const devWt = state1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     const state2 = readStateSync(wt, CID)
@@ -1252,9 +1198,8 @@ describe("15. base_branch 自动推导与异常", () => {
       await quality_review_submit.execute({ change_id: CID, passed: true, issues: [] }, makeCtx(`openspec-reviewer-${dim}`, wt))
     }
 
-    const result = JSON.parse(await complete_task_group.execute({ change_id: CID }, o))
-    expect(result.status).toBe("ok")
-    expect(result.merge_target).toBe("develop")
+    const result = await complete_task_group.execute({ change_id: CID }, o)
+    expect(result).toContain("任务组已完成并合并到")
 
     const finalState = readStateSync(wt, CID)
     expect(finalState.taskGroups.find((g: any) => g.id === "1").status).toBe("completed")
@@ -1281,14 +1226,14 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await setupThroughQualityReady(wt, fakeGit, { orch: o, arch: a, dev: d, toolReviewer: toolR, taskReviewer: taskR })
 
     // 提交含 line=0 的 issue（工具改进 issue：file 指向配置文件，Info 可伴随 passed=true）
-    const res = JSON.parse(await quality_review_submit.execute({change_id: CID, passed: true,
+    const res = await quality_review_submit.execute({change_id: CID, passed: true,
       issues: [{
         severity: "Info",
         file: "pmd-rules.xml",
         line: 0,
         description: "Domain 层异常命名应被 PMD 拦截",
-        suggestion: "新增 XPath 规则 [tool_eligible]"}]}, makeCtx("openspec-reviewer-style", wt)))
-    expect(res.status).toBe("partial")
+        suggestion: "新增 XPath 规则 [tool_eligible]"}]}, makeCtx("openspec-reviewer-style", wt))
+    expect(res).toContain("已提交")
 
     // line=0 存入 state 无误
     const state = readStateSync(wt, CID)
@@ -1317,7 +1262,6 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1327,10 +1271,10 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await set_worktree.execute({ change_id: CID }, o)
 
     // tool review 提交 line=0 Info issue
-    const res = JSON.parse(await tool_review_submit.execute({change_id: CID, passed: true,
+    const res = await tool_review_submit.execute({change_id: CID, passed: true,
       issues: [{ dimension: "style", severity: "Info", file: ".editorconfig", line: 0, description: "Indent 2", suggestion: "Set indent_style=space" }],
-      fixed_issue_ids: []}, toolR))
-    expect(res.status).toBe("ok")
+      fixed_issue_ids: []}, toolR)
+    expect(res).toContain("审核通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1358,7 +1302,6 @@ describe("16. line=0 + tool_eligible — 工具改进 issue 分离与边界扩�
     await set_worktree.execute({ change_id: CID }, o)
     let state = readStateSync(wt, CID)
     const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
     // Transition to review
@@ -1413,7 +1356,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1422,11 +1364,11 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    const res = JSON.parse(await tool_review_submit.execute({change_id: CID, passed: false,
+    const res = await tool_review_submit.execute({change_id: CID, passed: false,
       issues: [{ dimension: "style", severity: "Low", file: "src/app.ts", line: 5, description: "Bad", suggestion: "Fix" }],
       fixed_issue_ids: [],
-      boundary_expansion: { allowed_directories: ["scripts"] }}, toolR))
-    expect(res.status).toBe("recorded")
+      boundary_expansion: { allowed_directories: ["scripts"] }}, toolR)
+    expect(res).toContain("需回退开发")
 
     const state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -1450,7 +1392,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1459,11 +1400,11 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    const res = JSON.parse(await tool_review_submit.execute({change_id: CID, passed: false,
+    const res = await tool_review_submit.execute({change_id: CID, passed: false,
       issues: [{ dimension: "style", severity: "Low", file: "src/app.ts", line: 5, description: "Bad", suggestion: "Fix" }],
       fixed_issue_ids: [],
-      boundary_expansion: { allowed_packages: ["com.new"] }}, toolR))
-    expect(res.status).toBe("recorded")
+      boundary_expansion: { allowed_packages: ["com.new"] }}, toolR)
+    expect(res).toContain("需回退开发")
 
     const state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -1487,7 +1428,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1519,7 +1459,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1530,11 +1469,11 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
 
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
-    const res = JSON.parse(await task_review_submit.execute({change_id: CID, passed: false,
+    const res = await task_review_submit.execute({change_id: CID, passed: false,
       verified_task_ids: ["1"], failed_task_ids: [{ task_id: "2", reason: "Not done" }],
       fixed_issue_ids: [],
-      issues: [{ severity: "Low", file: "tests/test1.ts", line: 3, description: "Missing test", suggestion: "Add test" }]}, taskR))
-    expect(res.status).toBe("recorded")
+      issues: [{ severity: "Low", file: "tests/test1.ts", line: 3, description: "Missing test", suggestion: "Add test" }]}, taskR)
+    expect(res).toContain("审核报告已记录")
 
     const state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -1559,7 +1498,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1570,11 +1508,11 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
 
     await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
 
-    const res = JSON.parse(await task_review_submit.execute({change_id: CID, passed: false,
+    const res = await task_review_submit.execute({change_id: CID, passed: false,
       verified_task_ids: ["1"], failed_task_ids: [{ task_id: "2", reason: "Not done" }],
       fixed_issue_ids: [],
-      boundary_expansion: { allowed_directories: ["infra"] }}, taskR))
-    expect(res.status).toBe("recorded")
+      boundary_expansion: { allowed_directories: ["infra"] }}, taskR)
+    expect(res).toContain("审核报告已记录")
 
     const state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -1594,10 +1532,10 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
          taskR = makeCtx("openspec-reviewer-task", wt)
     await setupThroughQualityReady(wt, fakeGit, { orch: o, arch: a, dev: d, toolReviewer: toolR, taskReviewer: taskR })
 
-    const res = JSON.parse(await quality_review_submit.execute({change_id: CID, passed: false,
+    const res = await quality_review_submit.execute({change_id: CID, passed: false,
       issues: [{ severity: "Low", file: "src/app.ts", line: 5, description: "Bad", suggestion: "Fix it" }],
-      boundary_expansion: { allowed_directories: ["docs"] }}, makeCtx("openspec-reviewer-style", wt)))
-    expect(res.status).toBe("partial")
+      boundary_expansion: { allowed_directories: ["docs"] }}, makeCtx("openspec-reviewer-style", wt))
+    expect(res).toContain("已提交")
 
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
@@ -1639,7 +1577,6 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
     await set_worktree.execute({ change_id: CID }, o)
     const s1 = readStateSync(wt, CID)
     const devWt = s1.taskGroups.find((g: any) => g.id === "1").worktreePath
-    fakeGit.diffs.set(devWt, ["src/F1.java"])
     await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
     const s2 = readStateSync(wt, CID)
     const tg = s2.taskGroups.find((g: any) => g.id === "1")
@@ -1648,11 +1585,11 @@ describe("17. boundary_expansion — reviewer 声明扩展执行边界", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    const res = JSON.parse(await tool_review_submit.execute({change_id: CID, passed: false,
+    const res = await tool_review_submit.execute({change_id: CID, passed: false,
       issues: [{ dimension: "style", severity: "Low", file: "config/app.yml", line: 3, description: "YAML indent", suggestion: "Fix" }],
       fixed_issue_ids: [],
-      boundary_expansion: { allowed_directories: ["scripts", "src"] }}, toolR))
-    expect(res.status).toBe("recorded")
+      boundary_expansion: { allowed_directories: ["scripts", "src"] }}, toolR)
+    expect(res).toContain("需回退开发")
 
     const state = readStateSync(wt, CID)
     const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -1689,7 +1626,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       await transitionToReview(wt, o, toolR, taskR)
 
@@ -1716,11 +1652,10 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       writeFileSync(statePath, JSON.stringify(state, null, 2))
 
       // 3. reopenIssues
-      const r = JSON.parse(await init.execute({
+      const r = await init.execute({
         change_id: CID, task_group_id: "1",
-        recovery: { phase: "dev_impl", reopenIssues: true }}, o))
-      expect(r.status).toBe("initialized")
-      expect(r.active_phase).toBe("dev_impl")
+        recovery: { phase: "dev_impl", reopenIssues: true }}, o)
+      expect(r).toContain("编排会话已初始化")
 
       state = readStateSync(wt, CID)
       const tg2 = state.taskGroups.find((g: any) => g.id === "1")
@@ -1766,7 +1701,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
 
       state = readStateSync(wt, CID)
@@ -1799,7 +1733,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       await transitionToReview(wt, o, toolR, taskR)
 
@@ -1840,7 +1773,6 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
       await set_worktree.execute({ change_id: CID }, o)
       let state = readStateSync(wt, CID)
       const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-      fakeGit.diffs.set(devWt, ["src/F1.java"])
       await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
       await transitionToReview(wt, o, toolR, taskR)
 
@@ -1874,5 +1806,59 @@ describe("18. reopenIssues — 完成后 reopen 继续修 issue", () => {
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
+  })
+})
+
+// ═══════════════════════════════════════════════════
+//  Scenario 19: init isolationNamespace 补全
+// ═══════════════════════════════════════════════════
+
+describe("19. init isolationNamespace 补全", () => {
+  test("新建 init 生成确定性的 isolationNamespace", async () => {
+    const root = `/tmp/ft19a-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    const state = readStateSync(wt, CID)
+    expect(state.isolationNamespace).toBe(generateIsolationNamespace(CID))
+    expect(state.isolationNamespace).toMatch(/^[0-9a-f]{6}$/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("旧 state 缺 isolationNamespace 时 init 补全；既有值保留", async () => {
+    const root = `/tmp/ft19b-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    const stateDir = join(wt, ".opencode", ".orchestrate_state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const legacyState = {
+      changeId: CID,
+      taskGroupId: "1",
+      baseBranch: "main",
+      taskGroups: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacyState))
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    let state = readStateSync(wt, CID)
+    expect(state.isolationNamespace).toBe(generateIsolationNamespace(CID))
+
+    state.isolationNamespace = "custom-ns"
+    writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(state))
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    state = readStateSync(wt, CID)
+    expect(state.isolationNamespace).toBe("custom-ns")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 })

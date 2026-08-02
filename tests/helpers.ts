@@ -7,7 +7,6 @@ import { join } from "node:path"
 
 export class FakeGitRunner implements GitRunner {
   worktrees = new Map<string, { branch: string; path: string }>()
-  diffs = new Map<string, string[]>()
   baseRef = "base000000000000000000000000000000000001"
   dirtyPaths = new Set<string>()
   mergedBranches: string[] = []
@@ -54,10 +53,6 @@ export class FakeGitRunner implements GitRunner {
     if (cmd === "rev-parse") {
       if (rest[0] === "--abbrev-ref" && rest[1] === "HEAD") return this.currentBranch
       return "abc123def456"
-    }
-
-    if (cmd === "diff" && rest[0] === "--name-only") {
-      return (this.diffs.get(worktree) ?? []).join("\n")
     }
 
     if (cmd === "status" && rest[0] === "--porcelain") {

@@ -65,7 +65,7 @@ Authorization: Bearer {{TOKEN}}
 %}
 ```
 
-## 存量迁移
+## 旧脚本迁移
 
 若 `api-tests/script/` 目录已存在 shell（`.sh`）+ curl + jq 旧版脚本，逐文件转为 `.http` 格式：
 - 每个 `curl` 命令及其 headers 和 body 转为一条 `###` 分隔的请求
@@ -97,13 +97,20 @@ API 测试脚本运行前需获取有效认证凭证。常见模式：
 ## 执行顺序
 
 ```
-1. SQL 数据脚本 → 2. 启动服务 → 3. API 测试脚本 → 4. 停止服务
+1. **MUST** 启动基础设施（Docker compose 项目名带隔离标识：`docker compose -p <namespace> up -d`，避免与并发 change 的容器冲突）
+2. **MUST** 准备 SQL 前置数据（写入本 change 的隔离容器内 DB）
+3. **MUST** 启动服务（端口用编排会话建议端口：`--server.port=<建议端口>`，避免并发 change 端口冲突）
+4. API 测试脚本（BASE_URL 使用上述端口）
+5. **MUST** 停止服务并清理隔离环境（`docker compose -p <namespace> down`）
 ```
 
+以上第 1、2、3、5 条为 MUST：隔离（独立 compose 项目名、隔离 DB、建议端口、down 清理）是并发安全硬约束，不适用本文件开头「项目规范优先」的推荐豁免。
+
 - SQL 在前：先准备数据，再启动应用确保应用启动时读取到完整数据
-- 启动服务：按项目构建文件确定的启动方式（mvn / gradle / npm 等）
-- API 脚本：依赖运行中的服务
-- 停止服务：测试完成后清理
+- 隔离标识 `<namespace>` 与建议端口来自编排会话上下文
+- 启动服务：按项目构建文件确定的启动方式（mvn / gradle / npm 等），端口用编排会话建议端口
+- API 脚本：BASE_URL 使用上述建议端口，依赖运行中的服务
+- 停止服务：测试完成后停止服务并清理隔离环境
 
 ## 覆盖要求
 
