@@ -64,7 +64,7 @@ export {
 export {
   renderOrchestratorView, renderArchitectView, renderDeveloperView,
   renderToolReviewView, renderTaskReviewView, renderQualityReviewView,
-  formatFilePath, taskSummary, issueSummary, renderTaskItem,
+  formatFilePath, renderTaskItem,
   renderIssueItem, renderIssueItemsGrouped, renderLayerIssues, sortIssuesByCategory,
 } from "./views.js"
 

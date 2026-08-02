@@ -182,18 +182,6 @@ export function formatFilePath(file: string, line: number, maxLen = 60): string 
   return lastSeg.slice(0, maxLen - 3) + "..."
 }
 
-export function taskSummary(tasks: TaskItem[]): Record<string, number> {
-  const counts: Record<string, number> = { open: 0, submitted: 0, rejected: 0, verified: 0 }
-  for (const t of tasks) counts[t.status]++
-  return counts
-}
-
-export function issueSummary(issues: IssueItem[]): Record<string, number> {
-  const counts: Record<string, number> = { open: 0, submitted: 0, rejected: 0, verified: 0, exemption_requested: 0, exempted: 0 }
-  for (const i of issues) counts[i.status]++
-  return counts
-}
-
 export function renderTaskItem(t: TaskItem): string {
   const trace = t.specTrace ? ` [spec:${t.specTrace}]` : ""
   return `- Task id=${t.id} ｜ ${t.title}${trace}`
@@ -303,8 +291,6 @@ function renderAgentSummaries(tg: TaskGroupState): string[] {
 }
 
 export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupState, diskWorktrees?: { branch: string; path: string }[]): string {
-  const ts = taskSummary(tg.tasks)
-  const is = issueSummary(tg.issues)
   const lines: string[] = []
   lines.push("# 编排进度", "")
   lines.push(`**变更**: ${state.changeId}`)
@@ -342,24 +328,6 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
     if (blocker.architectConclusion) blockerLines.push(`  - 架构结论：${blocker.architectConclusion}`)
   }
   renderOptionalSection(lines, "Blocker", blockerLines)
-  lines.push("## Task 摘要", "")
-  lines.push(`| 状态 | 数量 |`)
-  lines.push(`|------|------|`)
-  lines.push(`| open | ${ts.open} |`)
-  lines.push(`| submitted | ${ts.submitted} |`)
-  lines.push(`| rejected | ${ts.rejected} |`)
-  lines.push(`| verified | ${ts.verified} |`)
-  lines.push("")
-  lines.push("## Issue 摘要", "")
-  lines.push(`| 状态 | 数量 |`)
-  lines.push(`|------|------|`)
-  lines.push(`| open | ${is.open} |`)
-  lines.push(`| submitted | ${is.submitted} |`)
-  lines.push(`| rejected | ${is.rejected} |`)
-  lines.push(`| verified | ${is.verified} |`)
-  lines.push(`| exemption_requested | ${is.exemption_requested} |`)
-  lines.push(`| exempted | ${is.exempted} |`)
-  lines.push("")
   lines.push("## 审核进度", "")
   const rp = tg.phases.review.quality.progress
   const fmt = (k: ReviewDimension) => `${k}=${rp[k]}`

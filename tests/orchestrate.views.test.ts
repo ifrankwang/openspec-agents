@@ -387,6 +387,26 @@ describe("一致性分析建议文本", () => {
   })
 })
 
+describe("编排者视图结构", () => {
+  test("编排者视图不含统计摘要段", () => {
+    const state = mockState()
+    const tg = baseTg({ status: "review", worktreePath: "/wt", branchName: "tg-1", baseRef: "base", tasks: [mockTask("1")], issues: [mockIssue("i1")] })
+    const output = renderOrchestratorView(state, tg)
+    expect(output).not.toContain("## Task 摘要")
+    expect(output).not.toContain("## Issue 摘要")
+  })
+
+  test("编排者视图保留其余核心段落", () => {
+    const state = mockState()
+    const tg = baseTg({ status: "review", worktreePath: "/wt", branchName: "tg-1", baseRef: "base", tasks: [mockTask("1")], issues: [mockIssue("i1")] })
+    const output = renderOrchestratorView(state, tg)
+    expect(output).toContain("## 阶段进展")
+    expect(output).toContain("## 审核进度")
+    expect(output).toContain("## 一致性分析")
+    expect(output).toContain("## 下一步")
+  })
+})
+
 describe("formatFilePath 路径截断", () => {
   test("短路径不截断", () => {
     expect(formatFilePath("src/Foo.java", 10)).toBe("src/Foo.java:10")
