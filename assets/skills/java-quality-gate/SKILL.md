@@ -238,10 +238,10 @@ token 经 `SONAR_TOKEN` 环境变量注入（等价写法：`-Dsonar.token=<toke
 经 Web API 查询 new code 期 issue：
 
 ```bash
-curl -sf -u <token>: "http://localhost:9000/api/issues/search?inNewCodePeriod=true&componentKeys=<项目原key>-<namespace>"
+curl -sf -u <token>: "http://localhost:9000/api/issues/search?inNewCodePeriod=true&statuses=OPEN,CONFIRMED,REOPENED&componentKeys=<项目原key>-<namespace>"
 ```
 
-MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。查询须携带认证，token 复用本流程生成的一次性 token，以 Basic auth 形式经 `-u <token>:` 传入（token 作用户名、密码留空），否则默认开启 forceAuthentication 时返回 401。
+MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。查询须携带认证，token 复用本流程生成的一次性 token，以 Basic auth 形式经 `-u <token>:` 传入（token 作用户名、密码留空），否则默认开启 forceAuthentication 时返回 401。`inNewCodePeriod` 仅限定 new code 期，不含状态过滤，会返回期内所有状态的 issue（含已关闭 CLOSED FIXED）。MUST 追加 `statuses=OPEN,CONFIRMED,REOPENED` 限定未解决 issue；已关闭 issue 不属本轮待处理项，不得据此误判排除/抑制配置未生效或触发重扫。
 
 ### 回收一次性认证 token
 
@@ -288,6 +288,7 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 降级处理：
 - 优先复用本次已 ANALYSIS SUCCESSFUL 的全量扫描结果，禁止为修复 SCM 无限重扫（SCM 覆盖尝试最多 1 次）
 - 全量扫描结果按第 8 节 dimension 映射表统一提交，按原始严重级别，不区分是否本轮引入
+- 状态过滤独立于期界过滤，new code 查询与降级全量查询两条路径均须带 `statuses=OPEN,CONFIRMED,REOPENED`
 
 ## 7. 质量工具配置检查
 
