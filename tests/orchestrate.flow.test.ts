@@ -1027,7 +1027,8 @@ describe("13. 去阶段化 — dev 在 dev_impl 状态下可见 review issue", (
     state = readStateSync(wt, CID)
     const tgFinal = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgFinal.status).toBe("review")
-    expect(tgFinal.phases.review.tool.completed).toBe(true)
+    // 修复（代码变更）即重置 tool 层：tool 确定性检查须基于最新代码重跑
+    expect(tgFinal.phases.review.tool.completed).toBe(false)
     expect(tgFinal.phases.review.task.completed).toBe(true)
     expect(tgFinal.issues.find((i: any) => i.id === issueId).status).toBe("submitted")
 
@@ -1099,7 +1100,7 @@ describe("14. Task review auto-skip — issue-fix round", () => {
     expect(tgFix.phases.review.retryCount).toBe(1) // dev_submit 不再清零
     expect(tgFix.tasks.every((t: any) => t.status === "verified")).toBe(true)
 
-    // --- 4. quality-only 修复：tool/task 层不重验，由发起维度 style reviewer 确认修复 ---
+    // --- 4. quality-only 修复触发 tool 层重验；task 层保持已验证结论，style reviewer 直接确认修复 ---
     const styleR = makeCtx("openspec-reviewer-style", wt)
     const result = await quality_review_submit.execute({ change_id: CID, passed: true,
       fixed_issue_ids: [issueId], issues: [] }, styleR)

@@ -250,7 +250,8 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   }
 
   let touchedAnyIssue = false
-  const touchedSourcePhases = new Set<string>()
+  const fixedSourcePhases = new Set<string>()
+  const exemptSourcePhases = new Set<string>()
   const touchedQualityDims = new Set<ReviewDimension>()
   const fixedIds = params.fixed_issue_ids || []
   for (const id of fixedIds) {
@@ -258,7 +259,7 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     if (issue && (issue.status === "open" || issue.status === "rejected")) {
       issue.status = "submitted"
       touchedAnyIssue = true
-      touchedSourcePhases.add(issue.sourcePhase)
+      fixedSourcePhases.add(issue.sourcePhase)
       if (issue.sourcePhase === "quality") touchedQualityDims.add(issue.dimension)
     }
   }
@@ -280,7 +281,7 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
     issue.exemptReason = r.reason
     requestedIds.push(r.issue_id)
     touchedAnyIssue = true
-    touchedSourcePhases.add(issue.sourcePhase)
+    exemptSourcePhases.add(issue.sourcePhase)
     if (issue.sourcePhase === "quality") touchedQualityDims.add(issue.dimension)
   }
 
@@ -295,12 +296,20 @@ export async function devSubmitExecute(params: DevSubmitParams, ctx: ToolContext
   }
 
   if (touchedAnyIssue) {
-    if (touchedSourcePhases.has("task")) {
-      // task 层修复可能影响代码实现，tool+task 层均需重验
+    if (fixedSourcePhases.size > 0) {
+      // 实际修复（fixed）即代码变更：tool 层确定性检查必须基于最新代码重跑
+      tg.phases.review.tool.completed = false
+    }
+    if (fixedSourcePhases.has("task")) {
+      // fixed 中属于 task 层的再重置 task 层，tool 层已重置
+      tg.phases.review.task.completed = false
+    }
+    if (exemptSourcePhases.has("task")) {
+      // task 层豁免：须重置对应层以便裁定者被分派
       tg.phases.review.tool.completed = false
       tg.phases.review.task.completed = false
-    } else if (touchedSourcePhases.has("tool")) {
-      // 仅 tool 层 issue 修复，task 层已验证结论保留
+    } else if (exemptSourcePhases.has("tool")) {
+      // tool 层豁免：须重置 tool 层以便裁定者被分派
       tg.phases.review.tool.completed = false
     }
     for (const d of touchedQualityDims) {

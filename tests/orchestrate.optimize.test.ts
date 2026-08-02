@@ -866,7 +866,7 @@ describe("B5. dev_submit 不再重置 retryCount", () => {
     const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
     expect(tgAfter.phases.review.retryCount).toBe(1) // 保持累加，不清零
 
-    // 3. quality-only 修复：tool/task 层不重置不重验，由 style reviewer 直接确认修复
+    // 3. quality-only 修复：dev 修复触发 tool 层重验（tool.completed=false），task 层保持通过；style reviewer 直接确认修复
     await init.execute({
       change_id: CID, task_group_id: "1",
       recovery: { phase: "review" }}, orch)
@@ -1167,7 +1167,7 @@ describe("B10. dev 提交后 review 层按 sourcePhase 精化重置", () => {
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("dev 仅修 quality 层 issue（style）→ tool.completed 保持 true、style 维度 pending", async () => {
+  test("dev 仅修 quality 层 issue（style）→ tool.completed 重置为 false、task.completed 保持 true、style 维度 pending", async () => {
     const root = `/tmp/optimize-b10b-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -1179,7 +1179,8 @@ describe("B10. dev 提交后 review 层按 sourcePhase 精化重置", () => {
 
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.phases.review.tool.completed).toBe(true)
+    // 修复即代码变更：tool 层确定性检查须基于最新代码重跑
+    expect(tg.phases.review.tool.completed).toBe(false)
     expect(tg.phases.review.task.completed).toBe(true)
     expect(tg.phases.review.quality.progress.style).toBe("pending")
     expect(tg.phases.review.quality.progress.architecture).toBe("passed")
@@ -1201,6 +1202,43 @@ describe("B10. dev 提交后 review 层按 sourcePhase 精化重置", () => {
     const tg = state.taskGroups.find((g: any) => g.id === "1")
     expect(tg.phases.review.tool.completed).toBe(false)
     expect(tg.phases.review.task.completed).toBe(false)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("dev 仅豁免 quality 层 issue（不改代码）→ tool/task.completed 保持 true、style 维度 pending、豁免裁定者仍被分派", async () => {
+    const root = `/tmp/optimize-b10d-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const { dev } = await setupToolTaskPassed(wt, fakeGit)
+
+    const issueId = injectOpenIssue(wt, { sourcePhase: "quality", dimension: "style", severity: "Low" })
+    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
+      request_exempts: [{ issue_id: issueId, reason: "风格约定豁免" }] }, dev)
+
+    const state = readStateSync(wt, CID)
+    const tg = state.taskGroups.find((g: any) => g.id === "1")
+    expect(tg.issues.find((i: any) => i.id === issueId).status).toBe("exemption_requested")
+    // 豁免不改代码：tool/task 层不重置
+    expect(tg.phases.review.tool.completed).toBe(true)
+    expect(tg.phases.review.task.completed).toBe(true)
+    // 仅重置对应 quality 维度
+    expect(tg.phases.review.quality.progress.style).toBe("pending")
+    expect(tg.phases.review.quality.progress.architecture).toBe("passed")
+
+    // 豁免裁定者（style quality reviewer）仍可被分派
+    const styleView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-style", wt))
+    const styleStr = typeof styleView === "string" ? styleView : JSON.stringify(styleView)
+    expect(styleStr).toMatch(/✅ 当前轮到你执行/)
+    const archView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-architecture", wt))
+    const archStr = typeof archView === "string" ? archView : JSON.stringify(archView)
+    expect(archStr).not.toMatch(/✅ 当前轮到你执行/) // architecture 已 passed，不过 gate
+
+    // 裁定者可直接裁定豁免
+    const r = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [],
+      exempt_issue_ids: [issueId] }, makeCtx("openspec-reviewer-style", wt))
+    expect(r).toContain("全部审查维度通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

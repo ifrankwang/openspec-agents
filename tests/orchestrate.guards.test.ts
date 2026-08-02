@@ -977,7 +977,8 @@ describe("G15. 豁免完整性门禁", () => {
       recovery: { phase: "review" }}, o)
     await set_worktree.execute({ change_id: CID }, o)
 
-    // quality-only 豁免申请：tool/task 层不重置不重验（tool.completed 保持 true）
+    // dev_submit 同时带 fixed_issue_ids 与 request_exempts：fixed 命中时 tool 层重置需重验、quality 层维度重置；
+    // 仅豁免（exempt_issue_ids）命中 quality 层时才不重置 tool/task 层
     // quality（style）层必须处理自己维度的 exemption 才能提交
     await expect(
       quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt))
