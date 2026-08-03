@@ -230,7 +230,7 @@ describe("sourcePhase E: task 层 exempt 清 verify_tool + verify_task", () => {
 // ── Scene F: 集成路径——review 回退 dev 修复后重置生效 ──
 
 describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重置生效", () => {
-  test("verify_quality failed 回退 implement，dev 修复 style 层 issue → 仅 style dim 重置，tool/task 验证标记保留", async () => {
+  test("verify_quality failed 回退 implement，dev 修复 style 层 issue → 三个审查层验证标记已重置", async () => {
     const root = `/tmp/sourcePhase-F-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -246,14 +246,17 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
       const back = readItem(wt, CID)
       expect(back.phase).toBe("in_progress")
       expect(back.currentStep).toBe("implement")
+      // fix2：review failed 提交后三个审查 step 的裁决 tags 全部清空（下次 review 各层重新分派）
+      expect(back.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(back.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+      expect(back.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
 
-      // dev 修复 style 层 issue（代码变更）→ verify_tool 清 + 仅 style dim tag 清，verify_task 保留
+      // dev 修复 style 层 issue（代码变更）→ 各层验证标记保持重置态
       await fixIssue(wt, ["q7"])
       const item = readItem(wt, CID)
-      // quality fixed 属代码变更 → verify_tool 清；verify_task 保留；仅 style dim tag 清
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
       expect(item.children.find((c: WorkItem) => c.externalId === "q7").phase).toBe("done")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })

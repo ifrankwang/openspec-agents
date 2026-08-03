@@ -51,7 +51,8 @@ export async function pollAdapter(
     return { added: [], skipped: [], error: `[poller] adapter "${adapter.name}" 读取编排状态失败：${(err as Error).message}` }
   }
   if (!state) {
-    return { added: [], skipped: [], error: `[poller] adapter "${adapter.name}" 无可用编排会话，跳过拉取写入。` }
+    // 无可用编排会话：静默跳过，不产生 error（避免 poller 每 tick 刷 console.error 噪音）
+    return { added: [], skipped: [] }
   }
   state.workItems ??= []
   const existing = new Set<string>(state.workItems.map(dedupeKey))

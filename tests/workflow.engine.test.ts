@@ -463,3 +463,58 @@ phases:
     expect(item.metadata["_retryCount"]).toBe(1)
   })
 })
+
+describe("8. fail 跨 phase 回退：目标 step 裁决重置（死锁修复）", () => {
+  const wf = loadWorkflow(BASE_YAML)
+
+  test("review failed 回退 implement：developer tag 重置 → 引擎重新分派 developer", () => {
+    const item = makeItem({ phase: "review", currentStep: "verify" })
+    // 模拟前置轮次：developer 已在 implement 提交 passed
+    applyAgentVerdict(item, "implement", "developer", "passed")
+    applyAgentVerdict(item, "verify", "reviewer", "failed")
+    const r = applyTransition(item, wf, "fail")
+    expect(r.advanced).toBe(true)
+    expect(item.phase).toBe("in_progress")
+    expect(item.currentStep).toBe("implement")
+    // fix1：目标 step（implement）裁决重置为 pending
+    expect(getStepVerdict(item, "implement", "developer")).toBe("pending")
+    const rec = recommendForItem(item, wf)
+    expect(rec.status).toBe("recommend")
+    expect(rec.agents).toContain("developer")
+  })
+
+  test("implement on_fail: analyze：architect tag 重置 → 引擎重新分派 architect", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    // 模拟前置轮次：architect 已在 analyze 提交 passed
+    applyAgentVerdict(item, "analyze", "architect", "passed")
+    applyAgentVerdict(item, "implement", "developer", "failed")
+    const r = applyTransition(item, wf, "fail")
+    expect(r.advanced).toBe(true)
+    expect(item.phase).toBe("todo")
+    expect(item.currentStep).toBe("analyze")
+    expect(getStepVerdict(item, "analyze", "architect")).toBe("pending")
+    const rec = recommendForItem(item, wf)
+    expect(rec.status).toBe("recommend")
+    expect(rec.agents).toContain("architect")
+  })
+
+  test("同 phase on_fail 走切 step 分支，保持既有裁决缓存不清 tag", () => {
+    const item = makeItem()
+    applyAgentVerdict(item, "analyze", "architect", "passed")
+    const r = applyTransition(item, wf, "fail")
+    expect(r.advanced).toBe(true)
+    expect(item.phase).toBe("todo")
+    expect(item.currentStep).toBe("analyze")
+    expect(getStepVerdict(item, "analyze", "architect")).toBe("passed")
+  })
+
+  test("只清目标 step 的 tags，不影响其它 step", () => {
+    const item = makeItem({ phase: "review", currentStep: "verify" })
+    applyAgentVerdict(item, "implement", "developer", "passed")
+    applyAgentVerdict(item, "verify", "reviewer", "failed")
+    const r = applyTransition(item, wf, "fail")
+    expect(r.advanced).toBe(true)
+    // verify（来源 step）与 implement（目标 step）之外的 step tags 不受影响
+    expect(getStepVerdict(item, "verify", "reviewer")).toBe("failed")
+  })
+})

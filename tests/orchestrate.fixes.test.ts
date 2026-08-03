@@ -5,8 +5,7 @@
  * 6: dedupeNewChildren 跨层去重区分 sourcePhase
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { writeFileSync, readFileSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { rmSync } from "node:fs"
 
 import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
@@ -21,17 +20,6 @@ import { tagKey } from "../src/core/workflow/types"
 const CID = "test-fixes"
 
 afterAll(() => { __setGitRunner(null) })
-
-/** 直接改写 state 的 review tag（模拟编排在任务驳回后重置复核标记，等价 checkpoint continue 清 tag）。 */
-function clearReviewTags(wt: string): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
-  const state = JSON.parse(readFileSync(p, "utf-8"))
-  const item = state.workItems.find((w: any) => w.id === "task:1")
-  for (const key of Object.keys(item.tags)) {
-    if (key.startsWith("verify_")) delete item.tags[key]
-  }
-  writeFileSync(p, JSON.stringify(state, null, 2))
-}
 
 // ─── 修复项 2+3: 任务 rejectReason 清除 ───
 
@@ -73,9 +61,8 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
       expect(t1.status).toBe("submitted")
       expect(t1.rejectReason).toBeNull()
 
-      // 任务驳回回退不触发 issue 分层重置（无 fixed_issue_ids），旧 review tag 仍在；
-      // 模拟编排重置复核标记后重走 verify_tool → verify_task，验证 verified 且 rejectReason 保持清除
-      clearReviewTags(wt)
+      // 任务驳回回退不触发 issue 分层重置（无 fixed_issue_ids）；fix2 在 review failed
+      // 提交后已清空 review 验证标记，重走 verify_tool → verify_task，验证 verified 且 rejectReason 保持清除
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
       const rVerify = await agent_submit.execute(
         {

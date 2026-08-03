@@ -4,6 +4,7 @@ import { injectSkills } from "./skills.js"
 import { injectAgents } from "./agents.js"
 import { startDashboard } from "./dashboard.js"
 import { OpenSpecCollector, AdoCollector, registerCollector, startPolling } from "../../core/workflow/index.js"
+import { readContextFromWorktree } from "../../core/state.js"
 
 import {
   init,
@@ -21,7 +22,12 @@ export const OpenspecOrchestratePlugin: Plugin = async (input) => {
       // 注册内置收集器（OpenSpec + ADO 占位）并启动定时拉取；worktree 为动态上下文在此注入。
       registerCollector(new OpenSpecCollector({ openspecDir: join(input.worktree, "openspec") }))
       registerCollector(new AdoCollector())
-      startPolling(input.worktree)
+      // 仅已初始化（存在 context.json 上下文指针）的 worktree 启动轮询：
+      // 未初始化 worktree / 主仓库 checkout（.git 为目录）不启动，从源头避免无会话空转与报错噪音。
+      const ctx = await readContextFromWorktree(input.worktree)
+      if (ctx?.changeId && ctx?.taskGroupId) {
+        startPolling(input.worktree)
+      }
     }
   } catch { /* dashboard/调度启动失败不影响编排功能 */ }
 

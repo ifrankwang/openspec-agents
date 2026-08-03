@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, spyOn } from "bun:test"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { OpenspecOrchestratePlugin } from "../src/index"
+import * as poller from "../src/core/workflow/poller"
 
 const mockInput = {
   directory: "/tmp/test-consumer",
@@ -83,6 +86,36 @@ describe("OpenspecOrchestratePlugin", () => {
     const agent = config.agent as Record<string, unknown>
     expect(agent["build"]).toBeDefined()
     expect(agent["openspec-orchestrator"]).toBeDefined()
+  })
+
+  test("未初始化 worktree（无 context.json）→ 不启动 poller", async () => {
+    const root = `/tmp/test-plugin-nocontext-${Date.now()}`
+    mkdirSync(root, { recursive: true })
+    const spy = spyOn(poller, "startPolling")
+    try {
+      await OpenspecOrchestratePlugin({ ...mockInput, worktree: root } as any)
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("已初始化 worktree（存在 context.json）→ 启动 poller", async () => {
+    const root = `/tmp/test-plugin-ctx-${Date.now()}`
+    mkdirSync(join(root, ".opencode", ".orchestrate_state"), { recursive: true })
+    writeFileSync(
+      join(root, ".opencode", ".orchestrate_state", "context.json"),
+      JSON.stringify({ changeId: "c1", taskGroupId: "1" })
+    )
+    const spy = spyOn(poller, "startPolling")
+    try {
+      await OpenspecOrchestratePlugin({ ...mockInput, worktree: root } as any)
+      expect(spy).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
   })
 
 })

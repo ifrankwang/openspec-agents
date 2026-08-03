@@ -250,6 +250,9 @@ export function applyTransition(
 
   rollbackChildren(item)
   incrementRetry(item)
+  // 回退目标 step 的裁决 tags 一并重置：残留 passed/failed 会让 recommendForItem 误判
+  // 该 step 已裁决而不重新分派（review failed 回退 implement 时 developer passed 残留 → blocked 死锁）。
+  clearStepTags(item, resolved.step.id)
   item.phase = resolved.phaseName
   item.currentStep = resolved.step.id
   return { advanced: true, target: target }

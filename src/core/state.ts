@@ -68,7 +68,8 @@ export async function readStateByWorktree(worktree: string, changeId?: string): 
   if (changeId) {
     return readStateByChangeId(worktree, changeId)
   }
-  throw new Error("change_id required for non-worktree context")
+  // 非 worktree 且未传 changeId：无可用编排上下文，与「无可用编排会话」语义一致，返回 null 兜底
+  return null
 }
 
 // ─── 旧格式读兼容迁移：taskGroups → workItems（单轨化后 taskGroups 不再持久化）───

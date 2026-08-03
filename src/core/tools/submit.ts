@@ -185,6 +185,13 @@ function buildIssueChild(nc: NonNullable<AgentSubmitParams["new_children"]>[numb
   return child
 }
 
+/** 清空 review 三个验证 step 的裁决 tags（审查未过/任务驳回回退时复核标记重置，下次进入 review 各层重新分派）。 */
+function clearReviewVerificationTags(item: WorkItem): void {
+  clearStepTags(item, "verify_tool")
+  clearStepTags(item, "verify_task")
+  clearStepTags(item, "verify_quality")
+}
+
 /** blocker 提交后的 reset 助手：tasks 全 open + 清 review 层验证标记（对齐旧 resetForBlocker）。 */
 function resetTasksForBlocker(item: WorkItem): void {
   const tasks = taskListOf(item)
@@ -193,9 +200,7 @@ function resetTasksForBlocker(item: WorkItem): void {
     t.rejectReason = null
   }
   writeTasks(item, tasks)
-  clearStepTags(item, "verify_tool")
-  clearStepTags(item, "verify_task")
-  clearStepTags(item, "verify_quality")
+  clearReviewVerificationTags(item)
 }
 
 /** analyze step 参数处理：execution_boundary（passed 必传）、blockers/blocker_updates、无未解决 blocker 门禁。 */
@@ -431,6 +436,12 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       exemptIds: params.exempt_issue_ids,
       newChildren: accepted,
     })
+
+    // review 阶段提交 failed：回退后清空三个审查 step 的裁决 tags。
+    // 残留 passed/failed 会让 recommendForItem 误判已裁决而跳过分派，并触发「重复提交守卫」。
+    if (stepPhase === "review" && params.verdict === "failed") {
+      clearReviewVerificationTags(item)
+    }
 
     await writeState(ctx.worktree, state)
     const dedupNote = dedupedCount > 0 ? `\n${dedupedCount} 个重复 issue 已自动跳过。` : ""

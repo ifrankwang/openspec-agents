@@ -223,17 +223,18 @@ describe("poller 写回与占位", () => {
     }
   })
 
-  test("pollAdapter 对单个 adapter 拉取；无编排会话时返回错误不落盘", async () => {
+  test("pollAdapter 对单个 adapter 拉取；无编排会话时静默跳过不产生 error", async () => {
     const root = `/tmp/opxpoll-7-${Date.now()}`
     const { wt } = freshSetup(root)
     __resetCollectors()
     try {
-      // 未 init → 无编排会话
+      // 未 init → 无编排会话 → 静默跳过（不返回 error，避免 poller 刷 console.error 噪音）
       const fake = new FakeAdapter("fake")
       fake.raw = [{ id: "x1" }]
       const r = await pollAdapter(wt, fake, CID)
       expect(r.added).toEqual([])
-      expect(r.error).toContain("无可用编排会话")
+      expect(r.skipped).toEqual([])
+      expect(r.error).toBeUndefined()
     } finally {
       __resetCollectors()
       try { rmSync(root, { recursive: true, force: true }) } catch {}
