@@ -16,16 +16,4 @@ export const DIMENSION_AGENT_MAP: Record<ReviewDimension, string> = {
   maintainability: "openspec-reviewer-maintainability",
 }
 
-export const AGENT_TO_SUBMIT_TOOL: Record<string, string> = {
-  "openspec-architect": "opx_arch_submit",
-  "openspec-developer": "opx_dev_submit",
-  "openspec-reviewer-tool": "opx_tool_review_submit",
-  "openspec-reviewer-task": "opx_task_review_submit",
-  "openspec-reviewer-style": "opx_quality_review_submit",
-  "openspec-reviewer-architecture": "opx_quality_review_submit",
-  "openspec-reviewer-performance": "opx_quality_review_submit",
-  "openspec-reviewer-security": "opx_quality_review_submit",
-  "openspec-reviewer-maintainability": "opx_quality_review_submit",
-}
-
 export const PHASE_ORDER: Phase[] = ["task_analysis", "dev_impl", "review"]

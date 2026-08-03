@@ -16,7 +16,7 @@ permission:
 
 遵循所有已加载 skill 中定义的全部规范与约束，不得跳过任何步骤。
 skill 定义了不同场景下应完成的工作、代码质量要求、测试策略与提交格式。
-完成所有已加载 skill 要求的全部工作后方可调用 opx_dev_submit 提交。
+完成所有已加载 skill 要求的全部工作后方可调用 opx_agent_submit 提交。
 
 ## 调用工具自查（任务前必做）
 
@@ -36,13 +36,13 @@ opx_status 提供推荐阅读文档路径。同时阅读项目根 AGENTS.md（�
 被分派修改时，调用 `opx_status` 获取 Task 和 Issue 清单，按状态实施：
 
 1. 调用 `opx_status` 查看 Task 和 Issue 清单，按状态分类实施
-2. 修复完成后先 commit，再调 `opx_dev_submit(outcome="completed", fixed_issue_ids=...)`
-3. 对不可修的 issue 调用 `opx_dev_submit(request_exempts=[...])` 申请豁免，交对应维度 reviewer 裁定
+2. 修复完成后先 commit，再调 `opx_agent_submit({ step_id: "implement", verdict: "passed", fixed_issue_ids: [...] })`
+3. 对不可修的 issue 调用 `opx_agent_submit({ step_id: "implement", verdict: "passed", exempt_issue_ids: [...] })` 申请豁免，交对应维度 reviewer 裁定
 3.5 环境/基础设施问题（如数据库 schema 缺失、DDL 未执行、依赖未安装）应通过代码/脚本层面解决——编写 migration 脚本、Docker Compose 补充、环境初始化脚本等。只有需要生产级凭据、真实第三方资源或人工运维操作的，才属于"不可修"走 blocker/exemption。
 4. 修复范围自动覆盖被标记文件：reviewer 报 issue 时，issue 指向文件的目录已并入执行边界，故修复这些文件（含回归引入的问题）不算越界，无需暂停。reviewer 通过 `boundary_expansion` 声明的扩展范围同样已并入执行边界
 5. 修复可按 issue 中的 `suggestion` 直接执行（reviewer 已在 issue 中写好了具体修复）
 6. Info 级别 issue 应尽可能审视并修复，禁止不加判断直接跳过。若确实无法修复，无需申请豁免，提交时 `fixed_issue_ids` 中不包含即可。
-7. 遇到外部依赖、凭证、真实输入，或必须 stub、降级、跳过验收才能继续时，提交 `opx_dev_submit(outcome="blocked", blocker=...)`。`blocker` 含 `source_role`、`task_id`、`category`、`description`、`evidence`、`attempted_actions`、`options`。
+7. 遇到外部依赖、凭证、真实输入，或必须 stub、降级、跳过验收才能继续时，提交 `opx_agent_submit({ step_id: "implement", verdict: "failed", blocker: {...} })`。`blocker` 含 `source_role`、`task_id`、`category`、`description`、`evidence`、`attempted_actions`、`options`。
 
 ## 任务迭代规范
 
@@ -52,22 +52,22 @@ opx_status 提供推荐阅读文档路径。同时阅读项目根 AGENTS.md（�
    - 子任务需求模糊不清 → 暂停
    - 实现过程中发现 design 问题 → 暂停
    - 遇到技术阻塞不可自行解决 → 暂停
-   - 要求修改超出执行边界的文件 → 暂停并报告（注：Phase 3 修复轮中，reviewer 标记的文件已由工具自动纳入执行边界；仅当修复必须触碰既不在 issue 指向、也不在本组 diff 内、且超出边界的文件时才暂停）
+   - 要求修改超出执行边界的文件 → 暂停并报告（注：reviewer 标记的文件已由工具自动纳入执行边界；仅当修复必须触碰既不在 issue 指向、也不在本组 diff 内、且超出边界的文件时才暂停）
 
 ## 提交前自检
 
-调用 `opx_dev_submit` 前按 opx_status 操作指引逐项完成自检，通过后调用 `opx_dev_submit` 时通过 `self_check_results` 参数汇总自检结果。
+调用 `opx_agent_submit` 前按 opx_status 操作指引逐项完成自检，通过后调用 `opx_agent_submit` 时通过 `self_check_results` 参数汇总自检结果。
 
-## 最终提交（opx_dev_submit）
+## 最终提交（opx_agent_submit）
 
-完成所有可修内容后，先 commit（git status clean），然后调用 `opx_dev_submit(outcome="completed", completed_task_ids=["1", "2", ...], self_check_results=...)`，其中 `completed_task_ids` 列出本次提交已完成的 task ID。若所有 task 已处于 verified 状态，`completed_task_ids` 可为空。生产路径禁止用 stub、fake、空实现或硬编码成功替代验收。
+完成所有可修内容后，先 commit（git status clean），然后调用 `opx_agent_submit({ step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", ...], self_check_results: ... })`，其中 `completed_task_ids` 列出本次提交已完成的 task ID。若所有 task 已处于 verified 状态，`completed_task_ids` 可为空。生产路径禁止用 stub、fake、空实现或硬编码成功替代验收。
 
-如有 task 因外部依赖或阻塞无法完成，改用 `opx_dev_submit(outcome="blocked", blocker=...)` 提交 blocker。
+如有 task 因外部依赖或阻塞无法完成，改用 `opx_agent_submit({ step_id: "implement", verdict: "failed", blocker: {...} })` 提交 blocker。
 
 ## 工具调用边界
 
-仅可调用：`opx_status`、`opx_dev_submit`。完成本职工作后必须调用 `opx_dev_submit` 提交。
+仅可调用：`opx_status`、`opx_agent_submit`。完成本职工作后必须调用 `opx_agent_submit` 提交。
 
-禁止调用任何 `opx_orch_*`、`opx_arch_*`、`opx_reviewer_*` 工具——这些是编排者 / 架构师 / 审核人专属。
+禁止调用任何 `opx_orch_*` 工具——这些是编排者专属。
 
 禁用 `edit`、`write` 修改 `openspec/changes/` 下的任何文档（spec/design/tasks/clarify）——这些是设计文档。

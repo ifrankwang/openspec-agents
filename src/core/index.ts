@@ -1,10 +1,9 @@
 // types
 export type {
   OrchestrateState, TaskGroupState, TaskItem, IssueItem, BlockerItem,
-  ExecutionBoundary, Phases, ReviewPhaseData, ReviewLayerData,
-  SimplePhaseData, ValidationStep, QualityLayerProgress,
+  ExecutionBoundary, ValidationStep, QualityLayerProgress,
   Phase, BuildPhaseTarget, OrchestrateStatus, TaskStatus, IssueStatus,
-  ReviewDimension, Dimension, DimensionVerdict, BlockerStatus,
+  ReviewDimension, Dimension, BlockerStatus,
 } from "./types.js"
 export { CODE_DIMENSIONS, REVIEW_DIMENSIONS, TASK_STATUSES, ISSUE_STATUSES } from "./types.js"
 
@@ -12,22 +11,17 @@ export { CODE_DIMENSIONS, REVIEW_DIMENSIONS, TASK_STATUSES, ISSUE_STATUSES } fro
 export type { ToolContext, ToolResult } from "./tools/types.js"
 export type {
   InitParams, SetWorktreeParams, UnattendedParams,
-  ArchSubmitParams, ArchBlockerParams, DevSubmitParams,
-  ToolReviewParams, TaskReviewParams, QualityReviewParams, ResolveReviewParams,
+  AgentSubmitParams,
 } from "./tools/types.js"
 export {
   initExecute, setWorktreeExecute, statusExecute, completeTaskGroupExecute, setUnattendedExecute,
 } from "./tools/lifecycle.js"
-export {
-  archSubmitExecute, archBlockerExecute, devSubmitExecute,
-  toolReviewSubmitExecute, taskReviewSubmitExecute, qualityReviewSubmitExecute,
-  resolveReviewExecute,
-} from "./tools/review.js"
+export { agentSubmitExecute } from "./tools/submit.js"
 
 // state
 export {
   readStateByWorktree, readStateByChangeId, writeState,
-  getStateDir, getStatePath,
+  getStateDir, getStatePath, upgradeWorkItemsFromTaskGroups,
 } from "./state.js"
 
 // git
@@ -48,24 +42,15 @@ export {
 
 // derive
 export {
-  assertOrchestrator, assertAgent, assertPassWithIssues,
-  findTaskGroup, deriveStatus, isReviewCompleted, allTasksVerified,
-  deriveCurrentAgents, hasBlockingIssues, isBlockingIssue, isStatusUnresolved,
-  handleRetryCheckpoint, computeRequiredDims, dimsWithPendingAction,
-  createEmptyPhases, createEmptyQualityProgress, phasesAllEmpty,
+  assertOrchestrator, assertAgent,
+  findTaskGroup, hasBlockingIssues, isBlockingIssue, isStatusUnresolved,
+  createEmptyQualityProgress, blockingIssues, taskGroupFromWorkItem,
 } from "./derive.js"
-
-// review
-export {
-  applyReviewGate, finalizeQualityPhase, deduplicateAndAddIssues, mergeExecutionBoundary,
-} from "./review.js"
 
 // views
 export {
-  renderOrchestratorView, renderArchitectView, renderDeveloperView,
-  renderToolReviewView, renderTaskReviewView, renderQualityReviewView,
-  formatFilePath, renderTaskItem,
-  renderIssueItem, renderIssueItemsGrouped, renderLayerIssues, sortIssuesByCategory,
+  renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
+  renderAgentSummaries, formatFilePath, renderTaskItem, formatSeverity,
 } from "./views.js"
 
 // dashboard
@@ -75,5 +60,5 @@ export { readDashboardState } from "./dashboard.js"
 export {
   STATE_DIR_NAME, STATE_SUBDIR_NAME, MAX_RETRIES,
   SEVERITY_LEVELS, BLOCKING_SEVERITIES,
-  ORCHESTRATOR_AGENT, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL, PHASE_ORDER,
+  ORCHESTRATOR_AGENT, DIMENSION_AGENT_MAP, PHASE_ORDER,
 } from "./constants.js"

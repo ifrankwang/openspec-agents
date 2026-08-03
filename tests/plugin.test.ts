@@ -19,7 +19,7 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(hooks.tool).toBeDefined()
   })
 
-  test("registers 12 opx_* tools", async () => {
+  test("registers 6 opx_* tools", async () => {
     const hooks = await OpenspecOrchestratePlugin(mockInput as any)
     const names = Object.keys(hooks.tool!)
     expect(names).toContain("opx_orch_init")
@@ -27,14 +27,8 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(names).toContain("opx_status")
     expect(names).toContain("opx_orch_complete_task_group")
     expect(names).toContain("opx_orch_set_unattended")
-    expect(names).toContain("opx_arch_submit")
-    expect(names).toContain("opx_dev_submit")
-    expect(names).toContain("opx_tool_review_submit")
-    expect(names).toContain("opx_task_review_submit")
-    expect(names).toContain("opx_quality_review_submit")
-    expect(names).toContain("opx_orch_resolve_review")
-    expect(names).toContain("opx_arch_blocker")
-    expect(names.length).toBe(12)
+    expect(names).toContain("opx_agent_submit")
+    expect(names.length).toBe(6)
     for (const n of names) {
       expect(typeof hooks.tool![n].execute).toBe("function")
     }

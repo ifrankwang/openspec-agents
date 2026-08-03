@@ -3,15 +3,8 @@ import {
   initExecute, setWorktreeExecute, statusExecute,
   completeTaskGroupExecute, setUnattendedExecute,
 } from "../../core/tools/lifecycle.js"
-import {
-  archSubmitExecute, archBlockerExecute, devSubmitExecute,
-  toolReviewSubmitExecute, taskReviewSubmitExecute,
-  qualityReviewSubmitExecute, resolveReviewExecute,
-} from "../../core/tools/review.js"
-import {
-  executionBoundarySchema, boundaryExpansionSchema, reviewIssue, blockerItem,
-  requestExemptItem, rejectedIssueItem, toolIssueItem, taskVerifyResult, validationStepSchema,
-} from "./schemas.js"
+import { agentSubmitExecute } from "../../core/tools/submit.js"
+import { agentSubmitSchema } from "./schemas.js"
 
 export const init = tool({
   description:
@@ -81,114 +74,11 @@ export const set_unattended = tool({
   },
 })
 
-export const arch_submit = tool({
+export const agent_submit = tool({
   description:
-    "架构师提交预检结果。仅 outcome=ready，所有 blocker 需先通过 opx_arch_blocker 处理。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    outcome: tool.schema.enum(["ready"]),
-    execution_boundary: executionBoundarySchema.optional(),
-  },
+    "通用 step 提交，按 step_id 路由到 workflow 对应 step。校验调用者属于该 step 的 agents（越权直接拒绝），提交后推进 workflow 状态机并写回编排状态。可通过 exempt_adjudications 对已申请豁免的 issue 进行裁定（dismissed→cancelled、rejected→回 todo）。",
+  args: agentSubmitSchema.shape,
   async execute(args, context) {
-    return archSubmitExecute(args as any, { worktree: context.worktree, agent: context.agent })
-  },
-})
-
-export const arch_blocker = tool({
-  description: "架构师记录/更新 blocker，不结束本环节。创建 mode 入库 awaiting_user；更新 mode 写入 user_response 并置 resolved。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    blocker_id: tool.schema.string().optional().describe("提供=更新模式；不提供=创建模式"),
-    blockers: tool.schema.array(blockerItem).optional().describe("创建模式：新增 blocker 列表"),
-    user_response: tool.schema.string().optional().describe("用户答复。创建模式有则立即 resolved；更新模式必传"),
-  },
-  async execute(args, context) {
-    return archBlockerExecute(args, { worktree: context.worktree, agent: context.agent })
-  },
-})
-
-export const dev_submit = tool({
-  description:
-    "developer 提交实现结果。outcome=completed 提交实现；outcome=blocked 上报 blocker。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    outcome: tool.schema.enum(["completed", "blocked"]).optional(),
-    completed_task_ids: tool.schema.array(tool.schema.string()).optional().describe("已完成的 task ID 列表"),
-    self_check_results: tool.schema.string().optional().describe("提交前自检结果汇总"),
-    blocker: blockerItem.optional(),
-    fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("确认修复的 issue ID 列表"),
-    request_exempts: tool.schema.array(requestExemptItem).optional().describe("不可修的 issue 申请豁免"),
-  },
-  async execute(args, context) {
-    return devSubmitExecute(args, { worktree: context.worktree, agent: context.agent })
-  },
-})
-
-export const tool_review_submit = tool({
-  description:
-    "工具审核层提交。跨维提交 tool issues（issues 自带 dimension 字段），含 UT 结果。调用者必须为 openspec-reviewer-tool。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    passed: tool.schema.boolean().describe("工具层是否通过。有未解决的 Low+ issue 时须设为 false"),
-    issues: tool.schema.array(toolIssueItem).optional().describe("跨维 issue，每个 item 需带 dimension"),
-    fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
-    exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("豁免裁定的 issue ID 列表"),
-    rejected_issue_ids: tool.schema.array(rejectedIssueItem).optional().describe("驳回的 issue 列表（含原因）"),
-    test_results: tool.schema.string().optional().describe("UT 运行结果摘要"),
-    boundary_expansion: boundaryExpansionSchema.optional().describe("执行边界扩展（仅 passed=false 时有效）"),
-  },
-  async execute(args, context) {
-    return toolReviewSubmitExecute(args, { worktree: context.worktree, agent: context.agent })
-  },
-})
-
-export const task_review_submit = tool({
-  description:
-    "任务审核层提交。验证 task 产出、服务启动、接口可用性、测试代码审查。调用者必须为 openspec-reviewer-task。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    passed: tool.schema.boolean().describe("任务层是否通过。有未解决的 Low+ issue 或 task 未通过时须设为 false"),
-    verified_task_ids: tool.schema.array(tool.schema.string()).optional().describe("已验证完成的 task ID 列表"),
-    failed_task_ids: tool.schema.array(taskVerifyResult).optional().describe("未完成的 task 列表（含原因）"),
-    issues: tool.schema.array(reviewIssue).optional().describe("测试代码审查 issue"),
-    fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
-    exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("豁免裁定的 issue ID 列表"),
-    rejected_issue_ids: tool.schema.array(rejectedIssueItem).optional().describe("驳回的 issue 列表（含原因）"),
-    boundary_expansion: boundaryExpansionSchema.optional().describe("执行边界扩展（仅 passed=false 时有效）"),
-    validation_steps: tool.schema.array(validationStepSchema).optional().describe("验证步骤执行摘要。必须覆盖 opx_status 操作指引中的全部步骤，已完成的标记 completed=true 并附 evidence，跳过的标记 completed=false 并附 skip_reason"),
-  },
-  async execute(args, context) {
-    return taskReviewSubmitExecute(args, { worktree: context.worktree, agent: context.agent })
-  },
-})
-
-export const quality_review_submit = tool({
-  description:
-    "AI 语义审查层提交。维度由调用者身份自动识别。调用者必须为 openspec-reviewer-{style|architecture|performance|security|maintainability}。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    passed: tool.schema.boolean().describe("本维度是否通过。有未解决的 Low+ issue 时须设为 false"),
-    issues: tool.schema.array(reviewIssue).optional().describe("新报审查 issue"),
-    fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("已修复的既有 issue ID 列表"),
-    exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("豁免裁定的 issue ID 列表"),
-    rejected_issue_ids: tool.schema.array(rejectedIssueItem).optional().describe("驳回的 issue 列表（含原因）"),
-    boundary_expansion: boundaryExpansionSchema.optional().describe("执行边界扩展（仅 passed=false 时有效）"),
-  },
-  async execute(args, context) {
-    return qualityReviewSubmitExecute(args, { worktree: context.worktree, agent: context.agent })
-  },
-})
-
-export const resolve_review = tool({
-  description:
-    "编排者在 review 阶段重试超上限（needs_user_decision）后，根据用户决策推进。decision=continue：重置审查进度后继续修复；decision=giveup：将剩余待审 issue 置为 exempted 后完成。",
-  args: {
-    change_id: tool.schema.string().min(1).describe("change ID"),
-    decision: tool.schema
-      .enum(["continue", "giveup"])
-      .describe("continue=继续修复；giveup=放弃"),
-  },
-  async execute(args, context) {
-    return resolveReviewExecute(args, { worktree: context.worktree, agent: context.agent })
+    return agentSubmitExecute(args as any, { worktree: context.worktree, agent: context.agent })
   },
 })

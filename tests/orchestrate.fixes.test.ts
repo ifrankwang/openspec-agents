@@ -1,239 +1,193 @@
 /**
- * 修复项测试：
- * 2+3: dev_submit / task_review_submit verified 清除 rejectReason
- * 4: finalizeQualityPhase 仅看 quality 层遗留 blocking issue
- * 6: deduplicateAndAddIssues 跨层去重区分 sourcePhase
+ * 修复项测试（新流单轨改写）：
+ * 2+3: 任务 rejectReason 清除（verify_task rejected → implement 重提 → verify_task verified）
+ * 4: resetReviewTagsOnFix 分层重置精确性（tool 层遗留不影响 quality 层）
+ * 6: dedupeNewChildren 跨层去重区分 sourcePhase
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { writeFileSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
+import { agent_submit } from "../src/adapters/opencode/tools"
+import { setupWithFakeGit, teardown, readState } from "./helpers"
 import {
-  init, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit
-} from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx } from "./helpers"
-import { deduplicateAndAddIssues, finalizeQualityPhase } from "../src/core/review"
-import type { OrchestrateState, TaskGroupState, IssueItem } from "../src/core/types"
-import { REVIEW_DIMENSIONS } from "../src/core/types"
-
-afterAll(() => { __setGitRunner(null) })
-
-// ─── 公共 fixture ───
+  setupToAnalyze, driveToVerifyTask, taskListOf, taskItemOf,
+} from "./helpers-workflow"
+import { createInitialWorkItem, isTerminalPhase } from "../src/core/workflow/engine"
+import { resetReviewTagsOnFix, dedupeNewChildren } from "../src/core/workflow/reset"
+import { tagKey } from "../src/core/workflow/types"
 
 const CID = "test-fixes"
 
-function setupWt(root: string, wt: string): string {
-  mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
-  writeFileSync(
-    join(wt, "openspec", "changes", CID, "tasks.md"),
-    `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2\n`,
-    "utf-8",
-  )
-  return wt
-}
+afterAll(() => { __setGitRunner(null) })
 
-function readStateSync(wt: string): any {
+/** 直接改写 state 的 review tag（模拟编排在任务驳回后重置复核标记，等价 checkpoint continue 清 tag）。 */
+function clearReviewTags(wt: string): void {
   const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
-  if (!existsSync(p)) return null
-  return JSON.parse(readFileSync(p, "utf-8"))
-}
-
-function mockStateForUnit(overrides?: Partial<OrchestrateState>): OrchestrateState {
-  return {
-    changeId: "fix-unit",
-    isolationNamespace: "a1b2c3",
-    taskGroupId: "1",
-    baseBranch: "main",
-    taskGroups: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    ...overrides,
-  } as OrchestrateState
-}
-
-function mockTgForUnit(overrides?: Partial<TaskGroupState>): TaskGroupState {
-  return {
-    id: "1",
-    name: "G1",
-    taskCount: 2,
-    worktreePath: null,
-    branchName: null,
-    baseRef: null,
-    executionBoundary: null,
-    relevantSpecs: [],
-    status: "review",
-    phases: {
-      architect_review: { completed: true },
-      review: {
-        retryCount: 0,
-        lastResolvedRetryCount: 0,
-        tool: { completed: true },
-        task: { completed: true },
-        quality: {
-          progress: Object.fromEntries(REVIEW_DIMENSIONS.map((d) => [d, "pending"])) as TaskGroupState["phases"]["review"]["quality"]["progress"],
-        },
-      },
-    },
-    tasks: [],
-    issues: [],
-    blockers: [],
-    ...overrides,
-  } as TaskGroupState
-}
-
-function mockIssue(overrides: Partial<IssueItem>): IssueItem {
-  return {
-    id: "i1",
-    dimension: "architecture",
-    sourcePhase: "quality",
-    severity: "High",
-    file: "src/Foo.java",
-    line: 1,
-    description: "issue",
-    suggestion: "fix",
-    status: "open",
-    refixCount: 0,
-    rootCauseGuess: null,
-    exemptReason: null,
-    rejectReason: null,
-    ...overrides,
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  const item = state.workItems.find((w: any) => w.id === "task:1")
+  for (const key of Object.keys(item.tags)) {
+    if (key.startsWith("verify_")) delete item.tags[key]
   }
+  writeFileSync(p, JSON.stringify(state, null, 2))
 }
 
-// ─── 修复项 2+3: rejectReason 清除 ───
+// ─── 修复项 2+3: 任务 rejectReason 清除 ───
 
-describe("修复项2+3: dev_submit / task_review_submit verified 清除 rejectReason", () => {
-  test("rejected → dev_submit(submitted) → task_review_submit(verified) rejectReason 为 null", async () => {
+describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
+  test("verify_task rejected（rejectReason 落盘）→ implement 重提清除 → verify_task verified 保持清除", async () => {
     const root = `/tmp/fix23-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt),
-      a = makeCtx("openspec-architect", wt),
-      d = makeCtx("openspec-developer", wt),
-      toolR = makeCtx("openspec-reviewer-tool", wt),
-      taskR = makeCtx("openspec-reviewer-task", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const { item: preTask } = await driveToVerifyTask(wt, CID)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    const devWt = readStateSync(wt).taskGroups.find((g: any) => g.id === "1").worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+      // verify_task 驳回 task 1
+      const rReject = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_task", verdict: "failed",
+          verified_tasks: taskListOf(preTask).filter((t: any) => t.id !== "1").map((t: any) => t.id),
+          failed_tasks: [{ task_id: "1", reason: "Incomplete" }],
+        },
+        ctx.taskR
+      )
+      expect(rReject).toContain("failed")
 
-    let state = readStateSync(wt)
-    let tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
+      let item = taskItemOf(readState(wt, CID)!)
+      let t1 = taskListOf(item).find((t: any) => t.id === "1")
+      expect(t1.status).toBe("rejected")
+      expect(t1.rejectReason).toBe("Incomplete")
+      // 驳回触发 on_fail 回 implement
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
 
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
+      // dev 重提被驳回的 task → status submitted + rejectReason 清除
+      const rDev = await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1"] },
+        ctx.dev
+      )
+      expect(rDev).toContain("passed")
+      item = taskItemOf(readState(wt, CID)!)
+      t1 = taskListOf(item).find((t: any) => t.id === "1")
+      expect(t1.status).toBe("submitted")
+      expect(t1.rejectReason).toBeNull()
 
-    await task_review_submit.execute({change_id: CID, passed: false,
-      verified_task_ids: ["2"], failed_task_ids: [{ task_id: "1", reason: "Incomplete" }],
-      issues: [], fixed_issue_ids: [],}, taskR)
-
-    state = readStateSync(wt)
-    const t1AfterReject = state.taskGroups.find((g: any) => g.id === "1").tasks.find((t: any) => t.id === "1")
-    expect(t1AfterReject.status).toBe("rejected")
-    expect(t1AfterReject.rejectReason).toBe("Incomplete")
-
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1"] }, d)
-
-    state = readStateSync(wt)
-    const t1AfterDev = state.taskGroups.find((g: any) => g.id === "1").tasks.find((t: any) => t.id === "1")
-    expect(t1AfterDev.status).toBe("submitted")
-    expect(t1AfterDev.rejectReason).toBeNull()
-
-    await task_review_submit.execute({change_id: CID, passed: true,
-      verified_task_ids: ["1"], failed_task_ids: [],
-      issues: [], fixed_issue_ids: [],}, taskR)
-
-    state = readStateSync(wt)
-    const t1AfterVerified = state.taskGroups.find((g: any) => g.id === "1").tasks.find((t: any) => t.id === "1")
-    expect(t1AfterVerified.status).toBe("verified")
-    expect(t1AfterVerified.rejectReason).toBeNull()
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // 任务驳回回退不触发 issue 分层重置（无 fixed_issue_ids），旧 review tag 仍在；
+      // 模拟编排重置复核标记后重走 verify_tool → verify_task，验证 verified 且 rejectReason 保持清除
+      clearReviewTags(wt)
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+      const rVerify = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_task", verdict: "passed",
+          verified_tasks: taskListOf(taskItemOf(readState(wt, CID)!)).map((t: any) => t.id),
+        },
+        ctx.taskR
+      )
+      expect(rVerify).toContain("passed")
+      item = taskItemOf(readState(wt, CID)!)
+      t1 = taskListOf(item).find((t: any) => t.id === "1")
+      expect(t1.status).toBe("verified")
+      expect(t1.rejectReason).toBeNull()
+    } finally { teardown(root) }
   })
 })
 
-// ─── 修复项 4: finalizeQualityPhase 仅看 quality 层遗留 blocking ───
+// ─── 修复项 4: resetReviewTagsOnFix 分层重置精确性 ───
 
-describe("修复项4: finalizeQualityPhase 不被 tool 层遗留 blocking issue 影响", () => {
-  test("quality 全维度 passed + tool 层 open blocking issue → complete", async () => {
-    const tmpRoot = `/tmp/fix4-${Date.now()}`
-    mkdirSync(tmpRoot, { recursive: true })
-
-    const tg = mockTgForUnit({
-      issues: [mockIssue({ id: "t1", sourcePhase: "tool", dimension: "style", severity: "High", status: "open" })],
+describe("修复项4: resetReviewTagsOnFix 分层重置（tool 层遗留不影响 quality 层）", () => {
+  function itemWithReviewTags(): any {
+    const item = createInitialWorkItem({
+      id: "task:1", source: "openspec", externalId: "1", type: "task",
+      title: "G1", description: "G1",
     })
-    for (const d of REVIEW_DIMENSIONS) {
-      tg.phases.review.quality.progress[d] = "passed"
-    }
-    const state = mockStateForUnit({ taskGroups: [tg] })
+    item.tags[tagKey("verify_tool", "openspec-reviewer-tool")] = "passed"
+    item.tags[tagKey("verify_task", "openspec-reviewer-task")] = "passed"
+    item.tags[tagKey("verify_quality", "openspec-reviewer-style")] = "passed"
+    item.tags[tagKey("verify_quality", "openspec-reviewer-architecture")] = "passed"
+    return item
+  }
 
-    const result = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
-    expect(result).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
-
-    try { rmSync(tmpRoot, { recursive: true, force: true }) } catch {}
+  test("tool 层修复仅重置 verify_tool，verify_task/quality 不受影响", () => {
+    const item = itemWithReviewTags()
+    resetReviewTagsOnFix(item, { fixedSourcePhases: ["tool"], exemptSourcePhases: [], touchedQualityDims: [] })
+    expect(item.tags[tagKey("verify_tool", "openspec-reviewer-tool")]).toBeUndefined()
+    expect(item.tags[tagKey("verify_task", "openspec-reviewer-task")]).toBe("passed")
+    expect(item.tags[tagKey("verify_quality", "openspec-reviewer-style")]).toBe("passed")
   })
 
-  test("quality 全维度 passed + quality 层 open blocking issue → 回退", async () => {
-    const tmpRoot = `/tmp/fix4b-${Date.now()}`
-    mkdirSync(tmpRoot, { recursive: true })
-
-    const tg = mockTgForUnit({
-      issues: [mockIssue({ id: "q1", sourcePhase: "quality", dimension: "style", severity: "High", status: "open" })],
+  test("quality 层修复仅重置对应维度 quality tag（其余维度不受影响）", () => {
+    const item = itemWithReviewTags()
+    resetReviewTagsOnFix(item, {
+      fixedSourcePhases: ["quality"], exemptSourcePhases: [], touchedQualityDims: ["style"],
     })
-    for (const d of REVIEW_DIMENSIONS) {
-      tg.phases.review.quality.progress[d] = "passed"
-    }
-    const state = mockStateForUnit({ taskGroups: [tg] })
+    expect(item.tags[tagKey("verify_quality", "openspec-reviewer-style")]).toBeUndefined()
+    expect(item.tags[tagKey("verify_quality", "openspec-reviewer-architecture")]).toBe("passed")
+    // 任一代码变更都要求 tool 层确定性检查重跑
+    expect(item.tags[tagKey("verify_tool", "openspec-reviewer-tool")]).toBeUndefined()
+  })
 
-    const result = await finalizeQualityPhase(state, tg, "architecture", true, tmpRoot)
-    expect(result).toContain("审查未通过")
-
-    try { rmSync(tmpRoot, { recursive: true, force: true }) } catch {}
+  test("task 层豁免重置 verify_tool + verify_task", () => {
+    const item = itemWithReviewTags()
+    resetReviewTagsOnFix(item, { fixedSourcePhases: [], exemptSourcePhases: ["task"], touchedQualityDims: [] })
+    expect(item.tags[tagKey("verify_tool", "openspec-reviewer-tool")]).toBeUndefined()
+    expect(item.tags[tagKey("verify_task", "openspec-reviewer-task")]).toBeUndefined()
+    expect(item.tags[tagKey("verify_quality", "openspec-reviewer-style")]).toBe("passed")
   })
 })
 
-// ─── 修复项 6: deduplicateAndAddIssues 跨层去重区分 sourcePhase ───
+// ─── 修复项 6: dedupeNewChildren 跨层去重区分 sourcePhase ───
 
-describe("修复项6: deduplicateAndAddIssues 跨层去重区分 sourcePhase", () => {
+describe("修复项6: dedupeNewChildren 跨层去重区分 sourcePhase", () => {
+  function issueChild(sourcePhase: string, overrides: Record<string, unknown> = {}): any {
+    const c = createInitialWorkItem({
+      id: "issue:9", source: "openspec", externalId: "9", type: "issue",
+      title: "dup", description: "dup desc", severity: "Low",
+    })
+    c.metadata["source_phase"] = sourcePhase
+    c.metadata["dimension"] = "style"
+    c.metadata["file"] = "src/Dup.java"
+    c.metadata["line"] = 10
+    for (const [k, v] of Object.entries(overrides)) c.metadata[k] = v
+    return c
+  }
+
   test("同 file/line/description 不同 sourcePhase 不去重", () => {
-    const existing: IssueItem[] = [mockIssue({
-      id: "e1", dimension: "style", sourcePhase: "tool",
-      file: "src/Dup.java", line: 10, description: "dup desc", status: "open",
-    })]
+    const item = createInitialWorkItem({
+      id: "task:1", source: "openspec", externalId: "1", type: "task",
+      title: "G1", description: "G1",
+    })
+    item.children.push(issueChild("tool"))
 
-    const res = deduplicateAndAddIssues(
-      [{ severity: "Low", file: "src/Dup.java", line: 10, description: "dup desc", suggestion: "fix" }],
-      existing, "style", "quality", 100,
-    )
-
-    expect(res.dedupedCount).toBe(0)
-    expect(res.newIssues).toHaveLength(1)
-    expect(res.newIssues[0].sourcePhase).toBe("quality")
-    expect(res.nextIssueId).toBe(101)
+    const { accepted, dedupedCount } = dedupeNewChildren(item, [issueChild("quality")])
+    expect(dedupedCount).toBe(0)
+    expect(accepted).toHaveLength(1)
+    expect(accepted[0].metadata["source_phase"]).toBe("quality")
   })
 
   test("同 file/line/description 同 sourcePhase 去重", () => {
-    const existing: IssueItem[] = [mockIssue({
-      id: "e1", dimension: "style", sourcePhase: "tool",
-      file: "src/Dup.java", line: 10, description: "dup desc", status: "open",
-    })]
+    const item = createInitialWorkItem({
+      id: "task:1", source: "openspec", externalId: "1", type: "task",
+      title: "G1", description: "G1",
+    })
+    item.children.push(issueChild("tool"))
 
-    const res = deduplicateAndAddIssues(
-      [{ severity: "Low", file: "src/Dup.java", line: 10, description: "dup desc", suggestion: "fix" }],
-      existing, "style", "tool", 100,
-    )
+    const { accepted, dedupedCount } = dedupeNewChildren(item, [issueChild("tool")])
+    expect(dedupedCount).toBe(1)
+    expect(accepted).toHaveLength(0)
+  })
 
-    expect(res.dedupedCount).toBe(1)
-    expect(res.newIssues).toHaveLength(0)
-    expect(res.nextIssueId).toBe(100)
+  test("已终态 child 不参与判重（reviewer 可重报已关闭问题）", () => {
+    const item = createInitialWorkItem({
+      id: "task:1", source: "openspec", externalId: "1", type: "task",
+      title: "G1", description: "G1",
+    })
+    const closed = issueChild("tool")
+    closed.phase = "done"
+    item.children.push(closed)
+
+    const { accepted, dedupedCount } = dedupeNewChildren(item, [issueChild("tool")])
+    expect(dedupedCount).toBe(0)
+    expect(accepted).toHaveLength(1)
   })
 })

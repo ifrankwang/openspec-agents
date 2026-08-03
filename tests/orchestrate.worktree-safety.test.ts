@@ -1,8 +1,9 @@
 /**
- * 编排 worktree 安全测试：
+ * 编排 worktree 安全测试（新流单轨）：
  * - set_worktree 分支安全守卫（merge 失败 + 有本地提交 → 复用，无本地提交 → 清理重建）
- * - init recovery 条件清空 worktree 引用（仅 task_analysis 清空，dev_impl 保留）
- * - quality_review_submit 并发写锁（并行 reviewer 各自 issue/verdict 均保留）
+ * - init recovery 对 worktree 引用的行为（新流 applyRecoveryState 仅重置阶段/tags，不清 worktree 资源）
+ * - agent_submit(verify_quality) 双并发写锁（并行 reviewer 各自 verdict/issue 均保留，不丢 tag）
+ * - 锁函数 acquire/release 与锁路径归一化
  *
  * 运行：bun test
  */
@@ -14,10 +15,10 @@ import { __setGitRunner } from "../src/core/git"
 import { acquireLock, releaseLock, getLockPath, writeState } from "../src/core/state"
 import type { OrchestrateState } from "../src/core/types"
 import {
-  init, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit, quality_review_submit
+  init, set_worktree, agent_submit,
 } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx } from "./helpers"
+import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+import { setupToAnalyze, driveToQuality, DIMENSION_AGENTS } from "./helpers-workflow"
 
 const CID = "test-wtsafe"
 afterAll(() => { __setGitRunner(null) })
@@ -34,37 +35,10 @@ function freshWt(root: string): string {
   return wt
 }
 
-function readStateSync(wt: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
-  if (!existsSync(p)) return null
-  return JSON.parse(readFileSync(p, "utf-8"))
-}
-
-function findTg(wt: string): any {
-  return readStateSync(wt).taskGroups.find((g: any) => g.id === "1")
-}
-
-/** init → arch_submit → set_worktree → dev_submit → recovery review → tool/task 通过（review 就绪）。
- *  注：真实推荐时序为 init → set_worktree → arch_submit → dev_submit（set_worktree 无阶段守卫，G1 已验证）；
- *  本 helper 中 arch_submit 先于 set_worktree 属兼容路径验证。 */
-async function setupThroughReviewReady(wt: string, fakeGit: FakeGitRunner): Promise<void> {
-  const o = makeCtx("openspec-orchestrator", wt)
-  const a = makeCtx("openspec-architect", wt)
-  const d = makeCtx("openspec-developer", wt)
-  const toolR = makeCtx("openspec-reviewer-tool", wt)
-  const taskR = makeCtx("openspec-reviewer-task", wt)
-
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({ change_id: CID, outcome: "ready",
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } }, a)
-  await set_worktree.execute({ change_id: CID }, o)
-  const devWt = findTg(wt).worktreePath
-  await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-  await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, o)
-  await set_worktree.execute({ change_id: CID }, o)
-  await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-  await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
+/** 读当前 task WorkItem（workItems 单轨事实源；旧 findTg 读 taskGroups 已随 M1e-1 移除）。 */
+function taskItemOf(wt: string): any {
+  const state = readState(wt, CID)
+  return state?.workItems?.find((w: any) => w.id === "task:1")
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -76,180 +50,175 @@ describe("W1. set_worktree 分支安全守卫", () => {
   // W1.1 merge 失败 + 分支有本地提交 → 复用不删分支，baseRef 重算
   test("已有 worktree 分叉 + revListCount>0 → 复用不删分支", async () => {
     const root = `/tmp/wts-w1a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const first = await set_worktree.execute({ change_id: CID }, o)
-    expect(first).toContain("已创建 worktree")
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      const first = await set_worktree.execute({ change_id: CID }, o)
+      expect(first).toContain("已创建 worktree")
 
-    const existingPath = findTg(wt).worktreePath
-    fakeGit.forceMergeFailure = true
-    fakeGit.revListCount = 5
+      const existingPath = taskItemOf(wt).metadata["worktree_path"]
+      fakeGit.forceMergeFailure = true
+      fakeGit.revListCount = 5
 
-    const second = await set_worktree.execute({ change_id: CID }, o)
-    expect(second).toContain("复用已有 worktree")
+      const second = await set_worktree.execute({ change_id: CID }, o)
+      expect(second).toContain("复用已有 worktree")
 
-    expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(false)
 
-    const tg = findTg(wt)
-    expect(tg.worktreePath).toBe(existingPath)
-    expect(tg.branchName).toBe(`task-group/${CID}/1`)
-    expect(tg.baseRef).toBe(fakeGit.baseRef)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const item = taskItemOf(wt)
+      expect(item.metadata["worktree_path"]).toBe(existingPath)
+      expect(item.metadata["branch_name"]).toBe(`task-group/${CID}/1`)
+      expect(item.metadata["base_ref"]).toBe(fakeGit.baseRef)
+    } finally { teardown(root) }
   })
 
   // W1.2 merge 失败 + 分支无本地提交 → 删除重建
   test("已有 worktree 分叉 + revListCount=0 → 删除重建", async () => {
     const root = `/tmp/wts-w1b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const first = await set_worktree.execute({ change_id: CID }, o)
-    expect(first).toContain("已创建 worktree")
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      const first = await set_worktree.execute({ change_id: CID }, o)
+      expect(first).toContain("已创建 worktree")
 
-    const existingPath = findTg(wt).worktreePath
-    fakeGit.forceMergeFailure = true
-    fakeGit.revListCount = 0
+      const existingPath = taskItemOf(wt).metadata["worktree_path"]
+      fakeGit.forceMergeFailure = true
+      fakeGit.revListCount = 0
 
-    const second = await set_worktree.execute({ change_id: CID }, o)
-    expect(second).toContain("已创建 worktree")
+      const second = await set_worktree.execute({ change_id: CID }, o)
+      expect(second).toContain("已创建 worktree")
 
-    expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
 
-    const tg = findTg(wt)
-    expect(tg.worktreePath).toBe(existingPath)
-    expect(tg.baseRef).toBe(fakeGit.baseRef)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const item = taskItemOf(wt)
+      expect(item.metadata["worktree_path"]).toBe(existingPath)
+      expect(item.metadata["base_ref"]).toBe(fakeGit.baseRef)
+    } finally { teardown(root) }
   })
 })
 
 // ════════════════════════════════════════════════════════════════
-//  Behavior 2: init recovery 条件清空 worktree 引用
+//  Behavior 2: init recovery 对 worktree 引用
 // ════════════════════════════════════════════════════════════════
 
-describe("W2. init recovery 条件清空 worktree 引用", () => {
+describe("W2. init recovery 对 worktree 引用", () => {
 
-  // W2.1 recovery 到 dev_impl → 保留原 worktree 引用
-  test("recovery dev_impl → worktreePath/branchName/baseRef 保留", async () => {
+  // W2.1 recovery 到 dev_impl → 保留 worktree 引用
+  test("recovery dev_impl → worktree_path/branch_name/base_ref 保留", async () => {
     const root = `/tmp/wts-w2a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({ change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
-      makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, o)
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await set_worktree.execute({ change_id: CID }, o)
 
-    const orig = findTg(wt)
-    expect(orig.worktreePath).not.toBeNull()
-    expect(orig.baseRef).not.toBeNull()
+      const orig = taskItemOf(wt)
+      expect(orig.metadata["worktree_path"]).not.toBeNull()
+      expect(orig.metadata["base_ref"]).not.toBeNull()
 
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "dev_impl" } }, o)
+      await init.execute({
+        change_id: CID, task_group_id: "1",
+        recovery: { phase: "dev_impl" } }, o)
 
-    const tg = findTg(wt)
-    expect(tg.worktreePath).toBe(orig.worktreePath)
-    expect(tg.branchName).toBe(orig.branchName)
-    expect(tg.baseRef).toBe(orig.baseRef)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const item = taskItemOf(wt)
+      expect(item.metadata["worktree_path"]).toBe(orig.metadata["worktree_path"])
+      expect(item.metadata["branch_name"]).toBe(orig.metadata["branch_name"])
+      expect(item.metadata["base_ref"]).toBe(orig.metadata["base_ref"])
+      // 阶段重置到 implement
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+    } finally { teardown(root) }
   })
 
-  // W2.2 recovery 到 task_analysis → 仍清空 worktree 引用
-  test("recovery task_analysis → worktreePath/branchName/baseRef 清空", async () => {
+  // W2.2 recovery 到 task_analysis → 阶段/tags 重置，worktree 引用保留
+  test("recovery task_analysis → 阶段重置但 worktree 引用保留", async () => {
     const root = `/tmp/wts-w2b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({ change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
-      makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, o)
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await set_worktree.execute({ change_id: CID }, o)
 
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "task_analysis" } }, o)
+      const orig = taskItemOf(wt)
+      await init.execute({
+        change_id: CID, task_group_id: "1",
+        recovery: { phase: "task_analysis" } }, o)
 
-    const tg = findTg(wt)
-    expect(tg.worktreePath).toBeNull()
-    expect(tg.branchName).toBeNull()
-    expect(tg.baseRef).toBeNull()
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const item = taskItemOf(wt)
+      // applyRecoveryState 仅重置阶段/tags/tasks，不清 worktree 资源
+      expect(item.phase).toBe("todo")
+      expect(item.currentStep).toBe("analyze")
+      expect(item.metadata["worktree_path"]).toBe(orig.metadata["worktree_path"])
+      expect(item.metadata["branch_name"]).toBe(orig.metadata["branch_name"])
+      expect(item.metadata["base_ref"]).toBe(orig.metadata["base_ref"])
+    } finally { teardown(root) }
   })
 })
 
 // ════════════════════════════════════════════════════════════════
-//  Behavior 3: quality_review_submit 并发写锁
+//  Behavior 3: agent_submit(verify_quality) 并发写锁
 // ════════════════════════════════════════════════════════════════
 
-describe("W3. quality_review_submit 并发写锁", () => {
+describe("W3. agent_submit(verify_quality) 并发写锁", () => {
 
-  // W3.1 两个 quality reviewer 并行提交 → 各自维度 verdict 和 issue 均保留
-  test("两个 quality reviewer 并行提交 → verdict 与 issue 均保留", async () => {
+  // W3.1 两个 quality reviewer 并行提交 passed → verdict 与 issue 均保留（不丢 tag）
+  test("两个 quality reviewer 并行提交 → 各自 verdict 与 Info issue 均保留", async () => {
     const root = `/tmp/wts-w3a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    await setupThroughReviewReady(wt, fakeGit)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await driveToQuality(wt, CID)
+      expect(taskItemOf(wt).currentStep).toBe("verify_quality")
 
-    const styleCtx = makeCtx("openspec-reviewer-style", wt)
-    const archCtx = makeCtx("openspec-reviewer-architecture", wt)
+      const [r1, r2] = await Promise.all([
+        agent_submit.execute({
+          change_id: CID, step_id: "verify_quality", verdict: "passed",
+          new_children: [{ id: "7", title: "style", description: "Style 并发 issue", severity: "Info", source_phase: "quality", dimension: "style" }],
+        }, ctx.dims["style"]),
+        agent_submit.execute({
+          change_id: CID, step_id: "verify_quality", verdict: "passed",
+          new_children: [{ id: "8", title: "arch", description: "Arch 并发 issue", severity: "Info", source_phase: "quality", dimension: "architecture" }],
+        }, ctx.dims["architecture"]),
+      ])
 
-    const [r1, r2] = await Promise.all([
-      quality_review_submit.execute({ change_id: CID, passed: false,
-        issues: [{ severity: "Low", file: "src/style.java", line: 1, description: "Style 并发 issue", suggestion: "修 style" }],
-        fixed_issue_ids: [] }, styleCtx),
-      quality_review_submit.execute({ change_id: CID, passed: false,
-        issues: [{ severity: "Low", file: "src/arch.java", line: 1, description: "Arch 并发 issue", suggestion: "修 arch" }],
-        fixed_issue_ids: [] }, archCtx),
-    ])
+      expect(r1).toContain("passed")
+      expect(r2).toContain("passed")
 
-    expect(r1).toContain("已提交")
-    expect(r2).toContain("已提交")
-
-    const tg = findTg(wt)
-    expect(tg.phases.review.quality.progress.style).toBe("failed")
-    expect(tg.phases.review.quality.progress.architecture).toBe("failed")
-    const descs = tg.issues.map((i: any) => i.description)
-    expect(descs).toContain("Style 并发 issue")
-    expect(descs).toContain("Arch 并发 issue")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // 两个维度 verdict 均落盘，无丢失
+      const item = taskItemOf(wt)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      // 两个 Info issue 均保留
+      const descs = item.children.map((c: any) => c.description)
+      expect(descs).toContain("Style 并发 issue")
+      expect(descs).toContain("Arch 并发 issue")
+    } finally { teardown(root) }
   })
 
-  // W3.2 持锁期间重复提交同一维度 → 抛错
-  test("同一维度重复提交 → 抛错", async () => {
+  // W3.2 同一维度重复提交 verify_quality → 抛错
+  test("同一维度重复提交 verify_quality → 抛错", async () => {
     const root = `/tmp/wts-w3b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    await setupThroughReviewReady(wt, fakeGit)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await driveToQuality(wt, CID)
 
-    const styleCtx = makeCtx("openspec-reviewer-style", wt)
-    const first = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [] }, styleCtx)
-    expect(first).toContain("已提交")
+      const first = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed" },
+        ctx.dims["style"]
+      )
+      expect(first).toContain("passed")
 
-    await expect(
-      quality_review_submit.execute({ change_id: CID, passed: true, issues: [] }, styleCtx)
-    ).rejects.toThrow(/不允许重复提交/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      await expect(
+        agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["style"])
+      ).rejects.toThrow(/不允许重复提交/)
+    } finally { teardown(root) }
   })
 })
 
@@ -328,6 +297,7 @@ describe("W5. 锁路径 worktree 归一化", () => {
       taskGroupId: "1",
       baseBranch: "main",
       taskGroups: [],
+      workItems: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }

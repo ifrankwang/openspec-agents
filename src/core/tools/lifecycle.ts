@@ -1,21 +1,93 @@
 import path from "path"
-import type { TaskGroupState, TaskItem, IssueItem, TaskStatus, Phase, BuildPhaseTarget, Phases, OrchestrateState } from "../types.js"
-import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL } from "../constants.js"
-import { REVIEW_DIMENSIONS } from "../types.js"
+import type { TaskItem, TaskStatus } from "../types.js"
+import { ORCHESTRATOR_AGENT } from "../constants.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
-import { createEmptyPhases, assertOrchestrator, findTaskGroup, isReviewCompleted, deriveCurrentAgents } from "../derive.js"
-import {
-  renderOrchestratorView,
-  renderArchitectView,
-  renderDeveloperView,
-  renderToolReviewView,
-  renderTaskReviewView,
-  renderQualityReviewView,
-} from "../views.js"
+import type { ParsedTask } from "../tasks-md.js"
+import { assertOrchestrator, findTaskGroup } from "../derive.js"
+import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../workflow/loader.js"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem } from "../workflow/engine.js"
+import { renderWorkflowStatusView } from "../workflow/status.js"
+import type { WorkItem } from "../workflow/types.js"
 import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext } from "./types.js"
+
+/** 由 tasks.md 解析结果构造 task WorkItem 的 tasks 清单（初始全 open）。 */
+function tasksOf(parsed: ParsedTask[], defaultStatus: TaskStatus): TaskItem[] {
+  return parsed.map((p, i) => ({
+    id: String(i + 1),
+    specTrace: p.specTrace,
+    title: p.title,
+    status: defaultStatus,
+    taskNumber: p.taskNumber,
+    rejectReason: null,
+  }))
+}
+
+/**
+ * 按 recovery 合成活跃组 WorkItem 的 phase/currentStep/tags/tasks。
+ * - task_analysis：todo/analyze、tags 清空、tasks 全 open（全新开始）
+ * - dev_impl：in_progress/implement、analyze 已 passed、tasks 保留既有进度（无则 open）
+ * - review：review/verify_*（按 review_layer 决定从哪个子层继续）、analyze+implement 已 passed、
+ *   tasks 保留既有进度（无则 verified）
+ */
+function applyRecoveryState(
+  item: WorkItem,
+  recovery: InitParams["recovery"],
+  parsedTasks: ParsedTask[],
+): void {
+  const prev = new Map(
+    (Array.isArray(item.metadata["tasks"]) ? (item.metadata["tasks"] as TaskItem[]) : [])
+      .map((t) => [t.id, t])
+  )
+  const syncTasks = (forceOpen: boolean, defaultStatus: TaskStatus): void => {
+    item.metadata["tasks"] = parsedTasks.map((p, i) => {
+      const id = String(i + 1)
+      const old = prev.get(id)
+      if (old && !forceOpen) return { ...old }
+      return {
+        id,
+        specTrace: p.specTrace,
+        title: p.title,
+        status: forceOpen ? "open" as const : defaultStatus,
+        taskNumber: p.taskNumber,
+        rejectReason: null,
+      }
+    })
+  }
+
+  const phase = recovery?.phase
+  if (!phase || phase === "task_analysis") {
+    item.phase = "todo"
+    item.currentStep = "analyze"
+    item.tags = {}
+    syncTasks(true, "open")
+    return
+  }
+  if (phase === "dev_impl") {
+    item.phase = "in_progress"
+    item.currentStep = "implement"
+    item.tags = { "analyze:openspec-architect": "passed" }
+    syncTasks(false, "open")
+    return
+  }
+  item.phase = "review"
+  item.currentStep = "verify_tool"
+  item.tags = {
+    "analyze:openspec-architect": "passed",
+    "implement:openspec-developer": "passed",
+  }
+  if (recovery?.review_layer === "task" || recovery?.review_layer === "quality") {
+    item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
+    item.currentStep = "verify_task"
+  }
+  if (recovery?.review_layer === "quality") {
+    item.tags["verify_task:openspec-reviewer-task"] = "passed"
+    item.currentStep = "verify_quality"
+  }
+  syncTasks(false, "verified")
+}
 
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_init")
@@ -43,202 +115,113 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     )
   }
 
-  const parsedTasks = await parseTasksMdForGroup(ctx.worktree, args.change_id, args.task_group_id)
-  const relevantSpecs = extractRelevantSpecsFromTasks(parsedTasks)
-  const newTasks: TaskItem[] = parsedTasks.map((p, i) => ({
-    id: String(i + 1),
-    specTrace: p.specTrace,
-    title: p.title,
-    status: "open" as const,
-    taskNumber: p.taskNumber,
-    rejectReason: null,
-  }))
-
-  function buildPhases(
-    targetPhase: BuildPhaseTarget | null,
-    reviewLayer?: "tool" | "task" | "quality"
-  ): { phases: Phases; status: BuildPhaseTarget } {
-    if (!targetPhase) return { phases: createEmptyPhases(), status: "task_analysis" }
-    const phases = createEmptyPhases()
-    let found = false
-    for (const p of PHASE_ORDER) {
-      if (p === targetPhase) { found = true; continue }
-      if (!found) {
-        if (p === "dev_impl") {
-        } else if (p === "review") {
-        } else {
-          phases.architect_review = { completed: true }
-        }
-      }
-    }
-    if (targetPhase === "review" && reviewLayer) {
-      if (reviewLayer === "task" || reviewLayer === "quality") {
-        phases.review.tool.completed = true
-      }
-      if (reviewLayer === "quality") {
-        phases.review.task.completed = true
-      }
-    }
-    return { phases, status: targetPhase }
+  // 逐任务组解析 tasks.md 子任务（构造各 task WorkItem 的 metadata.tasks 用）
+  const tasksByGroup = new Map<string, ParsedTask[]>()
+  for (const g of parsedGroups) {
+    tasksByGroup.set(g.id, await parseTasksMdForGroup(ctx.worktree, args.change_id, g.id))
   }
 
-  const taskInjectionStatus: TaskStatus = args.recovery?.phase === "review" ? "verified" : "open"
-
-  let state = await readStateByChangeId(ctx.worktree, args.change_id)
   const baseBranch = args.base_branch || await getCurrentBranch(ctx.worktree)
-  const currentTaskGroupId = state?.taskGroupId
-  const originalCtgStatus = state?.taskGroups.find(g => g.id === args.task_group_id)?.status ?? null
-  if (state) {
-    state.baseBranch = state.baseBranch || baseBranch
-    state.isolationNamespace = state.isolationNamespace || generateIsolationNamespace(state.changeId)
-    const existingMap = new Map(state.taskGroups.map((g) => [g.id, g]))
-    state.taskGroups = parsedGroups.map((p) => {
-      const existing = existingMap.get(p.id)
+  let state = await readStateByChangeId(ctx.worktree, args.change_id)
+  const wasCurrentGroup = state?.taskGroupId === args.task_group_id
 
-      if (p.id !== args.task_group_id) {
-        if (existing) {
-          return { ...existing, name: p.name, taskCount: p.taskCount }
-        }
-        return {
-          id: p.id, name: p.name, taskCount: p.taskCount,
-          status: "task_analysis" as Phase,
-          worktreePath: null, branchName: null, baseRef: null,
-          executionBoundary: null,
-          relevantSpecs: [],
-          phases: createEmptyPhases(),
-          tasks: [],
-          issues: [], blockers: [],
-        }
-      }
-
-      if (existing && !args.recovery && currentTaskGroupId === p.id) {
-        return { ...existing, name: p.name, taskCount: p.taskCount }
-      }
-
-      const recoveryPhase = existing?.blockers.some((blocker) => blocker.status !== "resolved")
-        ? "task_analysis"
-        : args.recovery?.phase
-      const defaultPhase: Phase = (recoveryPhase ?? "task_analysis") as Phase
-      const phases = args.recovery
-        ? buildPhases(recoveryPhase as BuildPhaseTarget, args.recovery?.review_layer).phases
-        : buildPhases("task_analysis").phases
-
-      let tgTasks: TaskItem[]
-      let tgIssues: IssueItem[]
-      if (existing && args.recovery) {
-        tgTasks = newTasks.map((t) => {
-          const existingTask = existing.tasks.find((et) => et.id === t.id)
-          return existingTask || { ...t, status: taskInjectionStatus }
-        })
-        tgIssues = [...existing.issues]
-        phases.review = JSON.parse(JSON.stringify(existing.phases.review))
-      } else {
-        tgTasks = newTasks.map((t) => ({
-          ...t,
-          status: taskInjectionStatus,
-        }))
-        tgIssues = existing?.issues ?? []
-        if (existing && args.recovery) {
-          phases.review = JSON.parse(JSON.stringify(existing.phases.review))
-        }
-      }
-
-      if (args.recovery?.phase === "review" && args.recovery?.review_layer) {
-        const rl = args.recovery.review_layer
-        if (rl === "task" || rl === "quality") {
-          phases.review.tool.completed = true
-        }
-        if (rl === "quality") {
-          phases.review.task.completed = true
-        }
-      }
-
-      const base: TaskGroupState = {
-        id: p.id, name: p.name, taskCount: p.taskCount,
-        status: defaultPhase,
-        worktreePath: existing?.worktreePath ?? null, branchName: existing?.branchName ?? null, baseRef: existing?.baseRef ?? null,
-        executionBoundary: existing?.executionBoundary ?? null,
-        relevantSpecs,
-        phases,
-        tasks: tgTasks,
-        issues: tgIssues,
-        blockers: existing?.blockers ?? [],
-        agentSummaries: existing?.agentSummaries,
-      }
-
-      return base
-    })
-    state.taskGroupId = args.task_group_id
-  } else {
+  if (!state) {
     state = {
       changeId: args.change_id,
       isolationNamespace: generateIsolationNamespace(args.change_id),
       taskGroupId: args.task_group_id,
       baseBranch,
-      taskGroups: parsedGroups.map((p) => {
-        const isCurrent = p.id === args.task_group_id
-        const defaultPhase = args.recovery ? args.recovery.phase : "task_analysis"
-        const { phases, status } = isCurrent
-          ? buildPhases(args.recovery ? (args.recovery.phase as BuildPhaseTarget) : "task_analysis", args.recovery?.review_layer)
-          : { phases: createEmptyPhases(), status: "task_analysis" as Phase }
-        return {
-          id: p.id, name: p.name, taskCount: p.taskCount,
-          status,
-          worktreePath: null, branchName: null, baseRef: null,
-          executionBoundary: null,
-          relevantSpecs: isCurrent ? relevantSpecs : [],
-          phases,
-          tasks: isCurrent
-            ? newTasks.map((t) => ({ ...t, status: taskInjectionStatus }))
-            : [],
-          issues: [], blockers: [],
-        }
-      }),
+      workItems: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
+  } else {
+    state.baseBranch = state.baseBranch || baseBranch
+    state.isolationNamespace = state.isolationNamespace || generateIsolationNamespace(state.changeId)
   }
 
-  const ctg = findTaskGroup(state, args.task_group_id)
-  if (args.recovery && args.recovery.phase === "task_analysis") {
-    ctg.worktreePath = null
-    ctg.branchName = null
-    ctg.baseRef = null
-  }
-
-  if (args.recovery?.reopenIssues) {
-    if (originalCtgStatus !== "completed") {
-      throw new Error(`reopenIssues 仅支持已完成（completed）的任务组，当前状态为 "${originalCtgStatus}"。`)
-    }
-    if (args.recovery.phase !== "dev_impl") {
-      throw new Error("reopenIssues 仅支持恢复到 dev_impl 阶段。")
-    }
-    if (args.recovery.review_layer) {
-      throw new Error("reopenIssues 与 review_layer 互斥，不可同时使用。")
+  // 按 tasks.md 构造全部任务组的 task WorkItem（单轨：workItems 为唯一事实源）
+  for (const group of parsedGroups) {
+    const isCurrent = group.id === args.task_group_id
+    const groupTasks = tasksByGroup.get(group.id) ?? []
+    const existing = state.workItems.find((w) => w.id === `task:${group.id}`)
+    const refreshMeta = (item: WorkItem): void => {
+      item.metadata["name"] = group.name
+      item.metadata["task_count"] = group.taskCount
+      item.metadata["source"] = "openspec"
+      item.metadata["relevant_specs"] = extractRelevantSpecsFromTasks(groupTasks)
     }
 
-    for (const issue of ctg.issues) {
-      if (issue.status !== "verified") {
-        issue.status = "rejected"
-        issue.rejectReason = issue.rejectReason || "(通过 reopenIssues 自动驳回)"
+    if (!isCurrent) {
+      // 非活跃组：已有则保留进度（仅刷新名称/计数），否则新建
+      if (existing) {
+        refreshMeta(existing)
+      } else {
+        const item = createInitialWorkItem({
+          id: `task:${group.id}`,
+          source: "openspec",
+          externalId: group.id,
+          type: "task",
+          title: group.name,
+          description: group.name,
+          labels: ["openspec-change"],
+        })
+        item.currentStep = "analyze"
+        item.metadata["tasks"] = tasksOf(groupTasks, "open")
+        refreshMeta(item)
+        state.workItems.push(item)
       }
+      continue
     }
 
-    ctg.phases.review.tool.completed = false
-    ctg.phases.review.task.completed = false
-    for (const d of REVIEW_DIMENSIONS) {
-      ctg.phases.review.quality.progress[d] = "pending"
+    // 活跃组：无 recovery 重复初始化当前组 → 保留进度
+    if (existing && !args.recovery && wasCurrentGroup) {
+      refreshMeta(existing)
+      continue
     }
-    ctg.phases.review.retryCount = 0
-    ctg.phases.review.lastResolvedRetryCount = 0
 
-    ctg.worktreePath = null
-    ctg.branchName = null
-    ctg.baseRef = null
+    const item = existing ?? createInitialWorkItem({
+      id: `task:${group.id}`,
+      source: "openspec",
+      externalId: group.id,
+      type: "task",
+      title: group.name,
+      description: group.name,
+      labels: ["openspec-change"],
+    })
 
-    ctg.status = "dev_impl"
+    // reopenIssues：已完成组继续修 issue（children 未终态置 todo + reject_reason、清 verify_* tags）
+    if (args.recovery?.reopenIssues) {
+      const closed = item.metadata["completed_at"] !== undefined || item.phase === "done"
+      if (!closed) {
+        throw new Error(`reopenIssues 仅支持已完成（completed）的任务组，当前 item.phase="${item.phase}"。`)
+      }
+      if (args.recovery.phase !== "dev_impl") {
+        throw new Error("reopenIssues 仅支持恢复到 dev_impl 阶段。")
+      }
+      if (args.recovery.review_layer) {
+        throw new Error("reopenIssues 与 review_layer 互斥，不可同时使用。")
+      }
+      for (const child of item.children) {
+        if (isTerminalPhase(child.phase)) continue
+        child.phase = "todo"
+        child.metadata["reject_reason"] = child.metadata["reject_reason"] ?? "通过 reopenIssues 自动驳回"
+      }
+      for (const key of Object.keys(item.tags)) {
+        if (key.startsWith("verify_")) delete item.tags[key]
+      }
+      delete item.metadata["completed_at"]
+      item.metadata["worktree_path"] = null
+      item.metadata["branch_name"] = null
+      item.metadata["base_ref"] = null
+    }
+
+    applyRecoveryState(item, args.recovery, groupTasks)
+    refreshMeta(item)
+    if (!existing) state.workItems.push(item)
   }
 
+  state.taskGroupId = args.task_group_id
   await writeState(ctx.worktree, state)
 
   return args.recovery
@@ -247,14 +230,14 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
 }
 
 async function bindWorktreeRefs(
-  tg: TaskGroupState,
+  item: WorkItem,
   worktreePath: string,
   branch: string,
   baseBranch: string,
   opts: { requireBaseRef?: boolean } = {},
 ): Promise<void> {
-  tg.worktreePath = worktreePath
-  tg.branchName = branch
+  item.metadata["worktree_path"] = worktreePath
+  item.metadata["branch_name"] = branch
   const baseRef = await getMergeBase(worktreePath, baseBranch)
   if (!baseRef) {
     if (opts.requireBaseRef) {
@@ -262,14 +245,15 @@ async function bindWorktreeRefs(
     }
     return
   }
-  tg.baseRef = baseRef
+  item.metadata["base_ref"] = baseRef
 }
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_set_worktree")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
-  const tg = findTaskGroup(state, state.taskGroupId)
+  const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
+  if (!item) throw new Error(`工作项 "task:${state.taskGroupId}" 缺失，请重新调用 opx_orch_init。`)
 
   const repoRoot = ctx.worktree
   const branch = params.branch_name || `task-group/${state.changeId}/${state.taskGroupId}`
@@ -295,7 +279,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     const baseHead = await runGit(repoRoot, ["rev-parse", state.baseBranch])
     const mergeResult = await runGitChecked(existingPath, ["merge", "--ff-only", baseHead])
     if (mergeResult.success) {
-      await bindWorktreeRefs(tg, existingPath, branch, state.baseBranch)
+      await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
       reused = true
     } else {
       const clean = await isWorktreeClean(existingPath)
@@ -310,7 +294,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
         10
       )
       if (localCommitCount > 0 || Number.isNaN(localCommitCount)) {
-        await bindWorktreeRefs(tg, existingPath, branch, state.baseBranch)
+        await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
         reused = true
       } else {
         const rmResult = await runGitChecked(repoRoot, ["worktree", "remove", existingPath, "--force"])
@@ -328,19 +312,20 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   if (!reused) {
     const forkBranch = state.baseBranch
     await runGit(repoRoot, ["worktree", "add", "-b", branch, wtPath, forkBranch])
-    await bindWorktreeRefs(tg, wtPath, branch, forkBranch, { requireBaseRef: true })
+    await bindWorktreeRefs(item, wtPath, branch, forkBranch, { requireBaseRef: true })
   }
 
   await writeState(ctx.worktree, state)
 
   // 在 worktree 中写入上下文指针，供 worktree 内 session 读取 state
-  if (tg.worktreePath) {
-    await writeContextToWorktree(tg.worktreePath, state.changeId, state.taskGroupId)
+  const storedPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : null
+  if (storedPath) {
+    await writeContextToWorktree(storedPath, state.changeId, state.taskGroupId)
   }
 
   return [
     `- **状态**: ${reused ? "复用已有 worktree" : "已创建 worktree"}`,
-    `- **路径**: \`${tg.worktreePath}\``,
+    `- **路径**: \`${item.metadata["worktree_path"]}\``,
     `- **分支**: \`${branch}\``,
   ].join("\n")
 }
@@ -365,114 +350,82 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
     return "编排会话尚未初始化。请先调用 opx_orch_init。"
   }
 
+  const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
+  if (!item) {
+    return "编排会话未就绪：找不到活跃任务组的工作项，请重新调用 opx_orch_init。"
+  }
+
+  // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
+  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+  const rec = recommendForItem(item, workflow)
   const tg = findTaskGroup(state, state.taskGroupId)
-
-  if (agent !== ORCHESTRATOR_AGENT) {
-    const expected = deriveCurrentAgents(tg)
-    if (!expected.includes(agent)) {
-      return [
-        "# ⛔ 阶段门禁",
-        "",
-        `当前阶段为 **${tg.status}**，未轮到你（**${agent}**）执行。`,
-        `当前预期角色为：\`${expected.join(", ") || "(无)"}\``,
-        "",
-        "请立即结束当前会话，不要执行任何操作。",
-      ].join("\n")
-    }
-  }
-
-  let view: string
-  if (agent === ORCHESTRATOR_AGENT) {
-    const diskWts = await discoverDiskWorktrees(ctx.worktree)
-    view = renderOrchestratorView(state, tg, diskWts)
-  } else if (agent === "openspec-architect") {
-    view = renderArchitectView(state, tg)
-  } else if (agent === "openspec-developer") {
-    view = renderDeveloperView(state, tg)
-  } else if (agent === "openspec-reviewer-tool") {
-    view = renderToolReviewView(state, tg)
-  } else if (agent === "openspec-reviewer-task") {
-    view = renderTaskReviewView(state, tg)
-  } else if (Object.values(DIMENSION_AGENT_MAP).includes(agent)) {
-    view = renderQualityReviewView(state, tg, agent)
-  } else {
-    view = renderOrchestratorView(state, tg)
-  }
-
-  if (agent !== ORCHESTRATOR_AGENT) {
-    const submitTool = AGENT_TO_SUBMIT_TOOL[agent] || "对应 submit 工具"
-    const submitConvention = agent === "openspec-architect"
-      ? "按结果提交 `outcome=ready`；blocker 用 `opx_arch_blocker` 处理。"
-      : agent === "openspec-developer"
-        ? "按结果提交 `outcome=completed` 或 `outcome=blocked`。"
-        : "即使无 issue / 无待处理项，也必须提交 `passed=true`。"
-    const instructionBlock = [
-      "# ✅ 当前轮到你执行",
-      "",
-      `完成本职工作后**必须**调用 \`${submitTool}()\` 提交。`,
-      submitConvention,
-      "",
-      "---",
-      "",
-    ].join("\n")
-    view = instructionBlock + view
-  }
-
-  return view
+  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg })
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_complete_task_group")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
-  const tg = findTaskGroup(state, state.taskGroupId)
-  if (!isReviewCompleted(tg) || tg.status === "completed") {
+  const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
+  if (!item) throw new Error(`工作项 "task:${state.taskGroupId}" 缺失，请重新调用 opx_orch_init。`)
+
+  if (item.phase !== "done" || item.metadata["completed_at"] !== undefined) {
     throw new Error(
       `阶段顺序错误：opx_orch_complete_task_group 需在 review 完成后调用。\n` +
-      `- isReviewCompleted=${isReviewCompleted(tg)}\n` +
-      `- tg.status=${tg.status}`
+      `- item.phase=${item.phase}\n` +
+      `- completed_at=${item.metadata["completed_at"] ?? "(未设置)"}`
     )
   }
-  if (tg.worktreePath) {
-    const clean = await isWorktreeClean(tg.worktreePath)
-    if (!clean) throw new Error(`worktree "${tg.worktreePath}" 存在未 commit 内容，请先 commit 再完成任务组。`)
+
+  const worktreePath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : null
+  const branchName = typeof item.metadata["branch_name"] === "string" ? item.metadata["branch_name"] : null
+
+  if (worktreePath) {
+    const clean = await isWorktreeClean(worktreePath)
+    if (!clean) throw new Error(`worktree "${worktreePath}" 存在未 commit 内容，请先 commit 再完成任务组。`)
   }
-  const openIssues = tg.issues.filter(
-    (i) => (i.status === "open" || i.status === "rejected") && (BLOCKING_SEVERITIES as readonly string[]).includes(i.severity)
-  )
+
+  const openIssues = item.children.filter((c) => isBlockingSeverity(c.severity) && !isTerminalPhase(c.phase))
   if (openIssues.length > 0) {
-    throw new Error(`存在 ${openIssues.length} 个 Low 及以上的 open/rejected issue 未处理，请先修复或申请豁免。`)
+    throw new Error(`存在 ${openIssues.length} 个 Low 及以上的未解决 issue 未处理，请先修复或申请豁免。`)
   }
-  const openTasks = tg.tasks.filter(
+
+  const tasks = Array.isArray(item.metadata["tasks"]) ? (item.metadata["tasks"] as TaskItem[]) : []
+  const openTasks = tasks.filter(
     (t) => t.status === "open" || t.status === "submitted" || t.status === "rejected"
   )
   if (openTasks.length > 0) {
     throw new Error(`存在 ${openTasks.length} 个未完成 task。`)
   }
-  const unresolvedBlockers = tg.blockers.filter((blocker) => blocker.status !== "resolved")
+
+  const blockers = Array.isArray(item.metadata["blockers"])
+    ? (item.metadata["blockers"] as { status: string }[])
+    : []
+  const unresolvedBlockers = blockers.filter((blocker) => blocker.status !== "resolved")
   if (unresolvedBlockers.length > 0) {
     throw new Error(`存在 ${unresolvedBlockers.length} 个未解决 blocker，无法完成任务组。`)
   }
+
   const mergeTarget = state.baseBranch
-  if (tg.branchName) {
-    const mergeResult = await mergeBranchToTarget(ctx.worktree, tg.branchName, mergeTarget)
+  if (branchName) {
+    const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
     if (!mergeResult.success) {
       return [
         `- **status**: blocked`,
         `- **merge_conflict**: true`,
         `- **说明**: 合并到 "${mergeTarget}" 时发生冲突，已中止合并。`,
-        `- **处理**: 请手动在目标分支解决冲突后完成合并 (git merge ${tg.branchName})，完成后重新调 opx_orch_complete_task_group 完成收尾。worktree 与分支已保留。`,
+        `- **处理**: 请手动在目标分支解决冲突后完成合并 (git merge ${branchName})，完成后重新调 opx_orch_complete_task_group 完成收尾。worktree 与分支已保留。`,
       ].join("\n")
     }
   }
-  if (tg.worktreePath && tg.branchName) {
+  if (worktreePath && branchName) {
     try {
-      await runGit(ctx.worktree, ["worktree", "remove", tg.worktreePath, "--force"])
-      await runGit(ctx.worktree, ["branch", "-D", tg.branchName])
+      await runGit(ctx.worktree, ["worktree", "remove", worktreePath, "--force"])
+      await runGit(ctx.worktree, ["branch", "-D", branchName])
     } catch {
     }
   }
-  tg.status = "completed"
+  item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
   return `任务组已完成并合并到 "${mergeTarget}"。`
 }

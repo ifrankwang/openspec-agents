@@ -1,3 +1,5 @@
+import type { WorkItem } from "./workflow/types.js"
+
 export const CODE_DIMENSIONS = ["style", "architecture", "performance", "security", "maintainability"] as const
 export const REVIEW_DIMENSIONS = [...CODE_DIMENSIONS] as const
 export type ReviewDimension = typeof REVIEW_DIMENSIONS[number]
@@ -115,7 +117,7 @@ export interface OrchestrateState {
   isolationNamespace: string
   taskGroupId: string
   baseBranch: string
-  taskGroups: TaskGroupState[]
+  workItems: WorkItem[]   // 工作流引擎原生持久化（单轨事实源）
   createdAt: string
   updatedAt: string
   unattended?: boolean

@@ -1,8 +1,12 @@
 import path from "path"
 import { mkdirSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
-import type { OrchestrateState } from "./types.js"
+import type { OrchestrateState, TaskGroupState, Phase, IssueItem } from "./types.js"
+import type { WorkItem, WorkItemPhase, Severity } from "./workflow/types.js"
+import { createInitialWorkItem } from "./workflow/engine.js"
+import { EXEMPT_REQUEST_KEY } from "./workflow/submit.js"
 import { STATE_DIR_NAME, STATE_SUBDIR_NAME } from "./constants.js"
+import { DIMENSION_AGENT_MAP } from "./constants.js"
 import { discoverRepoRoot } from "./git.js"
 import { generateIsolationNamespace } from "./namespace.js"
 
@@ -67,25 +71,126 @@ export async function readStateByWorktree(worktree: string, changeId?: string): 
   throw new Error("change_id required for non-worktree context")
 }
 
+// ─── 旧格式读兼容迁移：taskGroups → workItems（单轨化后 taskGroups 不再持久化）───
+// 以下映射仅服务于旧格式状态文件升级为 workItems 的迁移入口，非双轨同步逻辑。
+// 升级后 taskGroups 字段不再写回，workItems 为唯一事实源。
+
+/** 旧 tg.status → WorkItem phase（迁移用） */
+function taskGroupStatusToPhase(status: Phase): WorkItemPhase {
+  switch (status) {
+    case "task_analysis": return "todo"
+    case "dev_impl": return "in_progress"
+    case "review": return "review"
+    case "completed": return "done"
+  }
+}
+
+/** 旧 tg.status → WorkItem currentStep（迁移用，各阶段入口 step） */
+function taskGroupStatusToStep(status: Phase): string | null {
+  switch (status) {
+    case "task_analysis": return "analyze"
+    case "dev_impl": return "implement"
+    case "review": return "verify_tool"
+    case "completed": return null
+  }
+}
+
+/** 旧 issue status → child phase（迁移用：verified→done、exempted→cancelled、submitted→review，其余→todo） */
+function issueStatusToChildPhase(status: IssueItem["status"]): WorkItemPhase {
+  switch (status) {
+    case "verified": return "done"
+    case "exempted": return "cancelled"
+    case "submitted": return "review"
+    default: return "todo"
+  }
+}
+
+/** 报出该 issue 的审查 agent 兜底（exemption_requested 迁移为 exempt_request.requestedBy 用）。 */
+function issueReporterAgent(issue: IssueItem): string {
+  if (issue.sourcePhase === "quality") return DIMENSION_AGENT_MAP[issue.dimension] ?? "openspec-reviewer-tool"
+  if (issue.sourcePhase === "task") return "openspec-reviewer-task"
+  return "openspec-reviewer-tool"
+}
+
+/** 由 issue 构造 issue 类型 WorkItem child。 */
+export function buildIssueWorkItem(issue: IssueItem): WorkItem {
+  const child = createInitialWorkItem({
+    id: `issue:${issue.id}`,
+    source: "openspec",
+    externalId: issue.id,
+    type: "issue",
+    title: issue.description,
+    description: issue.description,
+    severity: issue.severity as Severity,
+  })
+  child.phase = issueStatusToChildPhase(issue.status)
+  // 迁移时透传 issue 归因字段到 child.metadata，供新流分层重置/去重/落盘读取（缺省与 createIssueFromChild 一致）
+  child.metadata["source_phase"] = issue.sourcePhase
+  child.metadata["dimension"] = issue.dimension
+  child.metadata["file"] = issue.file
+  child.metadata["line"] = issue.line
+  if (issue.status === "exemption_requested") {
+    // 迁移时保留豁免申请语义：exempt_request 标记使 sync 回写保持 exemption_requested，
+    // 避免 child 落 todo 后被覆写回 open 丢失豁免申请。
+    child.metadata[EXEMPT_REQUEST_KEY] = {
+      requestedBy: issueReporterAgent(issue),
+      reason: issue.exemptReason,
+    }
+  }
+  return child
+}
+
+/** 由 taskGroup 构造 task 类型 WorkItem（含其 issue children 与 task 清单）。 */
+export function buildTaskWorkItemFromTaskGroup(tg: TaskGroupState): WorkItem {
+  const item = createInitialWorkItem({
+    id: `task:${tg.id}`,
+    source: "openspec",
+    externalId: tg.id,
+    type: "task",
+    title: tg.name,
+    description: tg.name,
+    labels: ["openspec-change"],
+  })
+  item.phase = taskGroupStatusToPhase(tg.status)
+  item.currentStep = taskGroupStatusToStep(tg.status)
+  item.metadata = { source: "openspec", tasks: JSON.parse(JSON.stringify(tg.tasks ?? [])) }
+  item.children = tg.issues.map(buildIssueWorkItem)
+  return item
+}
+
+/**
+ * 从旧格式 taskGroups 批量构造 workItems（旧状态文件自动升级入口）。
+ * 单轨化后仅由 readStateByChangeId 在旧格式（有 taskGroups 无 workItems）时调用，
+ * 升级结果落盘后 taskGroups 字段不再写回。
+ */
+export function upgradeWorkItemsFromTaskGroups(groups: TaskGroupState[]): WorkItem[] {
+  return groups.map(buildTaskWorkItemFromTaskGroup)
+}
+
+interface LegacyState extends OrchestrateState {
+  taskGroups?: TaskGroupState[]
+}
+
 export async function readStateByChangeId(worktree: string, changeId: string): Promise<OrchestrateState | null> {
   const fp = getStatePath(worktree, changeId)
-  let state: OrchestrateState
+  let raw: unknown
   try {
-    const raw = await readFile(fp, "utf-8")
-    state = JSON.parse(raw) as OrchestrateState
+    raw = JSON.parse(await readFile(fp, "utf-8"))
   } catch {
     return null
   }
-  const sampleGroup = state.taskGroups?.[0]
-  if (sampleGroup && !('tasks' in sampleGroup)) {
+  const legacy = raw as LegacyState
+  const sampleGroup = legacy.taskGroups?.[0]
+  if (sampleGroup && !("tasks" in sampleGroup)) {
     throw new Error(
-      `状态文件 "${state.changeId}" 是旧版本格式，不兼容当前版本。请重新初始化编排会话（opx_orch_init）。`
+      `状态文件 "${legacy.changeId}" 是旧版本格式，不兼容当前版本。请重新初始化编排会话（opx_orch_init）。`
     )
   }
-  if (!state.isolationNamespace) {
-    state.isolationNamespace = generateIsolationNamespace(state.changeId)
+  if (!legacy.isolationNamespace) {
+    legacy.isolationNamespace = generateIsolationNamespace(legacy.changeId)
   }
-  for (const group of state.taskGroups || []) {
+  // 旧格式归一化：blocker 状态兼容 + task_analysis 自动推进（仅在迁移前生效）
+  for (const group of legacy.taskGroups || []) {
     group.blockers ??= []
     for (const blocker of group.blockers) {
       if ((blocker.status as string) === "reported" || (blocker.status as string) === "ready_for_architect") {
@@ -95,6 +200,25 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     if (group.status === "task_analysis" && group.phases?.architect_review?.completed && !group.blockers.some((blocker) => blocker.status !== "resolved")) {
       group.status = "dev_impl"
     }
+  }
+
+  const needsUpgrade = !Array.isArray(legacy.workItems) || legacy.workItems.length === 0
+  // 单轨组装：仅保留 workItems 为唯一事实源，taskGroups 字段丢弃不再写回
+  const state: OrchestrateState = {
+    changeId: legacy.changeId,
+    isolationNamespace: legacy.isolationNamespace,
+    taskGroupId: legacy.taskGroupId,
+    baseBranch: legacy.baseBranch,
+    workItems: needsUpgrade
+      ? upgradeWorkItemsFromTaskGroups(legacy.taskGroups ?? [])
+      : (legacy.workItems as WorkItem[]),
+    createdAt: legacy.createdAt,
+    updatedAt: legacy.updatedAt,
+    unattended: legacy.unattended,
+  }
+  if (needsUpgrade) {
+    // 迁移产物一次性落盘固定单轨形态，避免每次读取都重建
+    await writeFile(fp, JSON.stringify(state, null, 2))
   }
   return state
 }

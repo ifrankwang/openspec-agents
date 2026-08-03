@@ -1,270 +1,253 @@
+/**
+ * blocker 生命周期测试（新流）：metadata.blockers + agent_submit 的 blockers/blocker_updates/blocker 参数
+ *
+ * 覆盖：
+ * 1. analyze 上报 blockers → metadata.blockers awaiting_user；blocker_updates 置 resolved → passed 推进
+ * 2. 无未解决 blocker 门禁：存在未解决 blocker 时 analyze passed 被拦截
+ * 3. implement step 带 blocker（verdict=failed）→ on_fail 回 analyze，tasks 全 open
+ * 4. blocker_updates 引用不存在 / 已 resolved blocker → 抛错
+ * 5. 多个 blocker 全部处理后 analyze 才可 passed
+ * 6. status 视图渲染 blockers（awaiting_user/resolved + 处理指引）
+ * 7. recovery 后未解决 blocker 保留（awaiting_user）
+ */
 import { afterAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { rmSync } from "node:fs"
 import { __setGitRunner } from "../src/core/git"
+import { init, agent_submit, status } from "../src/adapters/opencode/tools"
+import { setupWithFakeGit, teardown, makeCtx } from "./helpers"
 import {
-  arch_blocker, arch_submit, dev_submit, init, set_worktree, status
-} from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx } from "./helpers"
+  setupToAnalyze, driveToImplement, taskItemOf, blockersOf,
+  taskListOf, readItem,
+} from "./helpers-workflow"
 
 const CID = "test-blocker"
 
 afterAll(() => { __setGitRunner(null) })
 
-function freshWt(root: string): string {
-  const wt = join(root, "w")
-  mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
-  writeFileSync(join(wt, "openspec", "changes", CID, "tasks.md"), "## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n", "utf-8")
-  return wt
-}
-
-function readState(wt: string): any {
-  return JSON.parse(readFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), "utf-8"))
-}
-
-function output(result: string | { output: string }): string {
-  return typeof result === "string" ? result : result.output
-}
-
-function boundary() {
-  return { allowed_directories: ["src"], allowed_packages: ["pkg"], notes: "" }
+function fresh(): { wt: string; root: string } {
+  const root = `/tmp/blocker-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const { worktree } = setupWithFakeGit(root, CID)
+  return { wt: worktree, root }
 }
 
 describe("blocker 生命周期", () => {
-  test("architect 创建 blocker → arch_blocker 更新 → arch_submit ready", async () => {
-    const root = `/tmp/blocker-arch-${Date.now()}`
-    const wt = freshWt(root)
-    __setGitRunner(new FakeGitRunner())
-    const orch = makeCtx("openspec-orchestrator", wt)
-    const arch = makeCtx("openspec-architect", wt)
+  test("analyze 上报 blockers → awaiting_user；blocker_updates 置 resolved → passed 推进", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    const createResult = output(await arch_blocker.execute({change_id: CID, blockers: [{
-        source_role: "openspec-architect",
-        task_id: "1",
-        category: "external_dependency",
-        description: "缺少外部接口地址",
-        evidence: "spec 未提供",
-        attempted_actions: "检查 spec",
-        options: ["用户提供地址"],
-      }],} as any, arch))
-    expect(createResult).toContain("已记录 1 个 blocker")
+      // analyze failed 上报 blocker（EB 校验仅在 passed 生效）
+      const r0 = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "failed",
+          blockers: [{ source_role: "architect", category: "external_dependency", description: "缺少外部接口地址", evidence: "spec 未提供", attempted_actions: "检查 spec", options: ["用户提供地址"] }],
+        },
+        ctx.arch
+      )
+      expect(r0).toBeDefined()
+      const item0 = readItem(wt, CID)
+      expect(blockersOf(item0)).toHaveLength(1)
+      expect(blockersOf(item0)[0].status).toBe("awaiting_user")
+      expect(blockersOf(item0)[0].id).toBe("b1")
 
-    let tg = readState(wt).taskGroups[0]
-    expect(tg.blockers).toHaveLength(1)
-    expect(tg.blockers[0].status).toBe("awaiting_user")
+      // 存在未解决 blocker → analyze passed 被拦截
+      const err = await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
+        ctx.arch
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/未解决的 blocker/)
 
-    const architectContext = output(await status.execute({ change_id: CID }, arch))
-    expect(architectContext).toContain("Blocker #b1 | awaiting_user | external_dependency")
-    expect(architectContext).toContain("描述：缺少外部接口地址")
-    expect(architectContext).toContain("证据：spec 未提供")
-    expect(architectContext).toContain("已尝试：检查 spec")
-    expect(architectContext).toContain("可选方案：用户提供地址")
-    expect(architectContext).not.toContain("passed=true")
-
-    const updateResult = output(await arch_blocker.execute({change_id: CID, blocker_id: tg.blockers[0].id,
-      user_response: "地址为 https://api.example.test",} as any, arch))
-    expect(updateResult).toContain("blocker #b1 已处理")
-    expect(updateResult).toContain("全部 blocker 已处理")
-
-    tg = readState(wt).taskGroups[0]
-    expect(tg.blockers[0].status).toBe("resolved")
-    expect(tg.blockers[0].userResponse).toBe("地址为 https://api.example.test")
-
-    await arch_submit.execute({change_id: CID, outcome: "ready", execution_boundary: boundary()} as any, arch)
-    tg = readState(wt).taskGroups[0]
-    expect(tg.status).toBe("dev_impl")
-    expect(tg.blockers[0].status).toBe("resolved")
-    expect(tg.tasks[0].status).toBe("open")
-    expect(tg.phases.review.tool.completed).toBe(false)
-    expect(tg.phases.review.retryCount).toBe(0)
-
-    await set_worktree.execute({ change_id: CID }, orch)
-    expect(readState(wt).taskGroups[0].status).toBe("dev_impl")
-    expect(existsSync(wt)).toBe(true)
-    rmSync(root, { recursive: true, force: true })
+      // blocker_updates 置 resolved → passed 推进
+      const r = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "passed",
+          execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },
+          blocker_updates: [{ blocker_id: "b1", user_response: "地址为 https://api.example.test" }],
+        },
+        ctx.arch
+      )
+      expect(r).toContain("- **推进**: 是 → implement")
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(blockersOf(item)[0].status).toBe("resolved")
+      expect(blockersOf(item)[0].userResponse).toBe("地址为 https://api.example.test")
+    } finally { teardown(root) }
   })
 
-  test("developer status 指引使用 outcome 提交约定", async () => {
-    const root = `/tmp/blocker-dev-status-${Date.now()}`
-    const wt = freshWt(root)
-    __setGitRunner(new FakeGitRunner())
-    const orch = makeCtx("openspec-orchestrator", wt)
-    const arch = makeCtx("openspec-architect", wt)
-    const dev = makeCtx("openspec-developer", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    await arch_submit.execute({change_id: CID, outcome: "ready", execution_boundary: boundary()} as any, arch)
-    await set_worktree.execute({ change_id: CID }, orch)
-
-    const developerContext = output(await status.execute({ change_id: CID }, dev))
-    expect(developerContext).toContain("outcome=completed` 或 `outcome=blocked")
-    expect(developerContext).not.toContain("passed=true")
-    rmSync(root, { recursive: true, force: true })
-  })
-
-  test("developer blocked 在 checkpoint 前回 task_analysis，不提交 task，保留重试计数", async () => {
-    const root = `/tmp/blocker-dev-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const orch = makeCtx("openspec-orchestrator", wt)
-    const arch = makeCtx("openspec-architect", wt)
-    const dev = makeCtx("openspec-developer", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    await arch_submit.execute({ change_id: CID, outcome: "ready", execution_boundary: boundary() }, arch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    let state = readState(wt)
-    let tg = state.taskGroups[0]
-    tg.phases.review.retryCount = 2
-    tg.phases.review.lastResolvedRetryCount = 1
-    writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state, null, 2))
-
-    const result = output(await dev_submit.execute({change_id: CID, outcome: "blocked",
-      blocker: {
-        source_role: "openspec-developer",
-        task_id: "1",
-        category: "real_input",
-        description: "缺少真实输入",
-        evidence: "测试数据不可代表生产路径",
-        attempted_actions: "检查现有 fixture",
-        options: ["用户提供样本"],
-      },} as any, dev))
-    expect(result).toContain("已记录 blocker")
-
-    tg = readState(wt).taskGroups[0]
-    expect(tg.status).toBe("task_analysis")
-    expect(tg.tasks[0].status).toBe("open")
-    expect(tg.phases.review.retryCount).toBe(2)
-    expect(tg.phases.review.lastResolvedRetryCount).toBe(1)
-    expect(tg.phases.review.tool.completed).toBe(false)
-    expect(tg.blockers[0].status).toBe("awaiting_user")
-    rmSync(root, { recursive: true, force: true })
-  })
-
-  test("未解决 developer blocker recovery 强制回架构复核", async () => {
-    for (const recoveryPhase of ["dev_impl", "review"] as const) {
-      const root = `/tmp/blocker-recovery-${recoveryPhase}-${Date.now()}`
-      const wt = freshWt(root)
-      __setGitRunner(new FakeGitRunner())
-      const orch = makeCtx("openspec-orchestrator", wt)
-      const arch = makeCtx("openspec-architect", wt)
+  test("developer status 视图：执行类 step 用 opx_agent_submit 提交约定", async () => {
+    const { wt, root } = fresh()
+    try {
+      await driveToImplement(wt, CID)
       const dev = makeCtx("openspec-developer", wt)
-
-      await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-      await arch_submit.execute({ change_id: CID, outcome: "ready", execution_boundary: boundary() }, arch)
-      await set_worktree.execute({ change_id: CID }, orch)
-      let tg = readState(wt).taskGroups[0]
-      tg.phases.review.retryCount = 2
-      tg.phases.review.lastResolvedRetryCount = 1
-      const state = readState(wt)
-      state.taskGroups[0] = tg
-      writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state, null, 2))
-
-      await dev_submit.execute({change_id: CID, outcome: "blocked",
-        blocker: {
-          source_role: "openspec-developer",
-          task_id: "1",
-          category: "real_input",
-          description: "缺少真实输入",
-          evidence: "测试数据不可代表生产路径",
-          attempted_actions: "检查现有 fixture",
-          options: ["用户提供样本"],
-        },} as any, dev)
-
-      tg = readState(wt).taskGroups[0]
-      const worktreePath = tg.worktreePath
-      const branchName = tg.branchName
-      await init.execute({
-        change_id: CID,
-        task_group_id: "1",
-        recovery: { phase: recoveryPhase },
-      }, orch)
-      await set_worktree.execute({ change_id: CID }, orch)
-
-      tg = readState(wt).taskGroups[0]
-      expect(tg.status).toBe("task_analysis")
-      expect(tg.phases.architect_review.completed).toBe(false)
-      expect(tg.blockers[0].status).toBe("awaiting_user")
-      expect(tg.worktreePath).toBe(worktreePath)
-      expect(tg.phases.review.retryCount).toBe(2)
-      expect(tg.phases.review.lastResolvedRetryCount).toBe(1)
-      const orchestratorContext = output(await status.execute({ change_id: CID }, orch))
-      const nextStep = orchestratorContext.split("## 下一步")[1]
-      expect(nextStep).toContain("openspec-architect")
-      expect(nextStep).not.toContain("openspec-developer")
-      expect(nextStep).not.toContain("openspec-reviewer-")
-      rmSync(root, { recursive: true, force: true })
-    }
+      const out = await status.execute({ change_id: CID }, dev)
+      expect(out).toContain("`opx_agent_submit()`")
+      expect(out).toContain("verdict=passed")
+      expect(out).toContain("verdict=failed")
+    } finally { teardown(root) }
   })
 
-  test("blocked 参数、dirty worktree、更新已 resolved blocker 拒绝", async () => {
-    const root = `/tmp/blocker-guard-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const orch = makeCtx("openspec-orchestrator", wt)
-    const arch = makeCtx("openspec-architect", wt)
-    const dev = makeCtx("openspec-developer", wt)
+  test("implement 带 blocker（verdict=failed）→ on_fail 回 analyze，tasks 全 open", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    await arch_submit.execute({ change_id: CID, outcome: "ready", execution_boundary: boundary() }, arch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    const devWt = readState(wt).taskGroups[0].worktreePath
-    fakeGit.dirtyPaths.add(devWt)
-    await expect(dev_submit.execute({ change_id: CID, outcome: "blocked", blocker: {
-      source_role: "openspec-developer", task_id: "1", category: "credential", description: "缺凭证", evidence: "env 无值", attempted_actions: "检查 env", options: ["用户提供凭证"],
-    } } as any, dev)).rejects.toThrow(/未 commit/)
-    fakeGit.dirtyPaths.delete(devWt)
-    await dev_submit.execute({ change_id: CID, outcome: "blocked", blocker: {
-      source_role: "openspec-developer", task_id: "1", category: "credential", description: "缺凭证", evidence: "env 无值", attempted_actions: "检查 env", options: ["用户提供凭证"],
-    } } as any, dev)
-    const blockerId = readState(wt).taskGroups[0].blockers[0].id
-    await arch_blocker.execute({change_id: CID, blocker_id: blockerId, user_response: "已提供"} as any, arch)
-    await expect(arch_blocker.execute({change_id: CID, blocker_id: blockerId, user_response: "重复"} as any, arch)).rejects.toThrow(/awaiting_user/)
-    expect(devWt).toBe(readState(wt).taskGroups[0].worktreePath)
-    rmSync(root, { recursive: true, force: true })
+      // blocker 参数仅 verdict=failed 有效
+      const err = await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", blocker: { source_role: "developer", category: "infra", description: "构建环境异常", evidence: "CI 日志", attempted_actions: "已重试" } },
+        ctx.dev
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/仅支持 verdict=failed/)
+
+      const r = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "developer", category: "infra", description: "构建环境异常", evidence: "CI 日志", attempted_actions: "已重试" },
+        },
+        ctx.dev
+      )
+      expect(r).toContain("- **推进**: 是")
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("todo")
+      expect(item.currentStep).toBe("analyze")
+      // tasks 全 open，review 验证标记清空
+      expect(taskListOf(item).every((t: any) => t.status === "open")).toBe(true)
+      expect(blockersOf(item)).toHaveLength(1)
+      expect(blockersOf(item)[0].status).toBe("awaiting_user")
+    } finally { teardown(root) }
   })
 
-  test("多个 blocker 全部处理后才能由架构师 arch_submit ready", async () => {
-    const root = `/tmp/blocker-many-${Date.now()}`
-    const wt = freshWt(root)
-    __setGitRunner(new FakeGitRunner())
-    const orch = makeCtx("openspec-orchestrator", wt)
-    const arch = makeCtx("openspec-architect", wt)
+  test("blocker_updates 引用不存在或已 resolved 的 blocker → 抛错", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      // 不存在的 blocker_id
+      const err = await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }, blocker_updates: [{ blocker_id: "b99", user_response: "x" }] },
+        ctx.arch
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/b99/)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    await arch_blocker.execute({change_id: CID, blockers: [
-        { source_role: "openspec-architect", task_id: "1", category: "credential", description: "凭证", evidence: "缺失", attempted_actions: "检查 env", options: ["提供凭证"] },
-        { source_role: "openspec-architect", task_id: "1", category: "external_dependency", description: "地址", evidence: "缺失", attempted_actions: "检查 spec", options: ["提供地址"] },
-      ],} as any, arch)
-    const blockers = readState(wt).taskGroups[0].blockers
-    await arch_blocker.execute({change_id: CID, blocker_id: blockers[0].id, user_response: "已提供凭证"} as any, arch)
-    await expect(arch_submit.execute({change_id: CID, outcome: "ready", execution_boundary: boundary()} as any, arch)).rejects.toThrow(/awaiting_user/)
-    await arch_blocker.execute({change_id: CID, blocker_id: blockers[1].id, user_response: "已提供地址"} as any, arch)
-    await arch_submit.execute({change_id: CID, outcome: "ready", execution_boundary: boundary()} as any, arch)
-    expect(readState(wt).taskGroups[0].blockers.every((blocker: any) => blocker.status === "resolved")).toBe(true)
-    rmSync(root, { recursive: true, force: true })
+      // 先上报 1 个并 resolved
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "failed", blockers: [{ source_role: "architect", category: "credential", description: "缺凭证", evidence: "env 无值", attempted_actions: "检查 env" }] },
+        ctx.arch
+      )
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "failed", blocker_updates: [{ blocker_id: "b1", user_response: "已提供" }] },
+        ctx.arch
+      )
+      // 已 resolved 的 blocker 不能再更新
+      const err2 = await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "failed", blocker_updates: [{ blocker_id: "b1", user_response: "重复" }] },
+        ctx.arch
+      ).catch((e: Error) => e)
+      expect(err2).toBeInstanceOf(Error)
+      expect(err2.message).toMatch(/不是 awaiting_user/)
+    } finally { teardown(root) }
   })
 
-  test("旧状态缺 blockers 且架构已完成时归一到 dev_impl，并只提示资源准备", async () => {
-    const root = `/tmp/blocker-migrate-${Date.now()}`
-    const wt = freshWt(root)
-    __setGitRunner(new FakeGitRunner())
-    const orch = makeCtx("openspec-orchestrator", wt)
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    const legacy = readState(wt)
-    legacy.taskGroups[0].phases.architect_review.completed = true
-    legacy.taskGroups[0].executionBoundary = boundary()
-    delete legacy.taskGroups[0].blockers
-    writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(legacy, null, 2))
+  test("多个 blocker 全部处理后 analyze 才可 passed", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "failed",
+          blockers: [
+            { source_role: "architect", category: "credential", description: "凭证", evidence: "缺失", attempted_actions: "检查 env" },
+            { source_role: "architect", category: "external_dependency", description: "地址", evidence: "缺失", attempted_actions: "检查 spec" },
+          ],
+        },
+        ctx.arch
+      )
+      const item0 = readItem(wt, CID)
+      expect(blockersOf(item0)).toHaveLength(2)
+      const [b1, b2] = blockersOf(item0)
 
-    const outputStr = output(await status.execute({ change_id: CID }, orch))
-    expect(outputStr).toContain("**当前阶段**: dev_impl")
-    expect(outputStr).toContain("opx_orch_set_worktree")
-    expect(outputStr).not.toContain("openspec-developer")
-    expect(outputStr).not.toContain("recovery")
-    rmSync(root, { recursive: true, force: true })
+      // 只处理 1 个 → passed 仍被拦截
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "failed", blocker_updates: [{ blocker_id: b1.id, user_response: "已提供凭证" }] },
+        ctx.arch
+      )
+      const err = await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
+        ctx.arch
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/未解决的 blocker/)
+
+      // 全部处理后 → passed 推进
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "failed", blocker_updates: [{ blocker_id: b2.id, user_response: "已提供地址" }] },
+        ctx.arch
+      )
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
+        ctx.arch
+      )
+      expect(r).toContain("- **推进**: 是 → implement")
+      const item = readItem(wt, CID)
+      expect(blockersOf(item).every((b: any) => b.status === "resolved")).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("status 视图渲染 blockers：awaiting_user/resolved + 处理指引", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "failed",
+          blockers: [
+            { source_role: "architect", category: "external_dependency", description: "接口契约未定", evidence: "E", attempted_actions: "A" },
+            { source_role: "architect", category: "architecture_design", description: "已解决的 blocker", evidence: "E", attempted_actions: "A" },
+          ],
+        },
+        ctx.arch
+      )
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "failed", blocker_updates: [{ blocker_id: blockersOf(item0)[1].id, user_response: "ok" }] },
+        ctx.arch
+      )
+
+      const out = await status.execute({ change_id: CID }, ctx.arch)
+      expect(out).toContain("# ✅ 当前轮到你执行")
+      expect(out).toContain("## Blocker")
+      expect(out).toContain("接口契约未定")
+      expect(out).toContain("⏳ 待用户答复")
+      expect(out).toContain("已解决的 blocker")
+      expect(out).toContain("✓ 已解决")
+      expect(out).toContain("用户答复：ok")
+      expect(out).toContain("blocker_updates")
+      expect(out).toContain("无法以 passed 提交")
+    } finally { teardown(root) }
+  })
+
+  test("recovery 后未解决 blocker 保留：awaiting_user 不被清空", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "failed",
+          blockers: [{ source_role: "architect", category: "real_input", description: "缺少真实输入", evidence: "测试数据不可代表生产路径", attempted_actions: "检查现有 fixture" }],
+        },
+        ctx.arch
+      )
+      expect(blockersOf(readItem(wt, CID))[0].status).toBe("awaiting_user")
+
+      // recovery 重初始化（task_analysis），未解决 blocker 保留
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "task_analysis" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("todo")
+      expect(item.currentStep).toBe("analyze")
+      expect(blockersOf(item)).toHaveLength(1)
+      expect(blockersOf(item)[0].status).toBe("awaiting_user")
+    } finally { teardown(root) }
   })
 })

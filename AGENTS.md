@@ -23,8 +23,12 @@ tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/
 |------|------|
 | `assets/agents/` | 子代理定义文件（`openspec-*.md`）。技能加载、权限声明、行为约束在此修改。 |
 | `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`。扫描遵循 OpenCode 标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
+| `assets/workflows/` | workflow 定义（`task.yaml` / `issue.yaml`）。引擎按此驱动 step 流转与 agent 归属。 |
 | `.agents/skills/` | 项目内部分析用 skill，如 `openspec-orchestrate-optimizer`。非子代理加载目标。 |
-| `src/tools/` | 编排工具实现（`orchestrate.ts` 等）。行为以源码为准。 |
+| `src/core/tools/` | 编排工具实现（生命周期 / 通用 step 提交）。行为以源码为准。 |
+| `src/core/workflow/` | workflow 引擎（状态机、collector、poller、状态视图）。 |
+| `src/adapters/opencode/` | OpenCode 适配层（工具注册、参数 schema、agent/skill 注入）。 |
+| `src/skills/` | skill 扫描与解析。 |
 | `tests/` | 测试文件。`bun test` 执行。 |
 
 ## 治理原则
@@ -82,11 +86,11 @@ agent doc 禁止枚举/赘述 `opx_status` 的返回内容（字段清单、"返
 
 ### review 维度由调用者身份自动推导
 
-`opx_tool_review_submit` / `opx_task_review_submit` / `opx_quality_review_submit` 不接受 `dimension` 参数，维度通过 `DIMENSION_AGENT_MAP` 从 `context.agent` 反查。不允许调用者自行传入维度。`opx_quality_review_submit` 的 5 维 quality reviewer 按调用者身份自动推导，`opx_tool_review_submit` 跨维提交时由工具 reviewer 自行指定 issue 的 `dimension` 字段。
+quality review 的维度通过 `DIMENSION_AGENT_MAP` 从 `context.agent` 反查（视图按维度过滤 children、豁免裁定按维度归位），调用者无需声明自身维度。tool review 跨维报 issue 时由工具 reviewer 在 `new_children` 的 `dimension` 字段自行指定归因维度。
 
 ### 豁免按"谁提谁裁定"原则
 
-提出 issue 的角色负责裁定该 issue 的豁免申请。tool review 由 openspec-reviewer-tool 裁定，task review 由 openspec-reviewer-task 裁定，quality review 由对应维度 quality reviewer 裁定。架构师仅以 architecture reviewer 身份通过 `opx_quality_review_submit(exempt_issue_ids=[...])` 裁定自己报的 issue。
+提出 issue 的角色负责裁定该 issue 的豁免申请。tool review 由 openspec-reviewer-tool 裁定，task review 由 openspec-reviewer-task 裁定，quality review 由对应维度 quality reviewer 裁定。架构师仅以 architecture reviewer 身份通过 `opx_agent_submit` 的 `exempt_adjudications` 裁定自己报的 issue。
 
 ### 编排层不涉及被编排 agent 的内部逻辑
 
@@ -116,7 +120,7 @@ opx_* 工具返回体必须是 markdown 格式（列表、段落），不得使�
 
 ### 全局避免重复（DRY）
 
-此原则适用于整个项目：相同语义的代码段在 3 个及以上位置复用时必须提炼为共享函数，禁止复制粘贴。agent 文档（`assets/agents/*.md`）等非结构化文本除外。视图渲染（`src/tools/orchestrate/views.ts`）中因各 agent 视图高度同构，阈值降至 2 个及以上，worktree 路径展示、issue 列表渲染等已按此原则抽取。
+此原则适用于整个项目：相同语义的代码段在 3 个及以上位置复用时必须提炼为共享函数，禁止复制粘贴。agent 文档（`assets/agents/*.md`）等非结构化文本除外。视图渲染（`src/core/views.ts`）中因各 agent 视图高度同构，阈值降至 2 个及以上，worktree 路径展示、issue 列表渲染等已按此原则抽取。
 
 ### Skill 间不得相互引用
 
