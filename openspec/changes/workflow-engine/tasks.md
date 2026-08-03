@@ -1,7 +1,7 @@
 ## 1. P1 通用引擎核心
 
 - [ ] 1.1 定义 WorkItem 类型与状态机（phase/suspended/currentStep/tags/metadata/children/writeback；phase 共用命名空间规则、tags 仅承载裁决、下划线前缀内部字段规则）
-- [ ] 1.2 实现 workflow YAML loader（schema 校验、transition 目标解析含 done/halt、非法配置报错、reviewer_for 声明）
+- [ ] 1.2 实现 workflow YAML loader（schema 校验、transition 目标解析含 done/halt、非法配置报错）
 - [ ] 1.3 实现 tag 裁决与裁决缓存（passed 跳过 / failed 重派 / pending 分派 / always_run 强制）
 - [ ] 1.4 实现 children 联动与 phase 门禁（正向 gate / 反向终态保持、review 中间态由 reviewer 裁定、未提交置 todo）
 - [ ] 1.5 实现重试检查点逻辑（retryCount>0 且为 effective_max_retries 整数倍、continue/giveup、首轮不触发）
@@ -12,7 +12,7 @@
 
 - [ ] 2.1 实现 opx_agent_submit：step_id 路由与调用者归属校验
 - [ ] 2.2 实现提交内 gate 检查与 children 更新（fixed→done / exempt→tag / new_children）
-- [ ] 2.3 实现豁免路由与裁定（metadata.source + reviewer_for 映射；dismissed/rejected；无匹配时提示人工）
+- [ ] 2.3 实现豁免路由与裁定（metadata.source 匹配 review step agents；dismissed/rejected；无匹配时提示人工）
 - [ ] 2.4 实现非阻塞异步写回与失败重试（lastAttempt/lastSuccess/error）
 - [ ] 2.5 用 opx_agent_submit 替换现有 role-specific submit（tool/task/quality）及其测试
 
@@ -25,7 +25,7 @@
 
 ## 4. P4 新 workflow 与 ADO stub
 
-- [ ] 4.1 定义 issue workflow YAML
+- [x] 4.1 issue 不设独立 workflow：删除 assets/workflows/issue.yaml（未接线纸面文件），issue 统一由 task workflow 的 children 机制承载
 - [ ] 4.2 实现 ADO collector adapter 占位（pull 返回空、不抛错）
 - [ ] 4.3 实现自定义 adapter 注册机制
 - [ ] 4.4 收集器定时拉取与去重调度（pollIntervalMs 默认 30s）

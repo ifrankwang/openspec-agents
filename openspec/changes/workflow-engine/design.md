@@ -7,7 +7,7 @@
 ## Goals / Non-Goals
 
 **Goals:**
-- 用 YAML 声明 workflow（task / issue / 自定义 source），新增 workflow 不改代码。
+- 用 YAML 声明 workflow（task / 自定义 source），新增 workflow 不改代码。
 - 统一 WorkItem 模型，task 挂 issue（children 一层）。
 - 通用 `opx_agent_submit` 按 step_id 路由任意步骤。
 - 收集器 adapter 定时拉取外部项并回写。
@@ -29,6 +29,7 @@
 
 ### 2. children 一层树 + phase 联动
 - 正向推进做 gate：Low+ children 必须达到目标 phase；Info children 未声明解决则重置 todo。反向回退 children 独立判定：终态 child（done/cancelled）保持不动；已提交待裁定（review）的 child 由 reviewer 在当前轮次完成裁定后按结果落位；未提交（todo/in_progress）的 child 重置为 todo。reviewer 必须覆盖全部已提交 child。全部 children 终态 + 全部 agent passed 才允许 step 通过。
+- issue WorkItem 不设独立 workflow，统一由 task workflow 的 children 机制承载；assets/workflows/ 下仅保留 task.yaml。
 - 备选：issue 平铺无层级。理由：task 挂 issue 是自然关联，且 reviewer 全量覆盖校验需要层级。
 
 ### 3. tag 键值对裁决 `{step}:{agent}:{verdict}`，支持并行与缓存
@@ -52,7 +53,7 @@
 - 备选：引擎自动循环重试。理由：重试/放弃是业务决策，须留在 agent 会话。
 
 ### 8. 豁免按 metadata.source 路由
-- 报 issue 的 agent_id 记入 issue 的 metadata.source。workflow YAML 的 review step 通过 reviewer_for 声明其裁定来源的 agent_key 列表；豁免申请依据 metadata.source 匹配 reviewer_for 路由到对应 reviewer step，无匹配时交由 orchestrator 处理。裁定 dismissed→cancelled 或 rejected→todo，保持"谁提谁裁定"。
+- 报 issue 的 agent_id 记入 issue 的 metadata.source。review step 的 agents 即其豁免裁定白名单：豁免申请依据 metadata.source 匹配所属 review step 的 agents（报源 agent 属于哪个 review step 的 agents 就由谁裁定）路由到对应 reviewer step，无匹配时交由 orchestrator 处理。裁定 dismissed→cancelled 或 rejected→todo，保持"谁提谁裁定"。
 
 ### 9. 引擎仅推荐，orchestrator 手动分派
 - 与现有 agent 会话模型一致，引擎不主动发起 session。
@@ -68,7 +69,7 @@
 
 ## Migration Plan
 
-按 P1→P7 分批实施：P1 引擎核心（WorkItem/YAML loader/tag 裁决/门禁/检查点）→ P2 通用 submit 替换 role-specific submit → P3 OpenSpec collector + task workflow 迁移现有流程 → P4 issue workflow + ADO stub + 回写调度 → P5 看板 5 列 → P6 opx_status 重构 → P7 清理硬编码常量。
+按 P1→P7 分批实施：P1 引擎核心（WorkItem/YAML loader/tag 裁决/门禁/检查点）→ P2 通用 submit 替换 role-specific submit → P3 OpenSpec collector + task workflow 迁移现有流程 → P4 ADO stub + 收集器与回写调度 → P5 看板 5 列 → P6 opx_status 重构 → P7 清理硬编码常量。
 
 可复用：state 读写、git 操作、dedup/issue gate 函数、FakeGitRunner、agent 定义、skill 定义。工具与 agent 文档同步更新，README 随实现收敛。
 

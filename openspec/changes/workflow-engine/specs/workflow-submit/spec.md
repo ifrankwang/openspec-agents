@@ -26,15 +26,22 @@
 - **WHEN** 提交声明某 child 为 exempt
 - **THEN** 该 child 在自身 metadata 记录 exempt 标记，等待对应 reviewer 裁定，不直接改变终态且不写入 tags
 
+### Requirement: new_children 仅 review 阶段 step 可提报
+`opx_agent_submit` SHALL 拒绝非 review 阶段 step 提交的 new_children：提交被拒绝并返回错误，不产生任何状态变更。仅 review 阶段 step 允许通过 new_children 提报新 issue。
+
+#### Scenario: 非 review 阶段提报 new_children 被拒
+- **WHEN** 非 review 阶段 step 的 agent 提交 new_children
+- **THEN** 提交被拒绝并返回错误，不产生任何状态变更
+
 ### Requirement: 豁免路由与裁定
-提交的 issue child SHALL 在其 metadata.source 记录报 issue 的 agent_id。workflow YAML 的 review step SHALL 通过 reviewer_for 声明其裁定来源的 agent_key 列表；豁免申请 SHALL 依据 issue 的 metadata.source 匹配 reviewer_for 路由到对应 reviewer step，无匹配时交由 orchestrator 处理。reviewer 裁定 dismissed 时 child 置为 cancelled，裁定 rejected 时 child 置为 todo。
+提交的 issue child SHALL 在其 metadata.source 记录报 issue 的 agent_id。review step 的 agents 即其豁免裁定白名单；豁免申请 SHALL 依据 issue 的 metadata.source 匹配该 source 所属 review step 的 agents，路由到对应 reviewer step，无匹配时交由 orchestrator 处理。reviewer 裁定 dismissed 时 child 置为 cancelled，裁定 rejected 时 child 置为 todo。
 
 #### Scenario: 豁免路由到对应 reviewer
 - **WHEN** 某 agent 提交 issue child 并声明 exempt
-- **THEN** 引擎依据 issue 的 metadata.source 匹配 reviewer_for 声明，将该 issue 的裁定推荐给对应 reviewer step
+- **THEN** 引擎依据 issue 的 metadata.source 匹配 review step 的 agents，将该 issue 的裁定推荐给对应 reviewer step
 
 #### Scenario: 无匹配 reviewer 时提示人工
-- **WHEN** 某 issue 的 metadata.source 与任何 review step 的 reviewer_for 均不匹配
+- **WHEN** 某 issue 的 metadata.source 不属于任何 review step 的 agents
 - **THEN** 豁免申请不被自动路由，opx_status 提示 orchestrator 手动处理
 
 #### Scenario: dismissed 取消 issue
