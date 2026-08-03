@@ -59,7 +59,6 @@ export interface StepConfig {
   allowed_tools?: string[]
   timeout_ms?: number
   max_retries?: number
-  reviewer_for?: string[]
   transitions: StepTransitions
 }
 

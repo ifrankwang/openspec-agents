@@ -30,7 +30,7 @@ Review 阶段依次执行 tool、task、quality 三层门禁；任一 step 裁�
 
 ## Workflow 引擎
 
-编排状态机由 workflow 引擎驱动：`assets/workflows/task.yaml` 声明任务流转（phase → steps → agents → transitions），`assets/workflows/issue.yaml` 声明单条 issue 的独立流转（供外部源收集器产出的 issue WorkItem 使用）。`opx_agent_submit` 提交裁决后沿 transitions 推进状态机；`src/core/workflow/` 为引擎实现（loader / engine / submit / status），collector 负责从外部源拉取并产出 WorkItem，poller 定时将新增项写入 state.workItems。
+编排状态机由单一 task workflow 驱动：`assets/workflows/task.yaml` 声明任务流转（phase → steps → agents → transitions）。`opx_agent_submit` 提交裁决后沿 transitions 推进状态机；`src/core/workflow/` 为引擎实现（loader / engine / submit / status），collector 负责从外部源拉取并产出 WorkItem，poller 定时将新增项写入 state.workItems。
 
 ## 快速开始
 
@@ -71,14 +71,14 @@ src/skills/                   — skill 扫描与解析
 src/dashboard/                — 看板页面服务
 assets/agents/                — agent 定义
 assets/skills/                — 内置 skill 定义
-assets/workflows/             — workflow 定义（task.yaml / issue.yaml）
+assets/workflows/             — workflow 定义（task.yaml）
 assets/dashboard/             — 看板页面
 tests/                        — Bun 测试，使用 FakeGitRunner
 ```
 
 ## 核心特性
 
-- **Workflow 引擎**：`assets/workflows/task.yaml` / `issue.yaml` 声明 step 流转与 agent 归属，引擎驱动状态机；collector 从外部源（OpenSpec change / ADO）拉取并产出 WorkItem，poller 定时写入 state.workItems
+- **Workflow 引擎**：`assets/workflows/task.yaml` 声明 step 流转与 agent 归属，引擎驱动状态机；collector 从外部源（OpenSpec change / ADO）拉取并产出 WorkItem，poller 定时写入 state.workItems
 - **编排进度看板**：插件加载时启动 HTTP 看板服务，按 WorkItem phase 实时展示 5 列看板及 step:agent 裁决、children 明细（2s 轮询、只读）
 - **状态持久化**：状态文件按 changeId 拆分并写入主仓库；会话通过工具显式传入的 change_id 定位状态文件；worktree 内 session 通过 `context.json` 指针辅助解析
 - **阻塞升级**：不可自主决策的问题持久化、暂停、用户恢复、架构复核

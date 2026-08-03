@@ -241,30 +241,7 @@ describe("poller 写回与占位", () => {
   })
 })
 
-describe("issue.yaml 加载与 OpenSpec collector 注册", () => {
-  test("issue.yaml 用 loadWorkflow 解析成功：5 phase/step 全量可解析", () => {
-    const yamlText = readFileSync(join(import.meta.dir, "../assets/workflows/issue.yaml"), "utf8")
-    const wf = loadWorkflow(yamlText)
-    expect(wf.id).toBe("issue")
-    expect(wf.max_retries).toBe(3)
-    expect(wf.phases.map((p) => p.name)).toEqual(["todo", "in_progress", "review", "done", "cancelled"])
-    const stepIds = wf.phases.flatMap((p) => p.steps.map((s) => s.id))
-    expect(stepIds).toEqual([
-      "triage", "fix", "verify_fix", "terminal_done", "terminal_cancelled",
-    ])
-    const verifyFix = wf.stepMap.get("verify_fix")!.step
-    expect(verifyFix.agents).toEqual(["openspec-reviewer-tool"])
-    expect(verifyFix.reviewer_for).toEqual(["openspec-developer"])
-    expect(verifyFix.transitions.on_pass).toBe("done")
-    expect(verifyFix.transitions.on_fail).toBe("fix")
-    for (const step of wf.phases.flatMap((p) => p.steps)) {
-      for (const target of [step.transitions.on_pass, step.transitions.on_fail]) {
-        if (target === "done" || target === "halt") continue
-        expect(wf.stepMap.has(target)).toBe(true)
-      }
-    }
-  })
-
+describe("OpenSpec collector 注册", () => {
   test("OpenSpecCollector 注册后参与 pollOnce 拉取 openspec change", async () => {
     const root = `/tmp/opxpoll-8-${Date.now()}`
     const { wt } = freshSetup(root)

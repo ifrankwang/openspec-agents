@@ -277,20 +277,26 @@ describe("opx_agent_submit 通用 step 提交", () => {
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
       )
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
 
+      // review 阶段 step 才可提报新 issue；Low+ 新报必须 verdict=failed
       await agent_submit.execute(
         {
-          change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"],
-          new_children: [{ id: "7", title: "新发现问题", description: "dev 提交时新增 issue", severity: "Low" }],
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "7", title: "新发现问题", description: "reviewer 提交时新增 issue", severity: "Low" }],
         },
-        makeCtx("openspec-developer", wt)
+        makeCtx("openspec-reviewer-tool", wt)
       )
       const child = taskItemOf(wt).children.find((c: WorkItem) => c.externalId === "7")
       expect(child).toBeDefined()
       expect(child.phase).toBe("todo")
-      expect(child.description).toBe("dev 提交时新增 issue")
-      // 新 child 未终态 → 该 step 不推进
+      expect(child.description).toBe("reviewer 提交时新增 issue")
+      // failed → 沿 on_fail 回退 implement
       expect(taskItemOf(wt).phase).toBe("in_progress")
+      expect(taskItemOf(wt).currentStep).toBe("implement")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -565,18 +571,23 @@ describe("opx_agent_submit 通用 step 提交", () => {
         makeCtx("openspec-architect", wt)
       )
       await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
+      // review 阶段 tool reviewer 提报：Low+ 新报必须 verdict=failed
+      await agent_submit.execute(
         {
-          change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"],
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
           new_children: [
-            { id: "7", title: "注入风险", description: "安全问题", severity: "High", source_phase: "quality", dimension: "security" },
+            { id: "7", title: "注入风险", description: "安全问题", severity: "Low", source_phase: "quality", dimension: "security" },
             { id: "8", title: "缺省归因", description: "不传 source_phase/dimension", severity: "Info" },
           ],
         },
-        makeCtx("openspec-developer", wt)
+        makeCtx("openspec-reviewer-tool", wt)
       )
 
       const c7 = taskItemOf(wt).children.find((c: WorkItem) => c.externalId === "7")
-      expect(c7.metadata["source"]).toBe("openspec-developer")
+      expect(c7.metadata["source"]).toBe("openspec-reviewer-tool")
       expect(c7.metadata["source_phase"]).toBe("quality")
       expect(c7.metadata["dimension"]).toBe("security")
       // 缺省归因：未传 source_phase/dimension → resolveChildIssueFields 回退 tool/style
@@ -629,7 +640,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     }
   })
 
-  test("15. 豁免裁定 dismissed：dev 申请豁免后，匹配 reviewer_for 的 quality reviewer 用 exempt_adjudications 裁定 → child cancelled", async () => {
+  test("15. 豁免裁定 dismissed：dev 申请豁免后，报 issue 的 quality reviewer（verify_quality.agents 成员）用 exempt_adjudications 裁定 → child cancelled", async () => {
     const root = `/tmp/opxsub-15-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -668,7 +679,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       item.currentStep = "verify_quality"
       writeFileSync(statePath, JSON.stringify(state, null, 2))
 
-      // quality reviewer（style，匹配 verify_quality.reviewer_for）用 exempt_adjudications 裁定 dismissed
+      // quality reviewer（style，属于 verify_quality.agents，按报源匹配）用 exempt_adjudications 裁定 dismissed
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "passed",
@@ -682,7 +693,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     }
   })
 
-  test("16. 越权裁定：非 reviewer_for/agents 白名单的 agent 裁定豁免 → 抛错且 state 不变", async () => {
+  test("16. 越权裁定：非报 issue 维度的 agent 裁定 quality 豁免 → 抛错且 state 不变", async () => {
     const root = `/tmp/opxsub-16-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -1226,6 +1237,107 @@ describe("opx_agent_submit 通用 step 提交", () => {
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/裁定者必须为报 issue 的/)
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("33. 门禁负向：非 review 阶段 step 提报 new_children 被拒，state 零变更", async () => {
+    const root = `/tmp/opxsub-33-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
+        makeCtx("openspec-architect", wt)
+      )
+      // analyze 通过后进入 implement（in_progress 阶段，非 review）
+      expect(taskItemOf(wt).phase).toBe("in_progress")
+      expect(taskItemOf(wt).currentStep).toBe("implement")
+      const childrenBefore = taskItemOf(wt).children.length
+
+      // developer 在 implement 提报 new_children → 命中门禁抛错
+      const err = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "passed",
+          completed_task_ids: ["1", "2", "3"],
+          new_children: [{ id: "x1", title: "T", description: "d", severity: "Low" }],
+        },
+        makeCtx("openspec-developer", wt)
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/仅 review/)
+      expect(err.message).toMatch(/new_children/)
+
+      // state 零变更：children 未新增、无 x1、task 仍停留在 implement
+      const item = taskItemOf(wt)
+      expect(item.children).toHaveLength(childrenBefore)
+      expect(item.children.find((c: WorkItem) => c.id === "x1")).toBeUndefined()
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("34. 跨维豁免：tool reviewer 报 quality 维度 issue → 对应维度 quality reviewer 裁定（谁提谁裁定）", async () => {
+    const root = `/tmp/opxsub-34-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
+
+      // tool reviewer 在 verify_tool 报 quality 维度（style）issue → child 写入、failed 回退 implement
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "X", title: "跨维豁免", description: "tool reviewer 报的 quality 维度 issue", severity: "Low", source_phase: "quality", dimension: "style" }],
+        },
+        makeCtx("openspec-reviewer-tool", wt)
+      )
+      let child = taskItemOf(wt).children.find((c: WorkItem) => c.id === "X")
+      expect(child).toBeDefined()
+      expect(child.metadata["source"]).toBe("openspec-reviewer-tool")
+      expect(child.metadata["source_phase"]).toBe("quality")
+      expect(child.metadata["dimension"]).toBe("style")
+      expect(taskItemOf(wt).phase).toBe("in_progress")
+      expect(taskItemOf(wt).currentStep).toBe("implement")
+
+      // dev 提交豁免申请 → exempt_request 已标记，child 未终态不推进
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["X"], completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
+      child = taskItemOf(wt).children.find((c: WorkItem) => c.id === "X")
+      expect(child.metadata["exempt_request"]).toBeDefined()
+      expect(child.phase).toBe("todo")
+
+      // 模拟编排把 item 移回 review/verify_quality 供豁免复核（真实编排由 orchestrator 调度）
+      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const state = JSON.parse(readFileSync(statePath, "utf-8"))
+      const item = state.workItems.find((w: any) => w.id === "task:1")
+      item.phase = "review"
+      item.currentStep = "verify_quality"
+      writeFileSync(statePath, JSON.stringify(state, null, 2))
+
+      // 负向对照：非对应维度 agent（architecture）裁定 → 抛错（谁提谁裁定）且 state 不变
+      const err = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "X", action: "dismissed" }] },
+        makeCtx("openspec-reviewer-architecture", wt)
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/裁定者必须为报 issue 的/)
+      child = taskItemOf(wt).children.find((c: WorkItem) => c.id === "X")
+      expect(child.phase).toBe("todo")
+      expect(child.metadata["exempt_request"]).toBeDefined()
+
+      // 正向：对应维度 quality reviewer（style）裁定 dismissed → child cancelled
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "X", action: "dismissed" }] },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      expect(taskItemOf(wt).children.find((c: WorkItem) => c.id === "X").phase).toBe("cancelled")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

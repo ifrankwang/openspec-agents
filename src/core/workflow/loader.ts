@@ -39,7 +39,6 @@ interface RawStep {
   allowed_tools?: unknown
   timeout_ms?: unknown
   max_retries?: unknown
-  reviewer_for?: unknown
   transitions?: unknown
 }
 
@@ -179,7 +178,6 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
         allowed_tools: expectOptionalStringArray(rs.allowed_tools, `step "${stepId}" 的 allowed_tools`),
         timeout_ms: expectOptionalPositiveInt(rs.timeout_ms, `step "${stepId}" 的 timeout_ms`),
         max_retries: expectOptionalPositiveInt(rs.max_retries, `step "${stepId}" 的 max_retries`),
-        reviewer_for: expectOptionalStringArray(rs.reviewer_for, `step "${stepId}" 的 reviewer_for`),
         transitions: { on_pass: "done", on_fail: "halt" },
       }
       phase.steps.push(step)

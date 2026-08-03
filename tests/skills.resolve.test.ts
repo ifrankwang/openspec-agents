@@ -2,7 +2,7 @@
  * skill 解析模块（resolve.ts）单测：
  * - resolveSkillsForCapabilities tag 匹配
  * - scanSkillTags 进程内缓存
- * - task.yaml / issue.yaml 各 step capability_tags 经 loadWorkflow 可解析
+ * - task.yaml 各 step capability_tags 经 loadWorkflow 可解析
  */
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
@@ -97,19 +97,6 @@ describe("workflow YAML capability_tags 可解析", () => {
     expectResolvable("verify_tool", ["quality-gate", "efficiency", "api-testing"])
     expectResolvable("verify_task", ["api-testing", "quality-gate"])
     expectResolvable("verify_quality", ["style", "architecture", "performance", "security", "maintainability", "efficiency"])
-  })
-
-  test("issue.yaml 各 step capability_tags 经 loadWorkflow 解析且可 resolve", () => {
-    const wf = readWf("issue.yaml")
-    const expectResolvable = (stepId: string, expected: string[]) => {
-      const step = wf.stepMap.get(stepId)!.step
-      expect(step.capability_tags).toEqual(expected)
-      const r = resolveSkillsForCapabilities(step.capability_tags)
-      expect(r.skillNames.length).toBeGreaterThan(0)
-    }
-    expectResolvable("triage", ["architecture", "efficiency"])
-    expectResolvable("fix", ["efficiency"])
-    expectResolvable("verify_fix", ["quality-gate", "efficiency"])
   })
 
   test("既有测试断言的 skill 名由两个来源兜底产出", () => {

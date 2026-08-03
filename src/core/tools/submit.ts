@@ -395,6 +395,10 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     assertSubmitRouting(workflow, item, params.step_id, ctx.agent)
     const stepPhase = workflow.stepMap.get(params.step_id)!.phase.name
 
+    if ((params.new_children?.length ?? 0) > 0 && stepPhase !== "review") {
+      throw new Error(`仅 review 阶段的 step 允许提报新 issue（new_children），当前 step "${params.step_id}" 属于 "${stepPhase}" 阶段，拒绝提报。`)
+    }
+
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
     if (stepPhase === "review") {

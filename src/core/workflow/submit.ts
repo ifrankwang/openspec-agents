@@ -44,12 +44,12 @@ function readIssueSource(child: WorkItem): string | undefined {
   return typeof child.metadata["source"] === "string" ? child.metadata["source"] : undefined
 }
 
-/** 依据报源 agent 匹配 review phase 中声明了 reviewer_for 的 step，未命中返回 null */
+/** 报源 agent 属于哪个 review step 的 agents 就由谁裁定（固定逻辑，非可配置），未命中返回 null */
 function resolveReviewStepForSource(workflow: LoadedWorkflow, source: string): StepConfig | null {
   for (const phase of workflow.phases) {
     if (phase.name !== "review") continue
     for (const step of phase.steps) {
-      if (step.reviewer_for?.includes(source)) return step
+      if (step.agents.includes(source)) return step
     }
   }
   return null
@@ -153,7 +153,7 @@ export function routeExempt(item: WorkItem, workflow: LoadedWorkflow, issueId: s
   if (!step) {
     return {
       routed: false,
-      reason: `无 review step 声明 reviewer_for 覆盖来源 agent "${source}"，请 orchestrator 手动处理该豁免申请。`,
+      reason: `来源 agent "${source}" 不属于任何 review step 的 agents，请 orchestrator 手动处理该豁免申请。`,
     }
   }
   return { routed: true, targetStepId: step.id }
@@ -161,7 +161,7 @@ export function routeExempt(item: WorkItem, workflow: LoadedWorkflow, issueId: s
 
 /**
  * 裁定豁免申请：dismissed → cancelled；rejected → todo（清除 exempt_request 标记）。
- * 裁定者必须属于对应 review step 的 reviewer_for 或 agents。
+ * 裁定者必须属于对应 review step 的 agents。
  */
 export function adjudicateExempt(
   item: WorkItem,
@@ -175,7 +175,7 @@ export function adjudicateExempt(
   const source = readIssueSource(child)
   const step = source ? resolveReviewStepForSource(workflow, source) : null
   if (!step) {
-    throw new Error(`豁免裁定失败：issue "${input.issueId}" 无对应 review step（来源 agent "${source ?? "缺失"}" 未匹配任何 reviewer_for）。`)
+    throw new Error(`豁免裁定失败：issue "${input.issueId}" 无对应 review step（来源 agent "${source ?? "缺失"}" 不属于任何 review step 的 agents）。`)
   }
   // verify_quality 维度限定裁定：quality 层 issue 须由报 issue 的维度 reviewer 裁定（谁提谁裁定），
   // 避免 verify_quality 多 agent 共享 step 导致白名单放行全部 5 个 quality reviewer。
@@ -190,9 +190,9 @@ export function adjudicateExempt(
       )
     }
   } else {
-    const whitelist = new Set<string>([...(step.reviewer_for ?? []), ...step.agents])
+    const whitelist = new Set<string>(step.agents)
     if (!whitelist.has(input.agentKey)) {
-      throw new Error(`豁免裁定失败：agent "${input.agentKey}" 不在 review step "${step.id}" 的裁定白名单（reviewer_for + agents）内。`)
+      throw new Error(`豁免裁定失败：agent "${input.agentKey}" 不在 review step "${step.id}" 的裁定白名单（agents）内。`)
     }
   }
 

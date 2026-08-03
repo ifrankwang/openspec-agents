@@ -106,16 +106,15 @@ describe("ADO 收集器占位与自定义注册", () => {
 })
 
 describe("task.yaml 加载", () => {
-  test("loadWorkflow 解析成功：id/max_retries/5 phase/step 全量可解析", () => {
+  test("loadWorkflow 解析成功：id/max_retries/3 phase/step 全量可解析", () => {
     const yamlText = readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8")
     const wf = loadWorkflow(yamlText)
     expect(wf.id).toBe("task")
     expect(wf.max_retries).toBe(5)
-    expect(wf.phases.map((p) => p.name)).toEqual(["todo", "in_progress", "review", "done", "cancelled"])
+    expect(wf.phases.map((p) => p.name)).toEqual(["todo", "in_progress", "review"])
     const expectedSteps = [
       "analyze", "implement",
       "verify_tool", "verify_task", "verify_quality",
-      "terminal_done", "terminal_cancelled",
     ]
     const stepIds = wf.phases.flatMap((p) => p.steps.map((s) => s.id))
     expect(stepIds).toEqual(expectedSteps)

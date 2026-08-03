@@ -159,23 +159,6 @@ phases:
     const wf = loadWorkflow(BASE_YAML)
     expect(wf.stepMap.get("verify")?.step.transitions.on_pass).toBe("done")
   })
-
-  test("reviewer_for 声明可解析", () => {
-    const wf = loadWorkflow(`
-id: x
-max_retries: 1
-phases:
-  - name: review
-    steps:
-      - id: r
-        agents: [reviewer]
-        reviewer_for: [developer]
-        transitions:
-          on_pass: done
-          on_fail: r
-`)
-    expect(wf.stepMap.get("r")?.step.reviewer_for).toEqual(["developer"])
-  })
 })
 
 describe("3. tag 裁决与裁决缓存", () => {

@@ -28,7 +28,6 @@ phases:
     steps:
       - id: approve
         agents: [reviewer, designer]
-        reviewer_for: [developer, architect]
         transitions:
           on_pass: done
           on_fail: implement
@@ -174,9 +173,9 @@ describe("3. gate 与推进", () => {
 describe("4. routeExempt 路由", () => {
   const WF = loadWorkflow(SUBMIT_YAML)
 
-  test("metadata.source 命中 reviewer_for → routed + targetStepId", () => {
+  test("metadata.source 命中 review step 的 agents → routed + targetStepId", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "developer" } }))
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
     const r = routeExempt(item, WF, "i1")
     expect(r.routed).toBe(true)
     expect(r.targetStepId).toBe("approve")
@@ -203,16 +202,16 @@ describe("5. adjudicateExempt 裁定", () => {
 
   test("dismissed → cancelled", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "developer" } }))
-    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "developer", action: "dismissed" })
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "dismissed" })
     expect(r.childPhase).toBe("cancelled")
     expect(item.children[0].phase).toBe("cancelled")
   })
 
   test("rejected → todo（清除 exempt_request 标记）", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "architect", exempt_request: { requestedBy: "architect" } } }))
-    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "architect", action: "rejected" })
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "reviewer" } } }))
+    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "rejected" })
     expect(r.childPhase).toBe("todo")
     expect(item.children[0].phase).toBe("todo")
     expect(item.children[0].metadata["exempt_request"]).toBeUndefined()
@@ -220,14 +219,14 @@ describe("5. adjudicateExempt 裁定", () => {
 
   test("属于该 step agents 的裁定者也可裁定", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "developer" } }))
-    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "dismissed" })
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "designer", action: "dismissed" })
     expect(r.childPhase).toBe("cancelled")
   })
 
   test("白名单外裁定者抛错且不产生状态变更", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "developer" } }))
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
     expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "manager", action: "dismissed" })).toThrow(/白名单/)
     expect(item.children[0].phase).toBe("todo")
   })
