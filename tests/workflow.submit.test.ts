@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   loadWorkflow, submitForStep, routeExempt, adjudicateExempt,
+  recommendForItem,
   enqueueWriteback, flushWritebacks, retryPendingWritebacks, setWritebackHandler,
 } from "../src/core/workflow"
 import type { WorkItem } from "../src/core/workflow/types"
@@ -167,6 +168,224 @@ describe("3. gate 与推进", () => {
     expect(item.children.find((c) => c.id === "c-todo")?.phase).toBe("todo")
     expect(item.children.find((c) => c.id === "c-done")?.phase).toBe("done")
     expect(item.metadata["_retryCount"]).toBe(1)
+  })
+
+  test("多 agent step 单维 failed（其余 pending）→ 聚合等待，不触发迁移", () => {
+    const item = makeItem({ phase: "review", currentStep: "approve" })
+    const r1 = submitForStep(item, WF, { stepId: "approve", agentKey: "reviewer", verdict: "failed" })
+    expect(r1.stepAdjudication).toBe("failed")
+    expect(r1.advanced).toBe(false)
+    expect(r1.transitionTarget).toBeUndefined()
+    expect(item.phase).toBe("review")
+    expect(item.currentStep).toBe("approve")
+    expect(item.metadata["_retryCount"]).toBeUndefined()
+  })
+
+  test("多 agent step 单维 passed 一维 failed（其余 pending）→ 聚合等待，不触发迁移", () => {
+    const wf3 = loadWorkflow(`
+id: x
+max_retries: 3
+phases:
+  - name: todo
+    steps:
+      - id: analyze
+        agents: [architect]
+        transitions:
+          on_pass: implement
+          on_fail: analyze
+  - name: in_progress
+    steps:
+      - id: implement
+        agents: [developer]
+        transitions:
+          on_pass: approve
+          on_fail: analyze
+  - name: review
+    steps:
+      - id: approve
+        agents: [reviewer, designer, auditor]
+        transitions:
+          on_pass: done
+          on_fail: implement
+`)
+    const item = makeItem({ phase: "review", currentStep: "approve" })
+    submitForStep(item, wf3, { stepId: "approve", agentKey: "reviewer", verdict: "passed" })
+    const r = submitForStep(item, wf3, { stepId: "approve", agentKey: "designer", verdict: "failed" })
+    expect(r.stepAdjudication).toBe("failed")
+    expect(r.advanced).toBe(false)
+    expect(item.currentStep).toBe("approve")
+    // 剩余 pending 维度提交后全部已裁决 → 触发 on:fail 回退
+    const r3 = submitForStep(item, wf3, { stepId: "approve", agentKey: "auditor", verdict: "passed" })
+    expect(r3.advanced).toBe(true)
+    expect(item.phase).toBe("in_progress")
+    expect(item.currentStep).toBe("implement")
+  })
+
+  test("多 agent step 全部已裁决（含 failed）→ 触发 on:fail 回退", () => {
+    const item = makeItem({ phase: "review", currentStep: "approve" })
+    item.children.push(child({ id: "c1", phase: "in_progress" }))
+    submitForStep(item, WF, { stepId: "approve", agentKey: "reviewer", verdict: "failed" })
+    const r = submitForStep(item, WF, { stepId: "approve", agentKey: "designer", verdict: "passed" })
+    expect(r.stepAdjudication).toBe("failed")
+    expect(r.advanced).toBe(true)
+    expect(r.transitionTarget).toBe("implement")
+    expect(item.phase).toBe("in_progress")
+    expect(item.currentStep).toBe("implement")
+    expect(item.metadata["_retryCount"]).toBe(1)
+    // 回退目标 step（implement）的裁决 tags 重置，但已 passed 的 approve:reviewer tag 保留（不触发全清）
+    expect(item.tags["implement:developer"]).toBeUndefined()
+    expect(item.tags["approve:reviewer"]).toBe("failed")
+    expect(item.tags["approve:designer"]).toBe("passed")
+  })
+
+  test("链式推进：一次提交穿越多个已 passed 的下游 step（等价 main task 自动跳过语义）", () => {
+    const wfChain = loadWorkflow(`
+id: x
+max_retries: 3
+phases:
+  - name: todo
+    steps:
+      - id: analyze
+        agents: [architect]
+        transitions:
+          on_pass: implement
+          on_fail: analyze
+  - name: in_progress
+    steps:
+      - id: implement
+        agents: [developer]
+        transitions:
+          on_pass: a
+          on_fail: analyze
+  - name: review
+    steps:
+      - id: a
+        agents: [ra]
+        transitions:
+          on_pass: b
+          on_fail: implement
+      - id: b
+        agents: [rb]
+        transitions:
+          on_pass: done
+          on_fail: implement
+`)
+    // 模拟回退后重提：a、b 已从上一轮 review 保留 passed，dev 重提 implement
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "done" }))
+    item.tags = {
+      "implement:developer": "failed",
+      "a:ra": "passed",
+      "b:rb": "passed",
+    }
+    const r = submitForStep(item, wfChain, { stepId: "implement", agentKey: "developer", verdict: "passed" })
+    expect(r.advanced).toBe(true)
+    // 链式穿越 a（passed）→ b（passed）→ done，一次提交直达终态，不再 terminal 卡死
+    expect(r.transitionTarget).toBe("done")
+    expect(item.phase).toBe("done")
+    expect(item.currentStep).toBeNull()
+  })
+
+  test("链式推进：停在需要 agent 动作的 step（下游 failed 不穿越）", () => {
+    const wfChain = loadWorkflow(`
+id: x
+max_retries: 3
+phases:
+  - name: todo
+    steps:
+      - id: analyze
+        agents: [architect]
+        transitions:
+          on_pass: implement
+          on_fail: analyze
+  - name: in_progress
+    steps:
+      - id: implement
+        agents: [developer]
+        transitions:
+          on_pass: a
+          on_fail: analyze
+  - name: review
+    steps:
+      - id: a
+        agents: [ra]
+        transitions:
+          on_pass: b
+          on_fail: implement
+      - id: b
+        agents: [rb]
+        transitions:
+          on_pass: done
+          on_fail: implement
+`)
+    // b 已被上轮 review 裁决 failed（如仅 failed_tasks 驳回无 issue），a 已 passed
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "done" }))
+    item.tags = {
+      "implement:developer": "failed",
+      "a:ra": "passed",
+      "b:rb": "failed",
+    }
+    const r = submitForStep(item, wfChain, { stepId: "implement", agentKey: "developer", verdict: "passed" })
+    expect(r.advanced).toBe(true)
+    expect(r.transitionTarget).toBe("b")
+    expect(item.phase).toBe("review")
+    expect(item.currentStep).toBe("b")
+    // b 已 failed → 引擎重分派 rb 重审
+    const rec = recommendForItem(item, wfChain)
+    expect(rec.status).toBe("recommend")
+    expect(rec.agents).toContain("rb")
+  })
+
+  test("链式推进：下游 step pending 时停在首个需 agent 动作的 step（不穿越）", () => {
+    const wfChain = loadWorkflow(`
+id: x
+max_retries: 3
+phases:
+  - name: todo
+    steps:
+      - id: analyze
+        agents: [architect]
+        transitions:
+          on_pass: implement
+          on_fail: analyze
+  - name: in_progress
+    steps:
+      - id: implement
+        agents: [developer]
+        transitions:
+          on_pass: a
+          on_fail: analyze
+  - name: review
+    steps:
+      - id: a
+        agents: [ra]
+        transitions:
+          on_pass: b
+          on_fail: implement
+      - id: b
+        agents: [rb]
+        transitions:
+          on_pass: done
+          on_fail: implement
+`)
+    // a 已 passed（上轮保留），b 未裁决（pending）→ 链穿越 a 后停在 b
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "done" }))
+    item.tags = {
+      "implement:developer": "failed",
+      "a:ra": "passed",
+      "b:rb": "pending",
+    }
+    const r = submitForStep(item, wfChain, { stepId: "implement", agentKey: "developer", verdict: "passed" })
+    expect(r.advanced).toBe(true)
+    expect(r.transitionTarget).toBe("b")
+    expect(item.phase).toBe("review")
+    expect(item.currentStep).toBe("b")
+    // b pending → 引擎重分派 rb
+    const rec = recommendForItem(item, wfChain)
+    expect(rec.status).toBe("recommend")
+    expect(rec.agents).toContain("rb")
   })
 })
 

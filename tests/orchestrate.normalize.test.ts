@@ -12,7 +12,7 @@ import { agent_submit } from "../src/adapters/opencode/tools"
 import { setupWithFakeGit, teardown, readState } from "./helpers"
 import {
   setupToAnalyze, driveToVerifyTool, driveToQuality,
-  taskListOf, taskItemOf, taskIdsOf,
+  taskListOf, taskItemOf, taskIdsOf, rollbackQuality,
 } from "./helpers-workflow"
 import { taskGroupFromWorkItem } from "../src/core/derive"
 
@@ -86,14 +86,11 @@ describe("N1. issue id # 前缀归一化", () => {
       const ctx = await setupToAnalyze(wt, CID)
       const { item: preQ } = await driveToQuality(wt, CID)
 
-      // style 维度报 Low issue → 回 implement
-      await agent_submit.execute(
-        {
-          change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "7", title: "不可修 issue", description: "第三方库限制", severity: "Low", source_phase: "quality", dimension: "style" }],
-        },
-        ctx.dims["style"]
-      )
+      // style 维度报 Low issue → 其余维度通过后聚合回退 implement
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方库限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
       expect(taskItemOf(readState(wt, CID)!).currentStep).toBe("implement")
 
       // dev 用 # 前缀申请豁免 → step 不推进
@@ -138,14 +135,11 @@ describe("N1. issue id # 前缀归一化", () => {
       const { item: preQ } = await driveToQuality(wt, CID)
       expect(preQ.currentStep).toBe("verify_quality")
 
-      // style 维度报 Low issue → 回 implement
-      await agent_submit.execute(
-        {
-          change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "7", title: "Style issue", description: "质量层问题", severity: "Low", source_phase: "quality", dimension: "style" }],
-        },
-        ctx.dims["style"]
-      )
+      // style 维度报 Low issue → 其余维度通过后聚合回退 implement
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "Style issue", description: "质量层问题", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
 
       // dev 用 # 修复 quality 层 issue
       const item1 = taskItemOf(readState(wt, CID)!)
@@ -159,9 +153,9 @@ describe("N1. issue id # 前缀归一化", () => {
       const item = taskItemOf(readState(wt, CID)!)
       const child = item.children.find((c: any) => c.externalId === "7")
       expect(child.phase).toBe("done")
-      // 修复按归因分层重置：style 维度 quality tag 清除，其余维度不受影响
+      // 修复按归因分层重置：仅 style 维度 quality tag 清除，其余已 passed 维度保留
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
-      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(item.currentStep).toBe("verify_tool")
     } finally { teardown(root) }
   })

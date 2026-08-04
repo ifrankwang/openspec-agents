@@ -31,12 +31,16 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
       const ctx = await setupToAnalyze(wt, CID)
       const { item: preTask } = await driveToVerifyTask(wt, CID)
 
-      // verify_task 驳回 task 1
+      // verify_task 驳回 task 1 并报 task 层 Low issue（作为 failed 不通过理由 + 供 dev 修复归因）
       const rReject = await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "failed",
           verified_tasks: taskListOf(preTask).filter((t: any) => t.id !== "1").map((t: any) => t.id),
           failed_tasks: [{ task_id: "1", reason: "Incomplete" }],
+          new_children: [{
+            id: "tk1", title: "任务层问题", description: "任务实现不完整", severity: "Low",
+            source_phase: "task", dimension: "style", file: "src/T.java", line: 1, suggestion: "补全",
+          }],
         },
         ctx.taskR
       )
@@ -50,9 +54,10 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
 
-      // dev 重提被驳回的 task → status submitted + rejectReason 清除
+      // dev 重提被驳回的 task + 修复 task 层 issue → status submitted + rejectReason 清除；
+      // resetReviewTagsOnFix 按归因清 verify_tool + verify_task（可重提，重复提交守卫放行）
       const rDev = await agent_submit.execute(
-        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1"] },
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1"], fixed_issue_ids: ["tk1"] },
         ctx.dev
       )
       expect(rDev).toContain("passed")
@@ -61,8 +66,6 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
       expect(t1.status).toBe("submitted")
       expect(t1.rejectReason).toBeNull()
 
-      // 任务驳回回退不触发 issue 分层重置（无 fixed_issue_ids）；fix2 在 review failed
-      // 提交后已清空 review 验证标记，重走 verify_tool → verify_task，验证 verified 且 rejectReason 保持清除
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
       const rVerify = await agent_submit.execute(
         {

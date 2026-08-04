@@ -1,6 +1,6 @@
 import type { WorkItem, WorkItemPhase, StepConfig, StepAdjudication } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
-import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition } from "./engine.js"
+import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase } from "./engine.js"
 import { DIMENSION_AGENT_MAP } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import type { Dimension } from "../types.js"
@@ -75,6 +75,33 @@ export function assertSubmitRouting(workflow: LoadedWorkflow, item: WorkItem, st
 }
 
 /**
+ * 链式推进：submitForStep 的 applyTransition(pass) 成功后，若新 step 已全 passed 且
+ * stepCanPass 满足，继续沿 on_pass 穿越（等价 main 的 task 自动跳过语义），
+ * 一次提交可带过多个已通过的 step。循环在每一步重算 adjudicateStep 与 stepCanPass，
+ * 停在需要 agent 动作的 step（pending/failed 裁决）或终态（done/halt）。
+ * 返回最终落点 target（"done"/"halt"/step id），无推进则返回 initialTarget。
+ * 有限性：每轮推进都改变 currentStep（终态置 null）且 on_pass 构成无环 DAG，
+ * 另加 stepMap 规模上限防护，不可能无限循环。
+ */
+function chainPassAdvance(item: WorkItem, workflow: LoadedWorkflow, initialTarget: string | undefined): string | undefined {
+  let target = initialTarget
+  const maxIterations = workflow.stepMap.size * 2 + 1
+  for (let i = 0; i < maxIterations; i++) {
+    if (item.suspended || isTerminalPhase(item.phase) || item.currentStep === null) break
+    const entry = workflow.stepMap.get(item.currentStep)
+    if (!entry) break
+    const step = entry.step
+    if (step.always_run) break
+    if (adjudicateStep(item, step) !== "passed") break
+    if (!stepCanPass(item, step)) break
+    const r = applyTransition(item, workflow, "pass")
+    if (!r.advanced) break
+    if (r.target !== undefined) target = r.target
+  }
+  return target
+}
+
+/**
  * 通用提交入口：写 tag → children 更新 → 裁决与推进。
  * 路由/归属校验在一切状态变更之前完成，越权提交不产生任何副作用。
  */
@@ -116,13 +143,21 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
   }
 
   const adjudication = adjudicateStep(item, step)
+  // 多 agent step（verify_quality 5 维并行）聚合判定：须全部 agent 非 pending 才允许触发迁移。
+  // passed 天然意味着全提交；failed 须等最后一维提交后才回退，避免单维失败过早回退阻断其余维度提交。
+  const allAdjudicated = step.agents.every((a) => getStepVerdict(item, step.id, a) !== "pending")
   let advanced = false
   let transitionTarget: string | undefined
   if (adjudication === "passed" && stepCanPass(item, step)) {
     const r = applyTransition(item, workflow, "pass")
     advanced = r.advanced
-    if (r.advanced && r.target !== undefined) transitionTarget = r.target
-  } else if (adjudication === "failed") {
+    if (r.advanced) {
+      // 链式推进：迁移后若新 step 已全 passed 且 stepCanPass 满足，继续沿 on_pass 穿越
+      // （等价 main 的 task 自动跳过语义），一次提交可带过多个已通过的 step，
+      // 停在需要 agent 动作的 step 或终态（done/halt）。
+      transitionTarget = chainPassAdvance(item, workflow, r.target)
+    }
+  } else if (adjudication === "failed" && allAdjudicated) {
     const r = applyTransition(item, workflow, "fail")
     advanced = r.advanced
     if (r.advanced && r.target !== undefined) transitionTarget = r.target

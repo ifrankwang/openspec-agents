@@ -1,4 +1,4 @@
-import type { TaskItem, OrchestrateState } from "../types.js"
+import type { TaskItem, OrchestrateState, Dimension } from "../types.js"
 import type { ToolContext, AgentSubmitParams } from "./types.js"
 import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
@@ -9,9 +9,10 @@ import {
 import {
   createInitialWorkItem, checkpointTriggered,
   applyCheckpointContinue, applyCheckpointGiveup,
-  getStepVerdict, clearStepTags, isBlockingSeverity,
+  getStepVerdict, clearStepTags, isBlockingSeverity, isTerminalPhase,
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
+import { DIMENSION_AGENT_MAP } from "../constants.js"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
 } from "../state.js"
@@ -288,8 +289,56 @@ function mergeBoundaryInto(item: WorkItem, expansion: NonNullable<AgentSubmitPar
   }
 }
 
+/**
+ * verdict=failed 必须有具体不通过理由（对齐 main assertPassedConsistency）。
+ * 理由判定（认遗留 issue 或实际接受的 new_children）：
+ * - verify_task：本次 failed_tasks 非空，或 new_children 含 Low+，或存在未终态的 Low+ task 层阻塞 child
+ * - verify_tool：本次 new_children 含 Low+，或存在未终态的 Low+ tool 层阻塞 child
+ * - verify_quality：本次 new_children 含 Low+ 且维度属于当前提交 agent，或存在未终态的 Low+ quality 层
+ *   阻塞 child 且 dimension 属于当前提交 agent 维度（新报与遗留理由均按维度过滤，F3）
+ * 理由判定在 dedupeNewChildren 之后调用（F4）：传入的 newChildren 为已去重的 accepted，重复新报不构成理由。
+ * 不满足即抛错，handleReviewParams 在 submitForStep 之前调用，零状态变更。
+ */
+function assertFailedHasReason(
+  item: WorkItem,
+  params: AgentSubmitParams,
+  newChildren: WorkItem[],
+  stepId: string,
+  agent: string,
+): void {
+  const hasNewBlocking = newChildren.some((c) => isBlockingSeverity(c.severity))
+  const existingBlocking = item.children.filter((c) => !isTerminalPhase(c.phase) && isBlockingSeverity(c.severity))
+  let layerName: string
+  let hasReason: boolean
+  if (stepId === "verify_task") {
+    layerName = "任务层"
+    hasReason =
+      (params.failed_tasks?.length ?? 0) > 0 ||
+      hasNewBlocking ||
+      existingBlocking.some((c) => resolveChildIssueFields(c).sourcePhase === "task")
+  } else if (stepId === "verify_tool") {
+    layerName = "工具层"
+    hasReason = hasNewBlocking || existingBlocking.some((c) => resolveChildIssueFields(c).sourcePhase === "tool")
+  } else {
+    const dimension = (Object.keys(DIMENSION_AGENT_MAP) as Dimension[]).find((d) => DIMENSION_AGENT_MAP[d] === agent)
+    layerName = dimension ? `AI 审查层(${dimension})` : "AI 审查层"
+    // 新报与遗留阻塞理由均按当前 agent 维度过滤（对齐 main：verify_quality failed 理由须归属本维）。
+    const dimMatches = (c: WorkItem): boolean => resolveChildIssueFields(c).dimension === dimension
+    hasReason =
+      newChildren.some((c) => isBlockingSeverity(c.severity) && dimMatches(c)) ||
+      existingBlocking.some(
+        (c) => resolveChildIssueFields(c).sourcePhase === "quality" && dimMatches(c),
+      )
+  }
+  if (!hasReason) {
+    throw new Error(
+      `${layerName} 审核声称 passed=false，但不存在未解决的阻塞 issue。passed=false 时必须提供至少一个 Low+ issue 或 failed_task_id 作为不通过理由。`
+    )
+  }
+}
+
 /** review step（verify_tool/verify_task/verify_quality）参数处理。 */
-function handleReviewParams(item: WorkItem, params: AgentSubmitParams, newChildren: WorkItem[]): void {
+function handleReviewParams(item: WorkItem, params: AgentSubmitParams, newChildren: WorkItem[], stepId: string): void {
   // passed=true 与 Low+ 新报一致性：passed 只能带 Info 新报
   if (params.verdict === "passed" && newChildren.some((c) => isBlockingSeverity(c.severity))) {
     throw new Error(
@@ -407,11 +456,12 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
     if (stepPhase === "review") {
-      // 重复提交守卫：同 step 同 agent tag 已存在（pending 之外）再提交抛错
-      if (getStepVerdict(item, params.step_id, ctx.agent) !== "pending") {
-        throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 提交过裁决，不允许重复提交。`)
+      // 重复提交守卫：同 step 同 agent 已以 passed 通过后不允许重复提交；failed 允许重提
+      // （回退重审期 failed tag 未被归因清空时须可重提，如 verify_task 仅 failed_tasks 驳回）。
+      if (getStepVerdict(item, params.step_id, ctx.agent) === "passed") {
+        throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
       }
-      handleReviewParams(item, params, newChildren)
+      handleReviewParams(item, params, newChildren, params.step_id)
     } else if (stepPhase === "todo") {
       handleAnalyzeParams(item, params)
     } else if (stepPhase === "in_progress") {
@@ -419,6 +469,12 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     }
 
     const { accepted, dedupedCount } = dedupeNewChildren(item, newChildren)
+
+    // verdict=failed 必须有具体不通过理由：理由判定在去重之后，仅依据实际接受的 new_children——
+    // 重复新报（或与既有 child 同 key 被去重）不构成不通过理由，避免守卫放行但实际零新增 issue。
+    if (stepPhase === "review" && params.verdict === "failed") {
+      assertFailedHasReason(item, params, accepted, params.step_id, ctx.agent)
+    }
 
     // dev 修复/豁免后按归因分层重置 review 验证标记（仅 implement step）
     if (stepPhase === "in_progress" && (params.fixed_issue_ids?.length || params.exempt_issue_ids?.length)) {
@@ -436,12 +492,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       exemptIds: params.exempt_issue_ids,
       newChildren: accepted,
     })
-
-    // review 阶段提交 failed：回退后清空三个审查 step 的裁决 tags。
-    // 残留 passed/failed 会让 recommendForItem 误判已裁决而跳过分派，并触发「重复提交守卫」。
-    if (stepPhase === "review" && params.verdict === "failed") {
-      clearReviewVerificationTags(item)
-    }
 
     await writeState(ctx.worktree, state)
     const dedupNote = dedupedCount > 0 ? `\n${dedupedCount} 个重复 issue 已自动跳过。` : ""

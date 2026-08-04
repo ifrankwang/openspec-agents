@@ -25,7 +25,7 @@ import { init, status, agent_submit } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
-  taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS,
+  taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS, rollbackQuality,
 } from "./helpers-workflow"
 
 const CID = "test-optimize"
@@ -293,7 +293,11 @@ describe("B4. boundary 参数", () => {
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
       await agent_submit.execute(
-        { change_id: CID, step_id: "verify_tool", verdict: "failed", boundary_expansion: { allowed_directories: ["src/extra"] } },
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          boundary_expansion: { allowed_directories: ["src/extra"] },
+          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style" }],
+        },
         ctx.toolR
       )
       const item = readItem(wt, CID)
@@ -322,13 +326,10 @@ describe("B5. retryCount 不重置", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
-      await agent_submit.execute(
-        {
-          change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "7", title: "命名问题", description: "命名不规范", severity: "Low", source_phase: "quality", dimension: "style" }],
-        },
-        ctx.dims["style"]
-      )
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "命名问题", description: "命名不规范", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
       expect(metaOf(readItem(wt, CID), "_retryCount")).toBe(1)
 
       const item0 = readItem(wt, CID)
@@ -435,6 +436,95 @@ describe("B7. verify_quality 维度 gate", () => {
       // done 终态：quality reviewer 拿到终态视图而非 ✅ 执行视图
       const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
       expect(styleView).toContain("任务组已完成，待收尾")
+    } finally { teardown(root) }
+  })
+})
+
+describe("B7.5. verify_quality 聚合判定", () => {
+  test("一维 failed 后其余维度仍可提交（不报 currentStep 校验错误），全部提交后才回退 implement", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // style 维 failed（带 Low 新报理由）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+        },
+        ctx.dims["style"]
+      )
+      // 聚合等待：单维 failed 不触发回退，其余维度仍可提交
+      expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      for (const d of ["architecture", "performance", "security"]) {
+        const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+        expect(r).toContain("- **推进**: 否")
+        expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      }
+      // 最后一个维度提交 → 全部已裁决 → 聚合回退 implement
+      const last = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
+      expect(last).toContain("- **推进**: 是")
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+    } finally { teardown(root) }
+  })
+
+  test("全部 5 维 passed 才推进 done（多 agent 聚合通过）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      for (const d of ["style", "architecture", "performance"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+        expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      }
+      const last = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["security"])
+      expect(last).toContain("- **推进**: 否")
+      const done = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
+      expect(done).toContain("- **推进**: 是")
+      expect(readItem(wt, CID).phase).toBe("done")
+    } finally { teardown(root) }
+  })
+
+  test("review failed 后已 passed 层/维度 tag 保留，下次只重审失败维度", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+        },
+        ctx.dims["style"]
+      )
+      for (const d of DIMENSION_AGENTS.filter((x) => x !== "style")) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      const back = readItem(wt, CID)
+      expect(back.phase).toBe("in_progress")
+      expect(back.currentStep).toBe("implement")
+      // review failed 不再全清：已 passed 的 verify_tool/verify_task 与其余维度 tag 保留，失败维度保留 failed
+      expect(back.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(back.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(back.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(back.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
+
+      // dev 仅豁免 style 层 issue（不改代码）→ reset 只清该维度 tag，verify_tool/verify_task 保留
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["7"], completed_task_ids: taskIdsOf(item0) },
+        ctx.dev
+      )
+      // 模拟编排将任务移回 verify_quality 恢复重审
+      rewriteItem(wt, (item) => { item.phase = "review"; item.currentStep = "verify_quality" })
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      // 只重审失败维度：仅 style 可过 gate，其余已 passed 维度不可分派
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("# ✅ 当前轮到你执行")
+      const archView = await status.execute({ change_id: CID }, ctx.dims["architecture"])
+      expect(archView).toContain("# ⛔ 阶段门禁")
     } finally { teardown(root) }
   })
 })

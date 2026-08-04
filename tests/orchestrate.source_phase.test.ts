@@ -230,12 +230,12 @@ describe("sourcePhase E: task 层 exempt 清 verify_tool + verify_task", () => {
 // ── Scene F: 集成路径——review 回退 dev 修复后重置生效 ──
 
 describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重置生效", () => {
-  test("verify_quality failed 回退 implement，dev 修复 style 层 issue → 三个审查层验证标记已重置", async () => {
+  test("verify_quality style failed 聚合回退 implement，dev 修复 style 层 issue → 仅清失败维度与 verify_tool，其余已 passed tag 保留", async () => {
     const root = `/tmp/sourcePhase-F-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       const { ctx } = await driveToQuality(wt, CID)
-      // style reviewer 报 style 层 issue 并 failed → 回 implement
+      // style reviewer 报 style 层 issue 并 failed → verify_quality 多 agent step 聚合等待，不立即回退
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
@@ -243,20 +243,29 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
         },
         ctx.dims["style"]
       )
-      const back = readItem(wt, CID)
+      let back = readItem(wt, CID)
+      expect(back.phase).toBe("review")
+      expect(back.currentStep).toBe("verify_quality")
+      // 其余 4 维 passed → 全部已裁决 → 聚合回退 implement
+      for (const d of ["architecture", "performance", "security", "maintainability"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      back = readItem(wt, CID)
       expect(back.phase).toBe("in_progress")
       expect(back.currentStep).toBe("implement")
-      // fix2：review failed 提交后三个审查 step 的裁决 tags 全部清空（下次 review 各层重新分派）
-      expect(back.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      expect(back.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
-      expect(back.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      // fix2 新语义：review failed 不再全清 → 已 passed 的 verify_tool/verify_task 与其余维度 tag 保留
+      expect(back.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(back.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(back.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
+      expect(back.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
 
-      // dev 修复 style 层 issue（代码变更）→ 各层验证标记保持重置态
+      // dev 修复 style 层 issue（代码变更）→ reset 按归因清 verify_quality:style + verify_tool；verify_task 与其余维度保留
       await fixIssue(wt, ["q7"])
       const item = readItem(wt, CID)
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
       expect(item.children.find((c: WorkItem) => c.externalId === "q7").phase).toBe("done")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })

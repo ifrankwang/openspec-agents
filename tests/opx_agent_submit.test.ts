@@ -651,7 +651,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed" }, makeCtx("openspec-reviewer-task", wt))
 
-      // style reviewer 报 issue（metadata.source=openspec-reviewer-style）并 failed，verify_quality 回 implement
+      // style reviewer 报 issue（metadata.source=openspec-reviewer-style）并 failed
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
@@ -660,6 +660,17 @@ describe("opx_agent_submit 通用 step 提交", () => {
         makeCtx("openspec-reviewer-style", wt)
       )
       expect(taskItemOf(wt).children.find((c: any) => c.id === "7").metadata["source"]).toBe("openspec-reviewer-style")
+      // verify_quality 为多 agent step：单维 failed 触发聚合等待，不立即回退
+      expect(taskItemOf(wt).phase).toBe("review")
+      expect(taskItemOf(wt).currentStep).toBe("verify_quality")
+
+      // 其余 4 维 passed → 全部已裁决 → 聚合回退 implement
+      for (const d of ["architecture", "performance", "security", "maintainability"]) {
+        await agent_submit.execute(
+          { change_id: CID, step_id: "verify_quality", verdict: "passed" },
+          makeCtx(`openspec-reviewer-${d}`, wt)
+        )
+      }
       expect(taskItemOf(wt).phase).toBe("in_progress")
       expect(taskItemOf(wt).currentStep).toBe("implement")
 
@@ -1343,7 +1354,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     }
   })
 
-  test("35. review failed 回退 implement：dev 可重提、review 各层可重新分派（重复提交守卫放行）", async () => {
+  test("35. review failed 回退 implement：verify_tool 已 passed tag 保留，仅按归因清 failed 层（可重提、可重新分派）", async () => {
     const root = `/tmp/opxsub-35-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -1352,12 +1363,16 @@ describe("opx_agent_submit 通用 step 提交", () => {
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
 
-      // 无 new_children 的 review failed：verify_task 驳回 task 3 → 回 implement
+      // verify_task 驳回 task 3 并报 task 层 Low issue → 单 agent step 提交即判定，回 implement
       const r = await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "failed",
           verified_tasks: ["1", "2"],
           failed_tasks: [{ task_id: "3", reason: "验收未过" }],
+          new_children: [{
+            id: "tk9", title: "任务层问题", description: "任务实现不完整", severity: "Low",
+            source_phase: "task", dimension: "style", file: "src/T.java", line: 3, suggestion: "补全",
+          }],
         },
         makeCtx("openspec-reviewer-task", wt)
       )
@@ -1367,20 +1382,24 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(item.currentStep).toBe("implement")
       // fix1：implement 裁决重置 → developer 可重新分派
       expect(item.tags["implement:openspec-developer"]).toBeUndefined()
-      // fix2：三个 review step 的裁决 tags 全部清空 → 下次 review 各层重新分派
-      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+      // fix2 新语义：review failed 不再全清 → 已 passed 的 verify_tool tag 保留、verify_quality 未动
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("failed")
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
 
-      // dev 重提 implement → 进入 review/verify_tool
+      // dev 修复 task 层 issue（fixed_issue_ids）→ resetReviewTagsOnFix 按归因清 verify_tool + verify_task
       await agent_submit.execute(
-        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: ["tk9"], completed_task_ids: ["1", "2", "3"] },
         makeCtx("openspec-developer", wt)
       )
-      expect(taskItemOf(wt).phase).toBe("review")
-      expect(taskItemOf(wt).currentStep).toBe("verify_tool")
+      item = taskItemOf(wt)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_tool")
+      // verify_task failed tag 被清（可重提）；verify_tool 亦按归因清空（task 层代码修复 → tool 层确定性检查须重跑）
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
 
-      // verify_tool 可重提（重复提交守卫放行：tag 已清）→ 推进到 verify_task
+      // verify_tool 可重提（重复提交守卫放行）→ 推进到 verify_task
       const rTool = await agent_submit.execute(
         { change_id: CID, step_id: "verify_tool", verdict: "passed" },
         makeCtx("openspec-reviewer-tool", wt)
@@ -1397,6 +1416,192 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(item.currentStep).toBe("verify_quality")
       // metadata.tasks 保留驳回语义：rejected task 在重提后已 submitted→verified
       expect((item.metadata.tasks as any[]).find((t: any) => t.id === "3").status).toBe("verified")
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("36. F1 端到端回归：verify_quality 失败 → 仅修 quality 层 → 链式穿越已 passed 的 verify_task → style 重审 → done", async () => {
+    const root = `/tmp/opxsub-36-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
+      expect(taskItemOf(wt).currentStep).toBe("verify_quality")
+
+      // style 报 quality 层 Low issue 并 failed，其余 4 维 passed → 聚合回退 implement
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "风格遗留", description: "命名不规范", severity: "Low", source_phase: "quality", dimension: "style", file: "src/A.java", line: 7, suggestion: "改名" }],
+        },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      for (const d of ["architecture", "performance", "security", "maintainability"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, makeCtx(`openspec-reviewer-${d}`, wt))
+      }
+      let item = taskItemOf(wt)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      // fix2 语义：verify_task 已 passed tag 保留（不触发全清）
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+
+      // dev 仅修 quality 层 issue → reset 按归因清 verify_tool + verify_quality:style
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: ["7"], completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
+      item = taskItemOf(wt)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.currentStep).toBe("verify_tool")
+
+      // 工具层重审通过 → 链式穿越 verify_task（已 passed）直落 verify_quality，不再 terminal 卡死
+      const rTool = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed" },
+        makeCtx("openspec-reviewer-tool", wt)
+      )
+      expect(rTool).toContain("- **推进**: 是 → verify_quality")
+      item = taskItemOf(wt)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_quality")
+
+      // style 重审通过 → 全维 passed → done
+      const rStyle = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed" },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      expect(rStyle).toContain("- **推进**: 是")
+      item = taskItemOf(wt)
+      expect(item.phase).toBe("done")
+      expect(item.currentStep).toBeNull()
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("37. F1 回归：verify_task 仅 failed_tasks 失败 → dev 重提 → 链式穿越 verify_tool → task 重审 → done", async () => {
+    const root = `/tmp/opxsub-37-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
+
+      // verify_task 仅 failed_tasks 驳回（无 issue child）→ 回 implement；verify_tool passed tag 保留
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_task", verdict: "failed",
+          verified_tasks: ["1", "2"], failed_tasks: [{ task_id: "3", reason: "验收未过" }],
+        },
+        makeCtx("openspec-reviewer-task", wt)
+      )
+      let item = taskItemOf(wt)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("failed")
+
+      // dev 重提（无 issue 归因，reset 不触发）→ 提交即链式穿越 verify_tool（passed 保留）直落 verify_task
+      const rDev = await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
+      expect(rDev).toContain("- **推进**: 是 → verify_task")
+      item = taskItemOf(wt)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_task")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+
+      // task reviewer 可重提（failed 非 passed，守卫放行）→ 通过
+      const rTask = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] },
+        makeCtx("openspec-reviewer-task", wt)
+      )
+      expect(rTask).toContain("- **推进**: 是")
+      expect(taskItemOf(wt).currentStep).toBe("verify_quality")
+
+      // 5 维通过 → done
+      for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, makeCtx(`openspec-reviewer-${d}`, wt))
+      }
+      item = taskItemOf(wt)
+      expect(item.phase).toBe("done")
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("38. F3 回归：verify_quality failed 新报理由按当前 agent 维度过滤", async () => {
+    const root = `/tmp/opxsub-38-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
+
+      // style 用 security 维度新报作为 failed 理由 → 非本维理由，拒绝且零状态变更
+      const err = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "安全洞", description: "注入风险", severity: "High", source_phase: "quality", dimension: "security" }],
+        },
+        makeCtx("openspec-reviewer-style", wt)
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/AI 审查层\(style\) 审核声称 passed=false/)
+      let item = taskItemOf(wt)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+
+      // 本维新报（dimension=style）→ 合法理由，聚合等待不立即回退
+      const r = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "8", title: "风格问题", description: "命名不规范", severity: "Low", source_phase: "quality", dimension: "style" }],
+        },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      expect(r).toContain("- **推进**: 否")
+      item = taskItemOf(wt)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
+      expect(item.children.find((c: WorkItem) => c.externalId === "8")).toBeDefined()
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("39. F4 回归：failed 理由判定在去重之后（同 key 新报被去重 → 零新增 → 拒绝）", async () => {
+    const root = `/tmp/opxsub-39-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
+      // 注入既存非终态 Info child（与待报 Low issue 同 key，dedupe key 不含 severity）
+      injectIssue(wt, {
+        id: "9", dimension: "style", sourcePhase: "tool", severity: "Info",
+        file: "src/B.java", line: 1, description: "构建告警",
+      })
+      // tool reviewer 以同 key Low 新报作为 failed 理由 → 去重后零新增 → 拒绝且零状态变更
+      const err = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "8", title: "工具问题", description: "构建告警", severity: "Low", source_phase: "tool", dimension: "style", file: "src/B.java", line: 1, suggestion: "修复" }],
+        },
+        makeCtx("openspec-reviewer-tool", wt)
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/不存在未解决的阻塞 issue/)
+      const item = taskItemOf(wt)
+      expect(item.children.find((c: WorkItem) => c.externalId === "8")).toBeUndefined()
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.currentStep).toBe("verify_tool")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

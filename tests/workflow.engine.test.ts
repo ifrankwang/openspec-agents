@@ -170,7 +170,7 @@ describe("3. tag 裁决与裁决缓存", () => {
     expect(recommendAgents(item, wf.stepMap.get("analyze")!.step)).toEqual([])
   })
 
-  test("部分 failed → 仅重派 failed", () => {
+  test("多 agent step 部分 failed（其余 pending）→ 聚合等待期仅重派 pending", () => {
     const wf = loadWorkflow(`
 id: x
 max_retries: 1
@@ -187,7 +187,35 @@ phases:
     applyAgentVerdict(item, "multi", "a", "passed")
     applyAgentVerdict(item, "multi", "b", "failed")
     expect(adjudicateStep(item, wf.stepMap.get("multi")!.step)).toBe("failed")
-    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual(["b", "c"])
+    // 多 agent step 仅返回 pending 的 agent：已 failed 维度在聚合等待期不重复分派
+    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual(["c"])
+  })
+
+  test("多 agent step 全部 failed → 聚合等待期已无 pending，不重复分派", () => {
+    const wf = loadWorkflow(`
+id: x
+max_retries: 1
+phases:
+  - name: review
+    steps:
+      - id: multi
+        agents: [a, b, c]
+        transitions:
+          on_pass: done
+          on_fail: multi
+`)
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", "a", "failed")
+    applyAgentVerdict(item, "multi", "b", "failed")
+    applyAgentVerdict(item, "multi", "c", "failed")
+    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual([])
+  })
+
+  test("单 agent step failed → 仍返回该 agent（同 phase 回退不清 tag 须重审）", () => {
+    const wf = loadWorkflow(BASE_YAML)
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item, "implement", "developer", "failed")
+    expect(recommendAgents(item, wf.stepMap.get("implement")!.step)).toEqual(["developer"])
   })
 
   test("全部 pending → 正常分派全部", () => {

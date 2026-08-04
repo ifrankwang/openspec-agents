@@ -18,7 +18,7 @@ import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
-  taskItemOf, taskListOf, metaOf, readItem, taskIdsOf,
+  taskItemOf, taskListOf, metaOf, readItem, taskIdsOf, rollbackQuality,
 } from "./helpers-workflow"
 
 const CID = "test-guard"
@@ -87,17 +87,14 @@ async function expectError(p: Promise<unknown>, pattern: RegExp): Promise<Error>
 
 /**
  * 构造「verify_quality 阶段存在 style 维度豁免申请」前置：
- * style 报 Low issue → 回 implement → dev 申请豁免（exempt_request 标记）→ 手动移回 verify_quality。
+ * style 报 Low issue（其余维度通过后聚合回退）→ 回 implement → dev 申请豁免（exempt_request 标记）→ 手动移回 verify_quality。
  */
 async function setupExemptRequest(wt: string): Promise<void> {
   const { ctx } = await driveToQuality(wt, CID)
-  await agent_submit.execute(
-    {
-      change_id: CID, step_id: "verify_quality", verdict: "failed",
-      new_children: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", source_phase: "quality", dimension: "style" }],
-    },
-    ctx.dims["style"]
-  )
+  await rollbackQuality(ctx, CID, {
+    failedDim: "style",
+    newChildren: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+  })
   const item0 = readItem(wt, CID)
   await agent_submit.execute(
     { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["7"], completed_task_ids: taskIdsOf(item0) },
@@ -534,11 +531,17 @@ describe("G15. 豁免完整性门禁", () => {
 // ── G16: 层失败回退 ──
 
 describe("G16. 层失败回退 implement", () => {
-  test("verify_tool failed → 回 implement，后续层级提交被拒", async () => {
+  test("verify_tool failed（带 Low+ 新报理由）→ 回 implement，后续层级提交被拒", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
-      const r = await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed" }, ctx.toolR)
+      const r = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", source_phase: "tool", dimension: "style" }],
+        },
+        ctx.toolR
+      )
       expect(r).toContain("- **推进**: 是")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
@@ -653,14 +656,33 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
     } finally { teardown(root) }
   })
 
-  test("verify_task failed + Info new_children → 正常回 implement", async () => {
+  test("verify_task failed 仅带 Info new_children（无 Low+ 理由）→ 拒绝且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      await driveToVerifyTask(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          {
+            change_id: CID, step_id: "verify_task", verdict: "failed",
+            verified_tasks: ["1", "2", "3"],
+            new_children: [{ id: "7", title: "建议", description: "d", severity: "Info" }],
+          },
+          makeCtx("openspec-reviewer-task", wt)
+        ),
+        /不存在未解决的阻塞 issue/
+      )
+      expect(readItem(wt, CID).currentStep).toBe("verify_task")
+    } finally { teardown(root) }
+  })
+
+  test("verify_task failed 带 failed_tasks + Info new_children → 正常回 implement", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
       const r = await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "failed",
-          verified_tasks: ["1", "2", "3"],
+          verified_tasks: ["1", "2"], failed_tasks: [{ task_id: "3", reason: "验收未过" }],
           new_children: [{ id: "7", title: "建议", description: "d", severity: "Info" }],
         },
         makeCtx("openspec-reviewer-task", wt)
@@ -683,6 +705,91 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
       const tags = readItem(wt, CID).tags
       expect(tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
       expect(tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+})
+
+// ── G22: review failed 必须带不通过理由（对齐 main assertPassedConsistency）──
+
+describe("G22. review failed 必须带不通过理由", () => {
+  test("verify_quality failed 不带具体问题（无 new_children、无遗留阻塞）→ 拒绝且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await expectError(
+        agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "failed" }, ctx.dims["style"]),
+        /AI 审查层\(style\) 审核声称 passed=false[\s\S]*不存在未解决的阻塞 issue/
+      )
+      const item = readItem(wt, CID)
+      expect(item.currentStep).toBe("verify_quality")
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+
+  test("verify_tool failed 不带具体问题 → 拒绝且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await expectError(
+        agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed" }, ctx.toolR),
+        /工具层 审核声称 passed=false[\s\S]*不存在未解决的阻塞 issue/
+      )
+      expect(readItem(wt, CID).currentStep).toBe("verify_tool")
+    } finally { teardown(root) }
+  })
+
+  test("verify_task failed 不带具体问题（无 failed_tasks、无 new_children）→ 拒绝且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      await driveToVerifyTask(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_task", verdict: "failed", verified_tasks: ["1", "2", "3"] },
+          makeCtx("openspec-reviewer-task", wt)
+        ),
+        /任务层 审核声称 passed=false[\s\S]*不存在未解决的阻塞 issue/
+      )
+      expect(readItem(wt, CID).currentStep).toBe("verify_task")
+    } finally { teardown(root) }
+  })
+
+  test("遗留阻塞 issue 可作为 failed 理由：已存在未终态 Low+ tool 层 child → verify_tool failed 合法", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      injectIssue(wt, { id: "9", sourcePhase: "tool", dimension: "style", severity: "Low", description: "遗留工具层问题" })
+      const r = await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed" }, ctx.toolR)
+      expect(r).toContain("- **推进**: 是")
+      expect(readItem(wt, CID).currentStep).toBe("implement")
+    } finally { teardown(root) }
+  })
+
+  test("verify_task 遗留 task 层 Low+ 阻塞 child 可作为 failed 理由", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTask(wt, CID)
+      injectIssue(wt, { id: "9", sourcePhase: "task", dimension: "style", severity: "Low", description: "遗留任务层问题" })
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_task", verdict: "failed", verified_tasks: ["1", "2", "3"] },
+        ctx.taskR
+      )
+      expect(r).toContain("- **推进**: 是")
+      expect(readItem(wt, CID).currentStep).toBe("implement")
+    } finally { teardown(root) }
+  })
+
+  test("verify_quality failed 理由按当前 agent 维度过滤：他维遗留阻塞不计为本维理由", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      injectIssue(wt, { id: "9", sourcePhase: "quality", dimension: "architecture", severity: "Low", description: "架构遗留问题" })
+      await expectError(
+        agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "failed" }, ctx.dims["style"]),
+        /AI 审查层\(style\) 审核声称 passed=false[\s\S]*不存在未解决的阻塞 issue/
+      )
+      // 归属本维的遗留阻塞 → architecture 维 failed 合法（聚合等待，不立即回退）
+      const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "failed" }, ctx.dims["architecture"])
+      expect(r).toContain("- **推进**: 否")
     } finally { teardown(root) }
   })
 })

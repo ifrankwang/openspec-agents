@@ -94,6 +94,12 @@ export function adjudicateStep(item: WorkItem, step: StepConfig): StepAdjudicati
 
 export function recommendAgents(item: WorkItem, step: StepConfig): string[] {
   if (step.always_run) return [...step.agents]
+  // 多 agent step（verify_quality 5 维并行）：仅返回 pending 的 agent。
+  // 聚合等待期已 failed 维度不再重复分派；回退重审期 failed 维度已被 resetReviewTagsOnFix 清成 pending 自然返回。
+  if (step.agents.length > 1) {
+    return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) === "pending")
+  }
+  // 单 agent step：返回非 passed 的 agent（analyze 同 phase 回退不清 tag，必须返回 failed 的 architect 重审）。
   return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) !== "passed")
 }
 

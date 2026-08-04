@@ -170,3 +170,21 @@ export async function submitQualityPassed(ctx: AgentCtx, cid: string): Promise<v
     await agent_submit.execute({ change_id: cid, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
   }
 }
+
+/**
+ * 触发 verify_quality 聚合回退：failedDim 维提交 failed（可带 new_children），其余维度依次提交 passed。
+ * verify_quality 为多 agent step，须全部 5 维已裁决（非 pending）才触发 on_fail 回退 implement。
+ */
+export async function rollbackQuality(
+  ctx: AgentCtx,
+  cid: string,
+  opts: { failedDim: string; newChildren?: unknown[] },
+): Promise<void> {
+  const failedParams: Record<string, unknown> = { change_id: cid, step_id: "verify_quality", verdict: "failed" }
+  if (opts.newChildren?.length) failedParams.new_children = opts.newChildren
+  await agent_submit.execute(failedParams as any, ctx.dims[opts.failedDim])
+  for (const d of DIMENSION_AGENTS) {
+    if (d === opts.failedDim) continue
+    await agent_submit.execute({ change_id: cid, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+  }
+}
