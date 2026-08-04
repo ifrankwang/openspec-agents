@@ -30,23 +30,45 @@ function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
 }
 
 /**
- * 按 tasks.md 同步 task children：
- * - 既有 task child 保留（forceOpen 除外）；
- * - 新增（不在既有中）按 defaultStatus 建 phase（todo/done）；
- * - 移除 tasks.md 已删除的 task child（issue children 不受影响）。
+ * 按 tasks.md 同步 task children（整体重建）：
+ * - 先自愈：现存 task children 重复 id 时合并去重——保留第一出现条目（含进度），丢弃重复条目，
+ *   不得因重复抛错（否则封死 recovery=task_analysis 等逃生路径）；
+ * - 以 parsed 为基准整体重建 task 部分：forceOpen=false 时复用同 id 旧 child（保留 phase/tags/metadata
+ *   进度），forceOpen=true 或旧 child 不存在则新建，新建时按 opts.defaultStatus 赋初始 phase；
+ * - 移除 tasks.md 已删除的 task child，issue children 不受影响。
  */
 function syncTaskChildren(item: WorkItem, parsed: ParsedTask[], opts: { forceOpen?: boolean; defaultStatus?: WorkItemPhase }): void {
+  // 自愈：现存 task children 重复 id 时合并去重（保留第一出现条目含进度），杜绝"保留旧 + 追加新"产生的重复。
+  const seen = new Set<string>()
+  const deduped: WorkItem[] = []
+  for (const c of item.children) {
+    if (c.type === "task") {
+      if (seen.has(c.id)) continue
+      seen.add(c.id)
+    }
+    deduped.push(c)
+  }
+  item.children = deduped
+
   const prev = new Map(taskChildrenOf(item).map((c) => [c.id, c]))
   const built = parsed.map((p, i) => {
     const id = String(i + 1)
     const old = prev.get(id)
-    if (old && !opts.forceOpen) return old
+    if (old && !opts.forceOpen) {
+      // 复用旧 child 保留进度（phase/tags/metadata），按 parsed 刷新标题/编号等展示字段
+      old.title = p.title
+      old.description = p.title
+      old.externalId = p.taskNumber
+      old.metadata["specTrace"] = p.specTrace
+      old.metadata["taskNumber"] = p.taskNumber
+      return old
+    }
     const child = taskChildFromParsed(p, i)
     if (!opts.forceOpen && opts.defaultStatus) child.phase = opts.defaultStatus
     return child
   })
-  const keepIds = new Set(built.map((c) => c.id))
-  item.children = [...item.children.filter((c) => c.type !== "task" || keepIds.has(c.id)), ...built]
+  // 整体替换 task 部分：旧 task child 全部移除，以 parsed 为基准重建；issue children 不受影响。
+  item.children = [...item.children.filter((c) => c.type !== "task"), ...built]
 }
 
 /** TaskStatus → task child phase 反查（旧 state metadata.tasks 迁移用）。 */
@@ -98,6 +120,8 @@ function applyRecoveryState(
   recovery: InitParams["recovery"],
   parsedTasks: ParsedTask[],
 ): void {
+  // 恢复重建为已知状态后清除残留推进阻塞原因，避免 orchestrator 视图展示过期信息
+  delete item.metadata["_advance_block_reason"]
   const phase = recovery?.phase
   if (!phase || phase === "task_analysis") {
     item.phase = "todo"
@@ -218,9 +242,13 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       continue
     }
 
-    // 活跃组：无 recovery 重复初始化当前组 → 保留进度
+    // 活跃组：无 recovery 重复初始化当前组 → 保留进度并刷新 task children
+    // （按 parsed 数量/标题做一致性重建，复用既有 children 进度，顺带自愈重复 id 的已损坏 state）
     if (existing && !args.recovery && wasCurrentGroup) {
       refreshMeta(existing)
+      syncTaskChildren(existing, groupTasks, {})
+      // 与 recovery 路径一致：重建为已知状态后清除残留推进阻塞原因，避免视图展示过期信息
+      delete existing.metadata["_advance_block_reason"]
       continue
     }
 

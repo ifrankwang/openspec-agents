@@ -43,9 +43,15 @@ export function renderWorkflowStatusView(
     return renderTerminalPhase(item)
   }
   if (rec.status === "blocked") {
+    if (ctxAgent === ORCHESTRATOR_AGENT) {
+      return renderOrchestratorDispatch(options.state, item, workflow, rec)
+    }
     return renderBlocked(rec)
   }
   if (rec.status === "terminal") {
+    if (ctxAgent === ORCHESTRATOR_AGENT) {
+      return renderOrchestratorDispatch(options.state, item, workflow, rec)
+    }
     return renderTerminal(rec)
   }
   if (ctxAgent === ORCHESTRATOR_AGENT) {
@@ -142,6 +148,15 @@ function renderOrchestratorDispatch(
     `**当前阶段**: ${item.phase}（step \`${rec.stepId ?? "(无)"}\`）`,
     "",
   ]
+  // 推进被拦时附阻塞原因（优先取 submit 工具写入 metadata 的实际原因，次取引擎 blocked 推荐原因），
+  // 编排者据此决策（修复 / recovery / 收尾）
+  const metaReason = item.metadata["_advance_block_reason"]
+  const advanceBlockReason =
+    typeof metaReason === "string" && metaReason !== "" ? metaReason : rec.blockedReason
+  if (advanceBlockReason) {
+    lines.push(`**推进阻塞**: ${advanceBlockReason}`)
+    lines.push("")
+  }
   lines.push(...renderProgressSection(item, workflow))
   lines.push(...renderOrchestratorBlockers(item))
   lines.push("## 下一步", "")

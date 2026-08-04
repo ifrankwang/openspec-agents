@@ -227,13 +227,14 @@ describe("state.workItems 迁移", () => {
       const disk = JSON.parse(readFileSync(join(stateDir, `${CID}.json`), "utf-8"))
       const item = disk.workItems[0] as WorkItem
       const tasks = item.children.filter((c) => c.type === "task")
-      expect(tasks).toHaveLength(4)
+      // 迁移后按 tasks.md（组 1 共 3 个任务）整体重建：legacy 中不在 tasks.md 的 1.4 不保留，
+      // 与 tasks.md 对齐（同组 continue 路径的一致性刷新语义），重叠任务保留迁移进度
+      expect(tasks).toHaveLength(3)
       expect(tasks.find((c) => c.id === "1")!.phase).toBe("review")   // submitted → review
       expect(tasks.find((c) => c.id === "1")!.externalId).toBe("1.1") // taskNumber 存 externalId
       expect(tasks.find((c) => c.id === "2")!.phase).toBe("done")     // verified → done
       expect(tasks.find((c) => c.id === "3")!.phase).toBe("todo")     // rejected → todo
       expect(tasks.find((c) => c.id === "3")!.metadata["reject_reason"]).toBe("不达标")
-      expect(tasks.find((c) => c.id === "4")!.phase).toBe("todo")     // open → todo
       expect(item.metadata["tasks"]).toBeUndefined()                  // metadata.tasks 已删除
       // issue children 不受影响（无）
       expect(item.children.filter((c) => c.type === "issue")).toHaveLength(0)

@@ -26,6 +26,8 @@ export interface SubmitResult {
   advanced: boolean
   transitionTarget?: string
   childrenUpdated: string[]
+  /** 推进失败（applyTransition 拦截）的原因；推进成功时不返回。 */
+  reason?: string
 }
 
 export interface ExemptRouteResult {
@@ -158,19 +160,32 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
   const allAdjudicated = step.agents.every((a) => getStepVerdict(item, step.id, a) !== "pending")
   let advanced = false
   let transitionTarget: string | undefined
+  let advanceBlockReason: string | undefined
   if (adjudication === "passed" && stepCanPass(item, step)) {
     const r = applyTransition(item, workflow, "pass")
     advanced = r.advanced
     if (r.advanced) {
+      // 成功推进后清理历史阻塞原因，避免状态视图展示过期信息
+      delete item.metadata["_advance_block_reason"]
       // 链式推进：迁移后若新 step 已全 passed 且 stepCanPass 满足，继续沿 on_pass 穿越
       // （等价 main 的 task 自动跳过语义），一次提交可带过多个已通过的 step，
       // 停在需要 agent 动作的 step 或终态（done/halt）。
       transitionTarget = chainPassAdvance(item, workflow, r.target)
+    } else {
+      // 推进被跨 phase 门禁/done 终态检查拦截：把原因写入 item 状态供 opx_status 展示，并随结果返回
+      advanceBlockReason = r.reason
+      item.metadata["_advance_block_reason"] = r.reason
     }
   } else if (adjudication === "failed" && allAdjudicated) {
     const r = applyTransition(item, workflow, "fail")
     advanced = r.advanced
-    if (r.advanced && r.target !== undefined) transitionTarget = r.target
+    if (r.advanced) {
+      delete item.metadata["_advance_block_reason"]
+      if (r.target !== undefined) transitionTarget = r.target
+    } else {
+      advanceBlockReason = r.reason
+      item.metadata["_advance_block_reason"] = r.reason
+    }
   }
 
   return {
@@ -181,6 +196,7 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
     advanced,
     transitionTarget,
     childrenUpdated: [...updated],
+    reason: advanceBlockReason,
   }
 }
 

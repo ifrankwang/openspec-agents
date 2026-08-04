@@ -59,6 +59,9 @@ function renderSubmitResult(item: WorkItem, result: SubmitResult): string {
     `- **推进**: ${result.advanced ? `是 → ${result.transitionTarget ?? "(终态)"}` : "否"}`,
     `- **当前 phase**: ${item.phase}`,
   ]
+  if (!result.advanced && result.reason) {
+    lines.push(`- **推进阻塞原因**: ${result.reason}`)
+  }
   if (result.childrenUpdated.length > 0) {
     lines.push("- **children 变更**:")
     for (const id of result.childrenUpdated) {
@@ -242,9 +245,11 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
       delete child.metadata["reject_reason"]
     }
   }
-  const completedSet = new Set(completed)
-  const remaining = tasks.filter(
-    (t) => (t.status === "open" || t.status === "rejected") && !completedSet.has(t.id)
+  // 按条目状态重投影（而非 id 集合）判定遗漏：置 review 循环之后仍存在任何 open/rejected 条目即显式失败。
+  // 重复 id 的第二套条目（id 已在 completed_task_ids 中但状态未变更）与真遗漏条目都会在此暴露，
+  // 避免旧逻辑按 id 集合判定漏检而让下游 forwardGatePassed 静默死锁。
+  const remaining = taskListOf(item).filter(
+    (t) => t.status === "open" || t.status === "rejected"
   )
   if (remaining.length > 0) {
     throw new Error(

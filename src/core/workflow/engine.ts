@@ -290,6 +290,38 @@ export function isForwardTransition(item: WorkItem, workflow: LoadedWorkflow, di
   return phaseOrderIndex(resolved.phaseName) > phaseOrderIndex(item.phase)
 }
 
+/**
+ * 评估当前 step 沿 on:pass 正向推进是否会被 applyTransition 拦截（只读，不修改 item）。
+ * 与 applyTransition(pass) 的门禁口径一致：
+ * - done 目标：task children 须全部终态（否则 applyTransition 拦截）；
+ * - 跨 phase 正向目标：forwardGatePassed 须通过（否则 applyTransition 拦截）。
+ * 返回拦截原因（供 blocked 视图展示），无拦截返回 undefined。
+ */
+function forwardAdvanceBlockReason(item: WorkItem, workflow: LoadedWorkflow, step: StepConfig): string | undefined {
+  const target = step.transitions.on_pass
+  if (target === "done") {
+    const unfinishedTasks = item.children.filter((c) => c.type === "task" && !isTerminalPhase(c.phase))
+    if (unfinishedTasks.length > 0) {
+      return `存在 ${unfinishedTasks.length} 个未达终态的 task child（#${unfinishedTasks.map((c) => c.id).join("、")}），无法推进到 done。`
+    }
+    return undefined
+  }
+  if (target === "halt") return undefined
+  const resolved = resolveStepInPhase(workflow, target)
+  if (!resolved) return `transition 目标 "${target}" 无法解析。`
+  if (resolved.phaseName === item.phase) return undefined
+  if (!forwardGatePassed(item, workflow, resolved.phaseName)) {
+    const notReached = item.children.filter(
+      (c) => c.type === "task" && !childReachedPhase(c, resolved.phaseName)
+    )
+    if (notReached.length > 0) {
+      return `跨 phase 正向推进被门禁拦截：目标 phase "${resolved.phaseName}" 要求全部 task child 达 ${resolved.phaseName} 态，以下 task 未达标：#${notReached.map((c) => c.id).join("、")}。`
+    }
+    return `跨 phase 正向推进被门禁拦截：当前 phase "${item.phase}" 未全部 step passed 或存在 Low+ children 未达到目标 phase "${resolved.phaseName}"。`
+  }
+  return undefined
+}
+
 export interface EngineRecommendation {
   status: "recommend" | "suspended" | "checkpoint" | "blocked" | "terminal"
   stepId: string | null
@@ -344,6 +376,18 @@ export function recommendForItem(item: WorkItem, workflow: LoadedWorkflow): Engi
         stepId: current.step.id,
         agents: [],
         blockedReason: "step 全部 agent 已 passed 但存在未到终态的 children，暂不沿 on:pass 推进。",
+      }
+    }
+    // step 全 passed 且 children 达标后仍可能被跨 phase 门禁或 done 的 task children 终态检查拦截
+    // （如重复 task child / 未完成子任务）。显式返回 blocked + 原因而非 terminal，
+    // 避免"step 已通过"误导造成无人再触发迁移的静默死锁。
+    const gateBlock = forwardAdvanceBlockReason(item, workflow, current.step)
+    if (gateBlock) {
+      return {
+        status: "blocked",
+        stepId: current.step.id,
+        agents: [],
+        blockedReason: gateBlock,
       }
     }
     return {
