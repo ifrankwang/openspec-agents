@@ -297,3 +297,71 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
+
+// ── Scene G: 源头强制归因——quality reviewer 提报缺 source_phase 也归因 quality（死锁根因场景）──
+
+describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归因 quality → 回退重审期按维重置", () => {
+  test("architecture reviewer 缺 source_phase 报 issue → child 归因 quality → dev 修复后 verify_quality:architecture tag 被重置", async () => {
+    const root = `/tmp/sourcePhase-G-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // architecture reviewer 报 issue 但不传 source_phase（死锁根因场景：归因 tool → 维 tag 永不清）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "g1", title: "架构遗留", description: "缺 source_phase", severity: "Low", dimension: "architecture", file: "src/g1.java", line: 9, suggestion: "改设计" }],
+        },
+        ctx.dims["architecture"]
+      )
+      let item = readItem(wt, CID)
+      const child = item.children.find((c: WorkItem) => c.externalId === "g1")
+      // 源头强制归因：quality reviewer 提报缺 source_phase → 补写 quality
+      expect(child.metadata["source_phase"]).toBe("quality")
+
+      // 其余 4 维 passed → 聚合回退 implement；architecture failed tag 残留
+      for (const d of ["style", "performance", "security", "maintainability"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("failed")
+
+      // dev 修复 → resetReviewTagsOnFix 按 quality 归因清 architecture 维 tag（死锁打破）
+      await fixIssue(wt, ["g1"])
+      item = readItem(wt, CID)
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.children.find((c: WorkItem) => c.externalId === "g1").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+// ── Scene H: 兜底归因——历史 state（source_phase 缺失但报源是 quality reviewer）也按维重置 ──
+
+describe("sourcePhase H: 缺 source_phase 但报源为 quality reviewer 的历史 child → 兜底按维重置", () => {
+  test("legacy child（metadata.source=architecture reviewer、无 source_phase）fixed → verify_quality:architecture tag 被重置", async () => {
+    const root = `/tmp/sourcePhase-H-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      // 模拟修复前遗留 state：报源为 quality reviewer（metadata.source）但 source_phase 缺失
+      injectChild(wt, makeChild("h1", { metadata: { source: "openspec-reviewer-architecture", dimension: "architecture", file: "src/h.java", line: 10 } }))
+      seedReviewTags(wt)
+
+      await fixIssue(wt, ["h1"])
+      const item = readItem(wt, CID)
+      // 兜底归因：即使 source_phase 缺省解析为 tool，报源反查命中 architecture 维 → 该维 tag 清
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      // 其余维度 tag 保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      // 报源是 quality reviewer 而非 tool/task 层 → 不清 verify_tool 维度逻辑之外的层级（fixed 属代码变更仍清 verify_tool）
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.children.find((c: WorkItem) => c.externalId === "h1").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})

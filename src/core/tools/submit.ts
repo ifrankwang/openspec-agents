@@ -1,4 +1,4 @@
-import type { OrchestrateState, Dimension } from "../types.js"
+import type { OrchestrateState } from "../types.js"
 import type { ToolContext, AgentSubmitParams } from "./types.js"
 import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
@@ -12,7 +12,7 @@ import {
   getStepVerdict, clearStepTags, isBlockingSeverity, isTerminalPhase,
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
-import { DIMENSION_AGENT_MAP } from "../constants.js"
+import { agentToReviewDimension } from "../constants.js"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.js"
 import { markTaskGroupCheckboxesComplete } from "../git.js"
 import {
@@ -139,6 +139,11 @@ function collectFixedExemptLayers(
     const f = resolveChildIssueFields(child)
     fixedSourcePhases.add(f.sourcePhase)
     if (f.sourcePhase === "quality") touchedQualityDims.add(f.dimension)
+    // 兜底归因：报源 agent 属 quality reviewer（按 agent 反查维度）即视为 quality 层，
+    // 即使 source_phase 缺省/解析非 quality 也把该维度纳入重置集合（防历史 state 死锁）。
+    // 只改维度集合，不修改 child.metadata（避免影响 routeExempt/adjudicateExempt/dedupe/assertFailedHasReason）。
+    const sourceDim = agentToReviewDimension(child.metadata["source"] as string)
+    if (sourceDim) touchedQualityDims.add(sourceDim)
   }
   for (const id of exemptIds) {
     const child = resolveChildByIssueId(item, id)
@@ -146,6 +151,8 @@ function collectFixedExemptLayers(
     const f = resolveChildIssueFields(child)
     exemptSourcePhases.add(f.sourcePhase)
     if (f.sourcePhase === "quality") touchedQualityDims.add(f.dimension)
+    const sourceDim = agentToReviewDimension(child.metadata["source"] as string)
+    if (sourceDim) touchedQualityDims.add(sourceDim)
   }
   return {
     fixedSourcePhases: [...fixedSourcePhases],
@@ -166,7 +173,13 @@ function buildIssueChild(nc: NonNullable<AgentSubmitParams["new_children"]>[numb
     severity: nc.severity as Severity | undefined,
   })
   child.metadata["source"] = sourceAgent
-  if (nc.source_phase) child.metadata["source_phase"] = nc.source_phase
+  // quality reviewer 提报的 issue 缺省归因 quality：DIMENSION_AGENT_MAP 反查命中即证明是 quality 层，
+  // 缺 source_phase 时补写，避免归因回落 tool 层导致回退重审期该维 tag 永不清、恒 failed、永不分派（状态机死锁）。
+  if (nc.source_phase) {
+    child.metadata["source_phase"] = nc.source_phase
+  } else if (agentToReviewDimension(sourceAgent)) {
+    child.metadata["source_phase"] = "quality"
+  }
   if (nc.dimension) child.metadata["dimension"] = nc.dimension
   if (nc.file) child.metadata["file"] = nc.file
   if (nc.line !== undefined) child.metadata["line"] = nc.line
@@ -311,7 +324,7 @@ function assertFailedHasReason(
     layerName = "工具层"
     hasReason = hasNewBlocking || existingBlocking.some((c) => resolveChildIssueFields(c).sourcePhase === "tool")
   } else {
-    const dimension = (Object.keys(DIMENSION_AGENT_MAP) as Dimension[]).find((d) => DIMENSION_AGENT_MAP[d] === agent)
+    const dimension = agentToReviewDimension(agent)
     layerName = dimension ? `AI 审查层(${dimension})` : "AI 审查层"
     // 新报与遗留阻塞理由均按当前 agent 维度过滤（对齐 main：verify_quality failed 理由须归属本维）。
     const dimMatches = (c: WorkItem): boolean => resolveChildIssueFields(c).dimension === dimension

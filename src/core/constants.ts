@@ -16,4 +16,9 @@ export const DIMENSION_AGENT_MAP: Record<ReviewDimension, string> = {
   maintainability: "openspec-reviewer-maintainability",
 }
 
+/** agent → quality 维度反查（DIMENSION_AGENT_MAP 值反向映射），未命中返回 undefined。 */
+export function agentToReviewDimension(agent: string): ReviewDimension | undefined {
+  return (Object.keys(DIMENSION_AGENT_MAP) as ReviewDimension[]).find((d) => DIMENSION_AGENT_MAP[d] === agent)
+}
+
 export const PHASE_ORDER: Phase[] = ["task_analysis", "dev_impl", "review"]

@@ -53,7 +53,7 @@ export const agentSubmitSchema = tool.schema.object({
     title: tool.schema.string(),
     description: tool.schema.string(),
     severity: tool.schema.enum(SEVERITY_LEVELS).optional(),
-    source_phase: tool.schema.enum(["tool", "task", "quality"]).optional().describe("issue 归因阶段（tool/task/quality），缺省 tool"),
+    source_phase: tool.schema.enum(["tool", "task", "quality"]).optional().describe("issue 归因阶段（tool/task/quality）。quality reviewer 提报时缺省归因 quality，其余调用方缺省 tool"),
     dimension: tool.schema.enum(CODE_DIMENSIONS).optional().describe("issue 归因维度，缺省 style"),
     file: tool.schema.string().optional().describe("问题所在文件路径（相对于 worktree）"),
     line: tool.schema.number().int().min(0).optional().describe("问题所在行号（0=整文件/待新建文件）"),

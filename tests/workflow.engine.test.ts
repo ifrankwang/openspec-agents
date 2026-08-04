@@ -191,7 +191,7 @@ phases:
     expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual(["c"])
   })
 
-  test("多 agent step 全部 failed → 聚合等待期已无 pending，不重复分派", () => {
+  test("多 agent step 全部 failed → 无任何 pending 时引擎级自愈回退 failed 维度", () => {
     const wf = loadWorkflow(`
 id: x
 max_retries: 1
@@ -208,7 +208,51 @@ phases:
     applyAgentVerdict(item, "multi", "a", "failed")
     applyAgentVerdict(item, "multi", "b", "failed")
     applyAgentVerdict(item, "multi", "c", "failed")
-    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual([])
+    // fix：全部非 pending（无待分派项）→ 回退返回 failed 维度（静默死锁转为可见循环，可被既有机制收敛）
+    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual(["a", "b", "c"])
+  })
+
+  test("多 agent step 全部非 pending（passed+failed 混合）→ 回退返回 failed 维度（引擎级自愈）", () => {
+    const wf = loadWorkflow(`
+id: x
+max_retries: 1
+phases:
+  - name: review
+    steps:
+      - id: multi
+        agents: [a, b, c]
+        transitions:
+          on_pass: done
+          on_fail: multi
+`)
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", "a", "passed")
+    applyAgentVerdict(item, "multi", "b", "failed")
+    applyAgentVerdict(item, "multi", "c", "passed")
+    // 无任何 pending：failed 维 tag 残留（如归因缺 source_phase 的历史 state）→ 重派 failed 维打破死锁
+    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual(["b"])
+  })
+
+  test("failed 维 tag 被清为 pending 后 recommendAgents 返回该维 agent（回退重审期重置语义）", () => {
+    const wf = loadWorkflow(`
+id: x
+max_retries: 1
+phases:
+  - name: review
+    steps:
+      - id: multi
+        agents: [a, b, c]
+        transitions:
+          on_pass: done
+          on_fail: multi
+`)
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", "a", "passed")
+    applyAgentVerdict(item, "multi", "b", "failed")
+    applyAgentVerdict(item, "multi", "c", "passed")
+    // resetReviewTagsOnFix 命中该维 → failed tag 清为 pending → 正常分派该维 agent
+    applyAgentVerdict(item, "multi", "b", "pending")
+    expect(recommendAgents(item, wf.stepMap.get("multi")!.step)).toEqual(["b"])
   })
 
   test("单 agent step failed → 仍返回该 agent（同 phase 回退不清 tag 须重审）", () => {

@@ -3,7 +3,7 @@ import type { WorkItem, StepConfig } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity } from "./engine.js"
-import { ORCHESTRATOR_AGENT, DIMENSION_AGENT_MAP } from "../constants.js"
+import { ORCHESTRATOR_AGENT, agentToReviewDimension } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
 import { taskListOf, issueChildrenOf } from "../task-children.js"
 import {
@@ -168,10 +168,28 @@ function renderOrchestratorDispatch(
       lines.push("（多子代理相互独立，可在单条消息中并排分派，无需串行等待）")
     }
   } else {
-    lines.push("（无待分派项，请检查状态）")
+    // 防御出口：当前 step 存在 failed 残留 tag 但无待分派项 → 状态不一致。
+    // 引擎已按「全部非 pending 时回退 failed 维度」自愈重派，此处兜底提示编排者走 recovery
+    // 而非盲目回退，避免 failed tag 残留（如 quality 维度归因缺 source_phase 的历史 state）静默死锁。
+    const failed = failedAgentsOnStep(item, workflow, rec.stepId)
+    if (failed.length > 0) {
+      lines.push("⚠️ 状态不一致：存在 failed 裁决残留但无待分派项，下一步无法正常推进。")
+      lines.push(`  - 失败维度：${failed.map((a) => `\`${a}\``).join("、")}`)
+      lines.push("  建议：调用 `opx_orch_init(recovery=...)` 重置对应层审查进度后重新验证，勿盲目回退 dev。")
+    } else {
+      lines.push("（无待分派项，请检查状态）")
+    }
   }
   lines.push("")
   return lines.join("\n")
+}
+
+/** 当前 step 中 verdict=failed 的 agent 列表（无待分派项时的状态不一致诊断）。 */
+function failedAgentsOnStep(item: WorkItem, workflow: LoadedWorkflow, stepId: string | null): string[] {
+  if (!stepId) return []
+  const step = workflow.stepMap.get(stepId)?.step
+  if (!step) return []
+  return step.agents.filter((a) => getStepVerdict(item, stepId, a) === "failed")
 }
 
 /** orchestrator 阶段进展/审核进度：各 step:agent:verdict 汇总 + children 统计。 */
@@ -442,7 +460,7 @@ function renderQualityChildren(item: WorkItem, ctxAgent: string): string[] {
 
 /** 调用者 agent → 审查维度（DIMENSION_AGENT_MAP 反查）。 */
 function agentToDimension(agent: string): Dimension | undefined {
-  return (Object.keys(DIMENSION_AGENT_MAP) as Dimension[]).find((d) => DIMENSION_AGENT_MAP[d] === agent)
+  return agentToReviewDimension(agent)
 }
 
 /** 渲染 children 区块：标题 + 逐条列表，空列表返回空数组。 */

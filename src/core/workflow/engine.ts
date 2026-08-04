@@ -94,10 +94,14 @@ export function adjudicateStep(item: WorkItem, step: StepConfig): StepAdjudicati
 
 export function recommendAgents(item: WorkItem, step: StepConfig): string[] {
   if (step.always_run) return [...step.agents]
-  // 多 agent step（verify_quality 5 维并行）：仅返回 pending 的 agent。
-  // 聚合等待期已 failed 维度不再重复分派；回退重审期 failed 维度已被 resetReviewTagsOnFix 清成 pending 自然返回。
+  // 多 agent step（verify_quality 5 维并行）：
+  // - 存在 pending → 聚合等待期仅重派 pending（已 failed 维度不重复分派，避免单维失败过早重派）
+  // - 无任何 pending → 引擎级自愈：回退返回 failed 维度（failed tag 残留如归因缺 source_phase
+  //   导致的历史 state，静默死锁转为可见循环并被既有机制收敛；语义与 main 分支非 passed 全重派收敛）
   if (step.agents.length > 1) {
-    return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) === "pending")
+    const pending = step.agents.filter((agent) => getStepVerdict(item, step.id, agent) === "pending")
+    if (pending.length > 0) return pending
+    return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) === "failed")
   }
   // 单 agent step：返回非 passed 的 agent（analyze 同 phase 回退不清 tag，必须返回 failed 的 architect 重审）。
   return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) !== "passed")

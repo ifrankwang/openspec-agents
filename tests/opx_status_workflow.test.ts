@@ -16,6 +16,8 @@ import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
+import { renderWorkflowStatusView } from "../src/core/workflow/status"
+import { loadWorkflow } from "../src/core/workflow/loader"
 import { FakeGitRunner, makeCtx } from "./helpers"
 
 const CID = "wf-status"
@@ -152,6 +154,47 @@ describe("P6-B 新流动态视图", () => {
     expect(output).toContain("# 编排进度")
     expect(output).toContain("## 下一步")
     expect(output).toContain("分派子代理：`openspec-reviewer-tool`")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("orchestrator 分派视图：rec.agents 为空但当前 step 有 failed 残留 tag → 状态不一致警告（防御出口）", async () => {
+    const root = `/tmp/wf-status-h-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    // 构造 verify_quality 聚合态：architecture 维 failed、其余 passed、无 pending → 引擎自愈前的静默死锁态
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "review"
+    item.currentStep = "verify_quality"
+    item.tags = {
+      "analyze:openspec-architect": "passed",
+      "implement:openspec-developer": "passed",
+      "verify_tool:openspec-reviewer-tool": "passed",
+      "verify_task:openspec-reviewer-task": "passed",
+      "verify_quality:openspec-reviewer-style": "passed",
+      "verify_quality:openspec-reviewer-architecture": "failed",
+      "verify_quality:openspec-reviewer-performance": "passed",
+      "verify_quality:openspec-reviewer-security": "passed",
+      "verify_quality:openspec-reviewer-maintainability": "passed",
+    }
+    writeStateSync(wt, state)
+
+    // 直接构造 rec.agents=[] 的推荐（模拟引擎未自愈时视图兜底），渲染 orchestrator 分派视图
+    const workflow = loadWorkflow(readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8"))
+    const output = renderWorkflowStatusView(
+      item,
+      workflow,
+      { status: "recommend", stepId: "verify_quality", agents: [] },
+      "openspec-orchestrator",
+      { state, tg: {} }
+    )
+    expect(output).toContain("⚠️ 状态不一致")
+    expect(output).toContain("`openspec-reviewer-architecture`")
+    expect(output).toContain("recovery")
+    expect(output).toContain("勿盲目回退")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
