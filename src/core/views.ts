@@ -70,6 +70,7 @@ export function renderEfficiencySteps(startNum: number): { lines: string[], next
   if (getEfficiencySkills().length > 0) {
     lines.push(`${n++}. 按已加载的效率 skill 中的工具可用性检测步骤确认代码探索工具就绪（含索引初始化）`)
     lines.push(`${n++}. 初始化仅是前置——本 session 后续所有代码探索操作须持续遵循已加载效率 skill 中的工具选择规则，不可将初始化视为终点而恢复默认工具习惯`)
+    lines.push(`${n++}. 提交前自查：本 step 涉及的代码探索（符号定位/调用关系/影响评估）是否遵循已加载效率 skill 的工具选择规则，未遵循须补做`)
   }
   return { lines, nextNum: n }
 }
