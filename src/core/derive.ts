@@ -1,7 +1,8 @@
-import type { TaskGroupState, TaskItem, IssueItem, OrchestrateState, Phase, QualityLayerProgress, ExecutionBoundary, BlockerItem } from "./types.js"
+import type { TaskGroupState, IssueItem, OrchestrateState, Phase, QualityLayerProgress, ExecutionBoundary, BlockerItem } from "./types.js"
 import { BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT } from "./constants.js"
 import type { WorkItem, WorkItemPhase } from "./workflow/types.js"
 import { resolveChildIssueFields } from "./workflow/reset.js"
+import { taskListOf, issueChildrenOf } from "./task-children.js"
 
 export function createEmptyQualityProgress(): QualityLayerProgress {
   return {
@@ -113,7 +114,7 @@ function workItemPhaseToTaskGroupStatus(phase: WorkItemPhase): Phase {
  */
 export function taskGroupFromWorkItem(item: WorkItem): TaskGroupState {
   const m = item.metadata
-  const tasks = Array.isArray(m["tasks"]) ? (m["tasks"] as TaskItem[]) : []
+  const tasks = taskListOf(item)
   return {
     id: item.externalId ?? item.id.replace(/^task:/, ""),
     name: typeof m["name"] === "string" ? m["name"] : item.title,
@@ -135,7 +136,7 @@ export function taskGroupFromWorkItem(item: WorkItem): TaskGroupState {
       },
     },
     tasks,
-    issues: item.children.map(projectIssueFromChild),
+    issues: issueChildrenOf(item).map(projectIssueFromChild),
     blockers: Array.isArray(m["blockers"]) ? (m["blockers"] as BlockerItem[]) : [],
     agentSummaries: typeof m["agent_summaries"] === "object" ? (m["agent_summaries"] as Record<string, string>) : undefined,
   }

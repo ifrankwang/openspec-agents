@@ -126,6 +126,29 @@ describe("2. children 联动更新", () => {
     submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", newChildren: [c1, c3] })
     expect(item.children.map((c) => c.id)).toEqual(["c1", "c2", "c3"])
   })
+
+  test("fixedIds 同 id 撞车且 issue 排前（reopen/recovery 重排）：issue child 优先命中，task child 不误伤", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    // issue child externalId "1" 与 task child 短数字 id "1" 撞车；issue 在前、task 在后
+    const issueC = child({ id: "issue:1", externalId: "1", phase: "in_progress" })
+    const taskC = makeItem({ id: "1", type: "task", phase: "in_progress" })
+    item.children.push(issueC, taskC)
+    const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", fixedIds: ["1"] })
+    expect(issueC.phase).toBe("done")
+    expect(taskC.phase).toBe("in_progress")
+    expect(r.childrenUpdated).toContain("issue:1")
+  })
+
+  test("fixedIds 同 id 撞车且 task 排前（init 顺序）：issue child 仍优先命中，task child 不误伤", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    const taskC = makeItem({ id: "1", type: "task", phase: "in_progress" })
+    const issueC = child({ id: "issue:1", externalId: "1", phase: "in_progress" })
+    item.children.push(taskC, issueC)
+    const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", fixedIds: ["1"] })
+    expect(issueC.phase).toBe("done")
+    expect(taskC.phase).toBe("in_progress")
+    expect(r.childrenUpdated).toContain("issue:1")
+  })
 })
 
 describe("3. gate 与推进", () => {

@@ -10,66 +10,107 @@ import { assertOrchestrator, findTaskGroup } from "../derive.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../workflow/loader.js"
 import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem } from "../workflow/engine.js"
 import { renderWorkflowStatusView } from "../workflow/status.js"
-import type { WorkItem } from "../workflow/types.js"
+import { taskChildrenOf } from "../task-children.js"
+import type { WorkItem, WorkItemPhase } from "../workflow/types.js"
 import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext } from "./types.js"
 
-/** 由 tasks.md 解析结果构造 task WorkItem 的 tasks 清单（初始全 open）。 */
-function tasksOf(parsed: ParsedTask[], defaultStatus: TaskStatus): TaskItem[] {
-  return parsed.map((p, i) => ({
-    id: String(i + 1),
-    specTrace: p.specTrace,
+/** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
+function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
+  const child = createInitialWorkItem({
+    id: String(index + 1),
+    source: "openspec",
+    externalId: p.taskNumber,
+    type: "task",
     title: p.title,
-    status: defaultStatus,
-    taskNumber: p.taskNumber,
-    rejectReason: null,
-  }))
+    description: p.title,
+  })
+  child.metadata["specTrace"] = p.specTrace
+  child.metadata["taskNumber"] = p.taskNumber
+  return child
 }
 
 /**
- * 按 recovery 合成活跃组 WorkItem 的 phase/currentStep/tags/tasks。
- * - task_analysis：todo/analyze、tags 清空、tasks 全 open（全新开始）
- * - dev_impl：in_progress/implement、analyze 已 passed、tasks 保留既有进度（无则 open）
+ * 按 tasks.md 同步 task children：
+ * - 既有 task child 保留（forceOpen 除外）；
+ * - 新增（不在既有中）按 defaultStatus 建 phase（todo/done）；
+ * - 移除 tasks.md 已删除的 task child（issue children 不受影响）。
+ */
+function syncTaskChildren(item: WorkItem, parsed: ParsedTask[], opts: { forceOpen?: boolean; defaultStatus?: WorkItemPhase }): void {
+  const prev = new Map(taskChildrenOf(item).map((c) => [c.id, c]))
+  const built = parsed.map((p, i) => {
+    const id = String(i + 1)
+    const old = prev.get(id)
+    if (old && !opts.forceOpen) return old
+    const child = taskChildFromParsed(p, i)
+    if (!opts.forceOpen && opts.defaultStatus) child.phase = opts.defaultStatus
+    return child
+  })
+  const keepIds = new Set(built.map((c) => c.id))
+  item.children = [...item.children.filter((c) => c.type !== "task" || keepIds.has(c.id)), ...built]
+}
+
+/** TaskStatus → task child phase 反查（旧 state metadata.tasks 迁移用）。 */
+function taskStatusToPhase(status: TaskStatus): WorkItemPhase {
+  switch (status) {
+    case "submitted": return "review"
+    case "verified": return "done"
+    case "rejected": return "todo"
+    default: return "todo"
+  }
+}
+
+/**
+ * 旧 state 迁移：metadata.tasks（TaskItem[]）→ task children。
+ * 无 task child 时按 status 反查 phase 重建并挂入 children；随后删除 metadata.tasks（已废弃）。
+ */
+function migrateLegacyTasks(item: WorkItem): void {
+  const raw = item.metadata["tasks"]
+  if (!Array.isArray(raw)) return
+  if (taskChildrenOf(item).length === 0) {
+    for (const t of raw as TaskItem[]) {
+      const child = createInitialWorkItem({
+        id: String(t.id),
+        source: "openspec",
+        externalId: t.taskNumber || undefined,
+        type: "task",
+        title: t.title,
+        description: t.title,
+      })
+      child.metadata["specTrace"] = t.specTrace
+      if (t.taskNumber) child.metadata["taskNumber"] = t.taskNumber
+      if (t.rejectReason) child.metadata["reject_reason"] = t.rejectReason
+      child.phase = taskStatusToPhase(t.status)
+      item.children.push(child)
+    }
+  }
+  delete item.metadata["tasks"]
+}
+
+/**
+ * 按 recovery 合成活跃组 WorkItem 的 phase/currentStep/tags/task children。
+ * - task_analysis：todo/analyze、tags 清空、task children 全 todo（全新开始）
+ * - dev_impl：in_progress/implement、analyze 已 passed、task children 保留既有进度（无则 todo）
  * - review：review/verify_*（按 review_layer 决定从哪个子层继续）、analyze+implement 已 passed、
- *   tasks 保留既有进度（无则 verified）
+ *   task children 保留既有进度（无则 done——review 恢复时子任务应视为已验证，否则 G21 remaining 会让 implement 无法提交）
  */
 function applyRecoveryState(
   item: WorkItem,
   recovery: InitParams["recovery"],
   parsedTasks: ParsedTask[],
 ): void {
-  const prev = new Map(
-    (Array.isArray(item.metadata["tasks"]) ? (item.metadata["tasks"] as TaskItem[]) : [])
-      .map((t) => [t.id, t])
-  )
-  const syncTasks = (forceOpen: boolean, defaultStatus: TaskStatus): void => {
-    item.metadata["tasks"] = parsedTasks.map((p, i) => {
-      const id = String(i + 1)
-      const old = prev.get(id)
-      if (old && !forceOpen) return { ...old }
-      return {
-        id,
-        specTrace: p.specTrace,
-        title: p.title,
-        status: forceOpen ? "open" as const : defaultStatus,
-        taskNumber: p.taskNumber,
-        rejectReason: null,
-      }
-    })
-  }
-
   const phase = recovery?.phase
   if (!phase || phase === "task_analysis") {
     item.phase = "todo"
     item.currentStep = "analyze"
     item.tags = {}
-    syncTasks(true, "open")
+    syncTaskChildren(item, parsedTasks, { forceOpen: true })
     return
   }
   if (phase === "dev_impl") {
     item.phase = "in_progress"
     item.currentStep = "implement"
     item.tags = { "analyze:openspec-architect": "passed" }
-    syncTasks(false, "open")
+    syncTaskChildren(item, parsedTasks, { defaultStatus: "todo" })
     return
   }
   item.phase = "review"
@@ -86,7 +127,7 @@ function applyRecoveryState(
     item.tags["verify_task:openspec-reviewer-task"] = "passed"
     item.currentStep = "verify_quality"
   }
-  syncTasks(false, "verified")
+  syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
 }
 
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
@@ -115,7 +156,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     )
   }
 
-  // 逐任务组解析 tasks.md 子任务（构造各 task WorkItem 的 metadata.tasks 用）
+  // 逐任务组解析 tasks.md 子任务（构造各 task WorkItem 的 task children 用）
   const tasksByGroup = new Map<string, ParsedTask[]>()
   for (const g of parsedGroups) {
     tasksByGroup.set(g.id, await parseTasksMdForGroup(ctx.worktree, args.change_id, g.id))
@@ -152,6 +193,9 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       item.metadata["relevant_specs"] = extractRelevantSpecsFromTasks(groupTasks)
     }
 
+    // 旧 state 迁移：metadata.tasks（TaskItem[]）→ task children（挂入 children 后删除 metadata.tasks）
+    if (existing) migrateLegacyTasks(existing)
+
     if (!isCurrent) {
       // 非活跃组：已有则保留进度（仅刷新名称/计数），否则新建
       if (existing) {
@@ -167,7 +211,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
           labels: ["openspec-change"],
         })
         item.currentStep = "analyze"
-        item.metadata["tasks"] = tasksOf(groupTasks, "open")
+        syncTaskChildren(item, groupTasks, { defaultStatus: "todo" })
         refreshMeta(item)
         state.workItems.push(item)
       }
@@ -390,10 +434,8 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
     throw new Error(`存在 ${openIssues.length} 个 Low 及以上的未解决 issue 未处理，请先修复或申请豁免。`)
   }
 
-  const tasks = Array.isArray(item.metadata["tasks"]) ? (item.metadata["tasks"] as TaskItem[]) : []
-  const openTasks = tasks.filter(
-    (t) => t.status === "open" || t.status === "submitted" || t.status === "rejected"
-  )
+  // task children 须全部终态（done/cancelled）才能收尾
+  const openTasks = taskChildrenOf(item).filter((c) => !isTerminalPhase(c.phase))
   if (openTasks.length > 0) {
     throw new Error(`存在 ${openTasks.length} 个未完成 task。`)
   }

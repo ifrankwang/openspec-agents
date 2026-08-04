@@ -135,9 +135,19 @@ export function childReachedPhase(child: WorkItem, targetPhase: WorkItemPhase): 
 
 export function forwardGatePassed(item: WorkItem, workflow: LoadedWorkflow, targetPhase: WorkItemPhase): boolean {
   if (!phaseStepsAllPassed(item, workflow, item.phase)) return false
-  return item.children
+  const issuesOk = item.children
     .filter((child) => isBlockingSeverity(child.severity))
     .every((child) => childReachedPhase(child, targetPhase))
+  if (!issuesOk) return false
+  // task children（子任务）仅当跨入 review 及之后（targetPhase index >= 2）才纳入检查：
+  // analyze(todo)→implement(in_progress) 跨 phase 时 task child 为 todo 态，纳入会全流程死锁。
+  if (phaseOrderIndex(targetPhase) >= 2) {
+    const tasksOk = item.children
+      .filter((child) => child.type === "task")
+      .every((child) => childReachedPhase(child, targetPhase))
+    if (!tasksOk) return false
+  }
+  return true
 }
 
 export function rollbackChildren(item: WorkItem): void {
@@ -223,6 +233,12 @@ export function applyTransition(
   const target = direction === "pass" ? current.step.transitions.on_pass : current.step.transitions.on_fail
 
   if (target === "done") {
+    // done 转移不走 forwardGatePassed（短路），置 done 前须显式检查 task children 全部终态
+    // （未完成子任务不得收尾；issue blocking 检查已在 stepCanPass 处理）。
+    const unfinishedTasks = item.children.filter((child) => child.type === "task" && !isTerminalPhase(child.phase))
+    if (unfinishedTasks.length > 0) {
+      return { advanced: false, reason: "存在未完成的子任务（task children 未达终态），无法进入 done。" }
+    }
     item.phase = "done"
     item.currentStep = null
     return { advanced: true, target: "done" }

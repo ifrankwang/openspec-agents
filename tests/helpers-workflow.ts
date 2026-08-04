@@ -16,6 +16,7 @@
  */
 import type { ToolContext } from "@opencode-ai/plugin"
 import type { WorkItem } from "../src/core/workflow/types"
+import { taskListOf as projectTaskList } from "../src/core/task-children"
 import { init, agent_submit } from "../src/adapters/opencode/tools"
 import { makeCtx, readState } from "./helpers"
 
@@ -59,9 +60,9 @@ export function taskItemOf(state: any, groupId = "1"): WorkItem {
   return state?.workItems?.find((w: any) => w.id === `task:${groupId}`)
 }
 
-/** 取 WorkItem 的 metadata.tasks（task 清单）。 */
+/** 取 WorkItem 的 task 清单（从 children 投影 task child，TaskStatus 由 phase 反查）。 */
 export function taskListOf(item: any): any[] {
-  return Array.isArray(item?.metadata?.tasks) ? (item.metadata.tasks as any[]) : []
+  return projectTaskList(item as any) as any[]
 }
 
 /** 取 WorkItem 的 metadata.blockers。 */
@@ -80,7 +81,7 @@ export function readItem(wt: string, cid: string, groupId = "1"): any {
   return state ? taskItemOf(state, groupId) : undefined
 }
 
-/** metadata.tasks 的 id 列表（供 completed_task_ids / verified_tasks 默认值）。 */
+/** task 清单的 id 列表（供 completed_task_ids / verified_tasks 默认值）。 */
 export function taskIdsOf(item: any): string[] {
   return taskListOf(item).map((t: any) => t.id)
 }

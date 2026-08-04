@@ -330,6 +330,23 @@ describe("Dashboard", () => {
     expect(card.suspendReason).toBe("等待用户确认接口契约")
   })
 
+  test("children 投影包含 type=task 子任务（子任务进度可见）", async () => {
+    const state = structuredClone(workItemState)
+    const taskItem = state.workItems.find((w: any) => w.id === "task:tg-1")
+    taskItem.children.push({
+      id: "1", source: "openspec", externalId: "1.1", type: "task",
+      title: "登录接口", description: "登录接口", phase: "review",
+      suspended: false, currentStep: null, tags: {}, metadata: {}, children: [], labels: [],
+    })
+    writeState("dash-task-child", state)
+    const r = await readDashboardState(TMP, "dash-task-child")
+    const card = r!.workItemCards.find((c) => c.type === "task")!
+    const taskChild = card.children.find((c: any) => c.id === "1")!
+    expect(taskChild.type).toBe("task")
+    expect(taskChild.phase).toBe("review")
+    expect(taskChild.title).toBe("登录接口")
+  })
+
   test("readDashboardState without changeId exposes workItemCards", async () => {
     const dir = join(TMP, "enum-" + Date.now())
     mkdirSync(join(dir, ".opencode", ".orchestrate_state"), { recursive: true })

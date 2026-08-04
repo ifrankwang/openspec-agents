@@ -6,6 +6,8 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { readStateByChangeId } from "../src/core/state"
+import { init } from "../src/adapters/opencode/tools"
+import { setupWithFakeGit, makeCtx, teardown } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "migration-test"
@@ -187,5 +189,56 @@ describe("state.workItems 迁移", () => {
       requestedBy: "openspec-reviewer-style", // sourcePhase=quality → DIMENSION_AGENT_MAP[style]
       reason: "第三方库限制",
     })
+  })
+
+  test("旧 state（metadata.tasks 无 task child）→ init 迁移为 task children 并删除 metadata.tasks", async () => {
+    const root = `/tmp/state-migration-test/mt-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      // 构造旧格式 workItems：metadata.tasks 有值、无 task children
+      const stateDir = join(wt, ".opencode", ".orchestrate_state")
+      mkdirSync(stateDir, { recursive: true })
+      writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify({
+        changeId: CID,
+        isolationNamespace: "ns-mt",
+        taskGroupId: "1",
+        baseBranch: "main",
+        workItems: [{
+          id: "task:1", source: "openspec", externalId: "1", type: "task",
+          title: "Group 1", description: "Group 1", phase: "review", suspended: false,
+          currentStep: "verify_task", tags: {}, labels: ["openspec-change"],
+          metadata: {
+            source: "openspec",
+            tasks: [
+              { id: "1", specTrace: "spec-a", title: "T1", status: "submitted", taskNumber: "1.1", rejectReason: null },
+              { id: "2", specTrace: "spec-b", title: "T2", status: "verified", taskNumber: "1.2", rejectReason: null },
+              { id: "3", specTrace: "", title: "T3", status: "rejected", taskNumber: "1.3", rejectReason: "不达标" },
+              { id: "4", specTrace: "", title: "T4", status: "open", taskNumber: "1.4", rejectReason: null },
+            ],
+          },
+          children: [],
+        }],
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }))
+
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+
+      const disk = JSON.parse(readFileSync(join(stateDir, `${CID}.json`), "utf-8"))
+      const item = disk.workItems[0] as WorkItem
+      const tasks = item.children.filter((c) => c.type === "task")
+      expect(tasks).toHaveLength(4)
+      expect(tasks.find((c) => c.id === "1")!.phase).toBe("review")   // submitted → review
+      expect(tasks.find((c) => c.id === "1")!.externalId).toBe("1.1") // taskNumber 存 externalId
+      expect(tasks.find((c) => c.id === "2")!.phase).toBe("done")     // verified → done
+      expect(tasks.find((c) => c.id === "3")!.phase).toBe("todo")     // rejected → todo
+      expect(tasks.find((c) => c.id === "3")!.metadata["reject_reason"]).toBe("不达标")
+      expect(tasks.find((c) => c.id === "4")!.phase).toBe("todo")     // open → todo
+      expect(item.metadata["tasks"]).toBeUndefined()                  // metadata.tasks 已删除
+      // issue children 不受影响（无）
+      expect(item.children.filter((c) => c.type === "issue")).toHaveLength(0)
+    } finally {
+      teardown(root)
+    }
   })
 })

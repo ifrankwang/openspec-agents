@@ -1,10 +1,11 @@
-import type { OrchestrateState, TaskGroupState, TaskItem, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
+import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
 import type { WorkItem, StepConfig } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity } from "./engine.js"
 import { ORCHESTRATOR_AGENT, DIMENSION_AGENT_MAP } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
+import { taskListOf, issueChildrenOf } from "../task-children.js"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
   renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
@@ -183,7 +184,8 @@ function renderProgressSection(item: WorkItem, workflow: LoadedWorkflow): string
 /** children 状态统计：todo=待处理、review=待裁定、done=已验证、cancelled=已豁免、exempt_request=豁免申请中。 */
 function childStatusCounts(item: WorkItem): { todo: number; review: number; done: number; cancelled: number; exempt: number } {
   const counts = { todo: 0, review: 0, done: 0, cancelled: 0, exempt: 0 }
-  for (const c of item.children) {
+  // 仅统计 issue child（task child 不计入——子任务进度由 task 语义承载）
+  for (const c of issueChildrenOf(item)) {
     if (c.metadata["exempt_request"] !== undefined) counts.exempt++
     switch (c.phase) {
       case "todo": counts.todo++; break
@@ -301,9 +303,8 @@ function readBlockers(item: WorkItem): BlockerItem[] {
   return Array.isArray(raw) ? (raw as BlockerItem[]) : []
 }
 
-function readTasks(item: WorkItem): TaskItem[] {
-  const raw = item.metadata["tasks"]
-  return Array.isArray(raw) ? (raw as TaskItem[]) : []
+function readTasks(item: WorkItem): ReturnType<typeof taskListOf> {
+  return taskListOf(item)
 }
 
 function readAgentSummaries(item: WorkItem): Record<string, string> | undefined {
@@ -356,7 +357,10 @@ function renderExecutionBoundary(item: WorkItem): string[] {
 /** implement step：developer 待修复 children（Low+ 必办 / Info 建议，均带 reject_reason/refix_count 提示）。 */
 function renderDeveloperChildren(item: WorkItem): string[] {
   const lines: string[] = []
-  const toFix = item.children.filter((c) => !isTerminalPhase(c.phase) && c.metadata["exempt_request"] === undefined)
+  // 仅 issue child 进入修复清单（task child 不得混入 issue 渲染）
+  const toFix = issueChildrenOf(item).filter(
+    (c) => !isTerminalPhase(c.phase) && c.metadata["exempt_request"] === undefined
+  )
   if (toFix.length === 0) return lines
   const blocking = toFix.filter((c) => isBlockingSeverity(c.severity))
   const info = toFix.filter((c) => !isBlockingSeverity(c.severity))
@@ -378,20 +382,21 @@ function renderDeveloperChildren(item: WorkItem): string[] {
   return lines
 }
 
-/** verify_tool step：reviewer-tool 视角全部 children + 待裁定（review / exempt_request）。 */
+/** verify_tool step：reviewer-tool 视角全部 issue children + 待裁定（review / exempt_request）。 */
 function renderToolChildren(item: WorkItem): string[] {
   const lines: string[] = []
-  if (item.children.length > 0) {
-    lines.push(...renderChildrenSection("全部 Issue（tool 层可见）", item.children))
+  const issues = issueChildrenOf(item)
+  if (issues.length > 0) {
+    lines.push(...renderChildrenSection("全部 Issue（tool 层可见）", issues))
   }
-  const pending = item.children.filter((c) => c.phase === "review" || c.metadata["exempt_request"] !== undefined)
+  const pending = issues.filter((c) => c.phase === "review" || c.metadata["exempt_request"] !== undefined)
   if (pending.length > 0) {
     lines.push(...renderChildrenSection("待裁定 (review / 豁免申请中)", pending))
   }
   return lines
 }
 
-/** verify_task step：metadata.tasks 待验证列表 + 待裁定 children。 */
+/** verify_task step：task children 待验证列表 + 待裁定 children。 */
 function renderTaskChildren(item: WorkItem): string[] {
   const lines: string[] = []
   const pendingTasks = readTasks(item).filter((t) => t.status === "submitted")
@@ -400,18 +405,19 @@ function renderTaskChildren(item: WorkItem): string[] {
     for (const t of pendingTasks) lines.push(renderTaskItem(t))
     lines.push("")
   }
-  const pending = item.children.filter((c) => c.phase === "review" || c.metadata["exempt_request"] !== undefined)
+  const pending = issueChildrenOf(item).filter((c) => c.phase === "review" || c.metadata["exempt_request"] !== undefined)
   if (pending.length > 0) {
     lines.push(...renderChildrenSection("Issue (待裁定)", pending))
   }
   return lines
 }
 
-/** verify_quality step：各维度 reviewer 仅渲染本维度 children（metadata.dimension === 当前 agent 对应维度）。 */
+/** verify_quality step：各维度 reviewer 仅渲染本维度 issue children（metadata.dimension === 当前 agent 对应维度）。 */
 function renderQualityChildren(item: WorkItem, ctxAgent: string): string[] {
   const dimension = agentToDimension(ctxAgent)
   if (!dimension) return []
-  const own = item.children.filter((c) => resolveChildIssueFields(c).dimension === dimension)
+  // task child 无 dimension 归因（resolveChildIssueFields 缺省 style），必须按 type 排除
+  const own = issueChildrenOf(item).filter((c) => resolveChildIssueFields(c).dimension === dimension)
   if (own.length === 0) return []
   const lines = [`## 本维度 Issue（${dimension}）`, ""]
   for (const c of own) lines.push(renderChildIssue(c))

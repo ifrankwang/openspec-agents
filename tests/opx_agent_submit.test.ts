@@ -35,6 +35,11 @@ function taskItemOf(wt: string): any {
   return state?.workItems?.find((w: any) => w.id === "task:1")
 }
 
+/** 取 WorkItem 的 task children（子任务），用于 task 状态断言。 */
+function taskChildrenOf(wt: string): any[] {
+  return (taskItemOf(wt)?.children ?? []).filter((c: any) => c.type === "task")
+}
+
 /** 把旧 issue 记录转为 WorkItem issue child（phase 按 status 映射，metadata 承载归因字段）。 */
 function issueToChild(issue: Record<string, unknown>): any {
   const status = (issue.status as string) ?? "open"
@@ -159,9 +164,9 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(taskItemOf(wt).phase).toBe("review")
       expect(taskItemOf(wt).currentStep).toBe("verify_task")
 
-      // verify_task：reviewer-task
+      // verify_task：reviewer-task（任务全部验证通过，task children 置 done 才能进 done 收尾）
       await agent_submit.execute(
-        { change_id: CID, step_id: "verify_task", verdict: "passed" },
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] },
         makeCtx("openspec-reviewer-task", wt)
       )
       expect(taskItemOf(wt).currentStep).toBe("verify_quality")
@@ -470,8 +475,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
       const item = taskItemOf(wt)
       expect(item.phase).toBe("done")
       expect(item.currentStep).toBeNull()
-      // task 全 verified
-      expect(item.metadata.tasks.every((t: any) => t.status === "verified")).toBe(true)
+      // task children 全部终态（verified 语义）
+      expect(taskChildrenOf(wt).every((t: any) => t.phase === "done")).toBe(true)
       // children 全部终态（无遗留未解决 issue）
       expect(item.children.every((c: WorkItem) => c.phase === "done" || c.phase === "cancelled")).toBe(true)
 
@@ -965,9 +970,9 @@ describe("opx_agent_submit 通用 step 提交", () => {
         makeCtx("openspec-developer", wt)
       )
       expect(r).toContain("- **推进**: 是 → verify_tool")
-      const tasks = taskItemOf(wt).metadata.tasks as any[]
-      expect(tasks.find((t: any) => t.id === "1").status).toBe("submitted")
-      expect(tasks.find((t: any) => t.id === "3").status).toBe("submitted")
+      const tasks = taskChildrenOf(wt)
+      expect(tasks.find((t: any) => t.id === "1").phase).toBe("review")
+      expect(tasks.find((t: any) => t.id === "3").phase).toBe("review")
       expect(taskItemOf(wt).metadata["self_check_results"]).toBe("全部用例通过")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
@@ -981,7 +986,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       // 先提交部分完成，制造 submitted 态
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
-      expect((taskItemOf(wt).metadata.tasks as any[]).every((t: any) => t.status === "submitted")).toBe(true)
+      expect(taskChildrenOf(wt).every((t: any) => t.phase === "review")).toBe(true)
 
       // 模拟回 implement（当前在 review，blocker 仅 failed 提交回退 analyze 路径）
       const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
@@ -1009,8 +1014,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(r).toContain("- **推进**: 是")
       expect(taskItemOf(wt).phase).toBe("todo")
       expect(taskItemOf(wt).currentStep).toBe("analyze")
-      // resetTasksForBlocker：tasks 全 open，review 验证标记清空
-      expect((taskItemOf(wt).metadata.tasks as any[]).every((t: any) => t.status === "open")).toBe(true)
+      // resetTasksForBlocker：task children 全 todo，review 验证标记清空
+      expect(taskChildrenOf(wt).every((t: any) => t.phase === "todo")).toBe(true)
       expect(taskItemOf(wt).metadata["blockers"]).toHaveLength(1)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
@@ -1053,10 +1058,10 @@ describe("opx_agent_submit 通用 step 提交", () => {
       )
       expect(r).toContain("- **推进**: 是")
       expect(taskItemOf(wt).phase).toBe("in_progress")
-      const tasks = taskItemOf(wt).metadata.tasks as any[]
-      expect(tasks.find((t: any) => t.id === "1").status).toBe("verified")
-      expect(tasks.find((t: any) => t.id === "3").status).toBe("rejected")
-      expect(tasks.find((t: any) => t.id === "3").rejectReason).toBe("验收未过")
+      const tasks = taskChildrenOf(wt)
+      expect(tasks.find((t: any) => t.id === "1").phase).toBe("done")
+      expect(tasks.find((t: any) => t.id === "3").phase).toBe("todo")
+      expect(tasks.find((t: any) => t.id === "3").metadata["reject_reason"]).toBe("验收未过")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -1414,8 +1419,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(rTask).toContain("passed")
       item = taskItemOf(wt)
       expect(item.currentStep).toBe("verify_quality")
-      // metadata.tasks 保留驳回语义：rejected task 在重提后已 submitted→verified
-      expect((item.metadata.tasks as any[]).find((t: any) => t.id === "3").status).toBe("verified")
+      // task children 保留驳回语义：rejected task 在重提后已 done（verified）
+      expect(taskChildrenOf(wt).find((t: any) => t.id === "3").phase).toBe("done")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -1602,6 +1607,55 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(item.children.find((c: WorkItem) => c.externalId === "8")).toBeUndefined()
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
       expect(item.currentStep).toBe("verify_tool")
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
+  test("40. 撞车修复：task child 与 issue externalId 同 id → fixed_issue_ids 命中 issue child，分层重置按 issue 归因", async () => {
+    const root = `/tmp/opxsub-40-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      // init 后 children 为 task child "1"/"2"/"3"（tasks.md 1.1/1.2/1.3）
+      expect(taskItemOf(wt).children.filter((c: WorkItem) => c.type === "task").map((c: WorkItem) => c.id)).toEqual(["1", "2", "3"])
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+
+      // 注入 issue：id/externalId "1" 与 task child 短数字 id "1" 撞车；归因 quality/architecture
+      injectIssue(wt, makeIssue({
+        id: "1", dimension: "architecture", sourcePhase: "quality",
+        file: "src/A.java", line: 7, description: "架构 issue（与 task 1 撞 id）",
+      }))
+
+      // 预置分层验证 tag：verify_tool + verify_quality:architecture 均 passed，verify_task passed 留作对照
+      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const state = JSON.parse(readFileSync(statePath, "utf-8"))
+      const item = state.workItems.find((w: any) => w.id === "task:1")
+      item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
+      item.tags["verify_task:openspec-reviewer-task"] = "passed"
+      item.tags["verify_quality:openspec-reviewer-architecture"] = "passed"
+      writeFileSync(statePath, JSON.stringify(state, null, 2))
+
+      // dev 提交 fixed_issue_ids=["1"]：必须命中 issue child（而非 task child）
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: ["1"], completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
+      expect(r).toContain("- **推进**: 是")
+
+      const children = taskItemOf(wt).children
+      const issueChild = children.find((c: WorkItem) => c.type === "issue" && c.externalId === "1")
+      const taskChild = children.find((c: WorkItem) => c.type === "task" && c.id === "1")
+      // issue child 置 done；task child 保持 submitted（review）不受 fixed 影响
+      expect(issueChild.phase).toBe("done")
+      expect(taskChild.phase).toBe("review")
+
+      // 分层重置按 issue 归因（quality/architecture）：verify_quality:architecture 被清、verify_task 保留。
+      // 若误命中 task child（缺省 tool/style）则 architecture 维度 tag 不会被清——即修复前的静默错位。
+      const saved = taskItemOf(wt)
+      expect(saved.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      expect(saved.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(saved.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

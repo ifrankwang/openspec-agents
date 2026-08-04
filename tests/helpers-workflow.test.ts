@@ -33,16 +33,22 @@ describe("WorkItem 投影助手", () => {
   test("taskItemOf/taskListOf/blockersOf/metaOf 纯投影", () => {
     const state = {
       workItems: [{
-        id: "task:1", metadata: {
-          tasks: [{ id: "1", status: "open" }, { id: "2", status: "open" }],
+        id: "task:1",
+        metadata: {
           blockers: [{ id: "b1", status: "awaiting_user" }],
           execution_boundary: { allowed_directories: ["src"] },
         },
+        children: [
+          { id: "1", type: "task", title: "T1", phase: "todo", externalId: "1.1", metadata: {} },
+          { id: "2", type: "task", title: "T2", phase: "review", externalId: "1.2", metadata: {} },
+        ],
       }],
     }
     const item = taskItemOf(state, "1")
     expect(item.id).toBe("task:1")
     expect(taskListOf(item)).toHaveLength(2)
+    expect(taskListOf(item)[0].status).toBe("open")
+    expect(taskListOf(item)[1].status).toBe("submitted")
     expect(blockersOf(item)).toHaveLength(1)
     expect(metaOf(item, "execution_boundary")).toEqual({ allowed_directories: ["src"] })
     // 缺省 groupId="1"；缺失字段返回空

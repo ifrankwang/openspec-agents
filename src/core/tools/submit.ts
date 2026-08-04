@@ -1,4 +1,4 @@
-import type { TaskItem, OrchestrateState, Dimension } from "../types.js"
+import type { OrchestrateState, Dimension } from "../types.js"
 import type { ToolContext, AgentSubmitParams } from "./types.js"
 import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
@@ -13,6 +13,8 @@ import {
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
 import { DIMENSION_AGENT_MAP } from "../constants.js"
+import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.js"
+import { markTaskGroupCheckboxesComplete } from "../git.js"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
 } from "../state.js"
@@ -25,13 +27,13 @@ function normalizeIssueId(id: string): string {
   return String(id).trim().replace(/^#/, "")
 }
 
-/** 以 tg.issue 原始 id 解析 child（externalId 优先，兜底 issue: 前缀），供豁免裁定定位。 */
+/** 以 tg.issue 原始 id 解析 child（externalId 优先，兜底 issue: 前缀），供豁免裁定定位。
+ *  issue child 优先匹配（与 childById 语义对称）：task child 短数字 id 可能与 issue externalId 撞车，
+ *  fixed/exempt 归因解析须命中 issue child，未命中再兜底 task child。 */
 function resolveChildByIssueId(item: WorkItem, issueId: string): WorkItem | null {
-  return (
-    item.children.find(
-      (c) => c.externalId === issueId || c.id === issueId || c.id === `issue:${issueId}`
-    ) ?? null
-  )
+  const match = (c: WorkItem): boolean =>
+    c.externalId === issueId || c.id === issueId || c.id === `issue:${issueId}`
+  return issueChildrenOf(item).find(match) ?? taskChildrenOf(item).find(match) ?? null
 }
 
 /**
@@ -66,8 +68,9 @@ function renderSubmitResult(item: WorkItem, result: SubmitResult): string {
       lines.push(`  - ${id} → ${phase}${exemptMark}`)
     }
   }
+  // 未终态 issue children 摘要（task child 不混入——子任务进度由 task 语义承载）
   const pendingChildren = item.children.filter(
-    (c) => c.phase !== "done" && c.phase !== "cancelled"
+    (c) => c.type !== "task" && c.phase !== "done" && c.phase !== "cancelled"
   )
   if (pendingChildren.length > 0) {
     lines.push(`- **未终态 children**: ${pendingChildren.map((c) => c.id).join("、")}`)
@@ -75,23 +78,7 @@ function renderSubmitResult(item: WorkItem, result: SubmitResult): string {
   return lines.join("\n")
 }
 
-// ─── M1a 参数面处理：metadata.tasks / metadata.blockers / 分层重置 ───
-
-/** 读取 task 清单：metadata.tasks 为新流单一事实源（init/迁移已构造，缺失时返回空）。 */
-function taskListOf(item: WorkItem): TaskItem[] {
-  return Array.isArray(item.metadata["tasks"]) ? (item.metadata["tasks"] as TaskItem[]) : []
-}
-
-/** 写回 task 清单：仅持久化 metadata.tasks（workItems 为单轨事实源）。 */
-function writeTasks(item: WorkItem, tasks: TaskItem[]): void {
-  item.metadata["tasks"] = tasks
-}
-
-/** task 编号（如 4.1）映射回数字 id，未命中按原样返回。 */
-function normalizeTaskIds(rawIds: string[], tasks: TaskItem[]): string[] {
-  const byNumber = new Map(tasks.map((t) => [t.taskNumber, t.id]))
-  return rawIds.map((id) => byNumber.get(id) ?? id)
-}
+// ─── M1a 参数面处理：task children / metadata.blockers / 分层重置 ───
 
 interface ItemBlocker {
   id: string
@@ -193,14 +180,12 @@ function clearReviewVerificationTags(item: WorkItem): void {
   clearStepTags(item, "verify_quality")
 }
 
-/** blocker 提交后的 reset 助手：tasks 全 open + 清 review 层验证标记（对齐旧 resetForBlocker）。 */
+/** blocker 提交后的 reset 助手：task children 全 todo + 清 review 层验证标记（对齐旧 resetForBlocker）。 */
 function resetTasksForBlocker(item: WorkItem): void {
-  const tasks = taskListOf(item)
-  for (const t of tasks) {
-    t.status = "open"
-    t.rejectReason = null
+  for (const child of taskChildrenOf(item)) {
+    child.phase = "todo"
+    delete child.metadata["reject_reason"]
   }
-  writeTasks(item, tasks)
   clearReviewVerificationTags(item)
 }
 
@@ -239,7 +224,7 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
   }
 
   const tasks = taskListOf(item)
-  const completed = normalizeTaskIds(params.completed_task_ids ?? [], tasks)
+  const completed = normalizeTaskChildIds(params.completed_task_ids ?? [], item)
   const validIds = new Set(tasks.map((t) => t.id))
   for (const id of completed) {
     if (!validIds.has(id)) {
@@ -248,11 +233,13 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
       )
     }
   }
+  // 仅 todo 态 task child 置 review（submitted 语义）+ 清 reject_reason；
+  // done 态（已 verified）跳过不降级——质量层回退后已验证任务不得重新验证。
   for (const id of completed) {
-    const task = tasks.find((t) => t.id === id)
-    if (task && (task.status === "open" || task.status === "rejected")) {
-      task.status = "submitted"
-      task.rejectReason = null
+    const child = taskChildById(item, id)
+    if (child && child.phase === "todo") {
+      child.phase = "review"
+      delete child.metadata["reject_reason"]
     }
   }
   const completedSet = new Set(completed)
@@ -266,7 +253,6 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
       `\n请将未完成的 task 列在 completed_task_ids 中，或改用 blocker 上报阻塞。`
     )
   }
-  writeTasks(item, tasks)
 
   if (params.self_check_results) {
     item.metadata["self_check_results"] = params.self_check_results
@@ -367,9 +353,9 @@ function handleReviewParams(item: WorkItem, params: AgentSubmitParams, newChildr
   if (params.verified_tasks?.length || params.failed_tasks?.length) {
     const tasks = taskListOf(item)
     const validIds = new Set(tasks.map((t) => t.id))
-    const verified = normalizeTaskIds(params.verified_tasks ?? [], tasks)
+    const verified = normalizeTaskChildIds(params.verified_tasks ?? [], item)
     const failed = (params.failed_tasks ?? []).map((f) => ({
-      task_id: normalizeTaskIds([f.task_id], tasks)[0],
+      task_id: normalizeTaskChildIds([f.task_id], item)[0],
       reason: f.reason,
     }))
     for (const id of [...verified, ...failed.map((f) => f.task_id)]) {
@@ -380,6 +366,7 @@ function handleReviewParams(item: WorkItem, params: AgentSubmitParams, newChildr
     if (params.verdict === "passed" && failed.length > 0) {
       throw new Error("passed=true 时不允许提供 failed_tasks；有任务未通过必须设 verdict=failed。")
     }
+    // review 态 task child（submitted 语义）必须被 verified/failed 覆盖
     const submitted = tasks.filter((t) => t.status === "submitted")
     const covered = new Set([...verified, ...failed.map((f) => f.task_id)])
     const uncovered = submitted.filter((t) => !covered.has(t.id))
@@ -390,17 +377,19 @@ function handleReviewParams(item: WorkItem, params: AgentSubmitParams, newChildr
       )
     }
     for (const id of verified) {
-      const task = tasks.find((t) => t.id === id)
-      if (task && task.status === "submitted") { task.status = "verified"; task.rejectReason = null }
-    }
-    for (const f of failed) {
-      const task = tasks.find((t) => t.id === f.task_id)
-      if (task && task.status === "submitted") {
-        task.status = "rejected"
-        task.rejectReason = f.reason
+      const child = taskChildById(item, id)
+      if (child && child.phase === "review") {
+        child.phase = "done"
+        delete child.metadata["reject_reason"]
       }
     }
-    writeTasks(item, tasks)
+    for (const f of failed) {
+      const child = taskChildById(item, f.task_id)
+      if (child && child.phase === "review") {
+        child.phase = "todo"
+        child.metadata["reject_reason"] = f.reason
+      }
+    }
   }
 }
 
@@ -492,6 +481,17 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       exemptIds: params.exempt_issue_ids,
       newChildren: accepted,
     })
+
+    // G19：verify_task passed 且全部 task child 达终态（done）→ 同步 tasks.md 复选框 [ ] → [x]
+    if (
+      params.step_id === "verify_task" &&
+      params.verdict === "passed" &&
+      taskChildrenOf(item).every((c) => isTerminalPhase(c.phase))
+    ) {
+      const worktreePath =
+        typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : ctx.worktree
+      await markTaskGroupCheckboxesComplete(worktreePath, params.change_id, state.taskGroupId)
+    }
 
     await writeState(ctx.worktree, state)
     const dedupNote = dedupedCount > 0 ? `\n${dedupedCount} 个重复 issue 已自动跳过。` : ""

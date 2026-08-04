@@ -60,6 +60,7 @@ h1{margin:0;font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
 .child-type{flex:0 0 auto;width:16px;height:16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font:700 .58rem/1 var(--mono);color:#fff}
 .child-type.task{background:var(--blue)}.child-type.issue{background:var(--violet)}
 .child-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.child-phase{flex:0 0 auto;padding:1px 6px;border-radius:var(--pill);font:600 .62rem/1.3 var(--mono);background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
 .card-foot{display:flex;justify-content:space-between;align-items:flex-end;gap:8px;margin-top:auto;border-top:1px solid var(--line);padding-top:8px}
 .card-verdicts{display:flex;flex-wrap:wrap;gap:6px}
 .verdict{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:var(--pill);font:600 .68rem/1.4 var(--mono);background:var(--surface-2);color:var(--muted)}
@@ -113,7 +114,7 @@ function renderCard(c){
   const suspTag=c.suspended?'<span class="suspend-tag" role="button" tabindex="0">⏸ 暂停</span>':'';
   const suspReason=c.suspended?`<div class="suspend-reason" hidden>${esc(c.suspendReason||'未提供暂停原因')}</div>`:'';
   const verdicts=(c.agentVerdicts||[]).map(verdictDot).join('');
-  const children=(c.children||[]).map(ch=>`<div class="child-row"><span class="child-type ${cls(ch.type)}">${ch.type==='issue'?'I':'T'}</span><span class="child-title">${esc(ch.title)}</span></div>`).join('');
+  const children=(c.children||[]).map(ch=>`<div class="child-row"><span class="child-type ${cls(ch.type)}">${ch.type==='issue'?'I':'T'}</span><span class="child-title">${esc(ch.title)}</span>${ch.type==='task'?`<span class="child-phase">${esc(ch.phase)}</span>`:''}</div>`).join('');
   return `<article class="card ${isIssue?'issue':'task'}${c.suspended?' suspended':''}" data-id="${esc(c.id)}">${sevBar}
     <div class="card-head">${typeTag}${srcIcon}<h4 class="card-title">${esc(c.title)}</h4></div>
     ${descBlock(c.description)}

@@ -4,6 +4,7 @@ import { clearStepTags, isTerminalPhase } from "./engine.js"
 import { DIMENSION_AGENT_MAP } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import type { Dimension } from "../types.js"
+import { issueChildrenOf } from "../task-children.js"
 
 export interface ResetReviewTagsInput {
   fixedSourcePhases: string[]
@@ -66,8 +67,9 @@ export function resetReviewTagsOnFix(item: WorkItem, input: ResetReviewTagsInput
 
 /**
  * new_children 入库前去重（旧 deduplicateAndAddIssues 语义）：
- * 与「未终结态（非 done/cancelled）」的既有 child 按 (sourcePhase/dimension/file/line/description) 比对，
+ * 与「未终结态（非 done/cancelled）」的既有 issue child 按 (sourcePhase/dimension/file/line/description) 比对，
  * 命中即丢弃并计数；已终态 child 不参与判重（允许 reviewer 重报已关闭问题）。
+ * 比对集仅限 issue child——task child 的 description 可能与新 issue 恰好相同，混入会误吞新报。
  */
 export function dedupeNewChildren(item: WorkItem, newChildren: WorkItem[]): { accepted: WorkItem[]; dedupedCount: number } {
   const keyOf = (child: WorkItem): string => {
@@ -76,9 +78,10 @@ export function dedupeNewChildren(item: WorkItem, newChildren: WorkItem[]): { ac
   }
   const accepted: WorkItem[] = []
   let dedupedCount = 0
+  const existing = issueChildrenOf(item)
   for (const nc of newChildren) {
     const key = keyOf(nc)
-    const duplicate = item.children.some((existing) => !isTerminalPhase(existing.phase) && keyOf(existing) === key)
+    const duplicate = existing.some((child) => !isTerminalPhase(child.phase) && keyOf(child) === key)
     if (duplicate) {
       dedupedCount++
       continue

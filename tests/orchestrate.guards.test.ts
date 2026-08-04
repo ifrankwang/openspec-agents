@@ -579,7 +579,7 @@ describe("G16. 层失败回退 implement", () => {
 // ── G17: rejectReason 存储与清除 ──
 
 describe("G17. rejectReason 存储", () => {
-  test("verify_task failed → metadata.tasks rejectReason 落盘", async () => {
+  test("verify_task failed → task child reject_reason 落盘", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
@@ -855,5 +855,51 @@ describe("G21. implement completed_task_ids 校验", () => {
   })
 })
 
-// 注：G19（tasks.md 复选框同步）在新流已删除——markTaskGroupCheckboxesComplete 无调用者，
-// verify_task 不再同步 tasks.md（新流 tasks 事实源在 metadata.tasks），该守卫职责不再存在。
+// ── G19: verify_task passed 同步 tasks.md 复选框 ──
+
+describe("G19. verify_task passed 同步 tasks.md 复选框", () => {
+  test("verify_task passed 且全部 task 验证通过 → tasks.md [ ] → [x]", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await set_worktree.execute({ change_id: CID }, ctx.orch)
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+
+      const worktreePath = readItem(wt, CID).metadata["worktree_path"] as string
+      const tasksMdPath = join(worktreePath, "openspec", "changes", CID, "tasks.md")
+      expect(readFileSync(tasksMdPath, "utf-8")).toContain("- [ ] 1.1 Task one")
+
+      const ids = taskIdsOf(readItem(wt, CID))
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ids },
+        ctx.taskR
+      )
+      const after = readFileSync(tasksMdPath, "utf-8")
+      expect(after).toContain("- [x] 1.1 Task one")
+      expect(after).not.toContain("- [ ] 1.1 Task one")
+    } finally { teardown(root) }
+  })
+
+  test("verify_task failed（部分失败）→ 不标记复选框", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await set_worktree.execute({ change_id: CID }, ctx.orch)
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+
+      const worktreePath = readItem(wt, CID).metadata["worktree_path"] as string
+      const tasksMdPath = join(worktreePath, "openspec", "changes", CID, "tasks.md")
+
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_task", verdict: "failed",
+          verified_tasks: ["1", "2"], failed_tasks: [{ task_id: "3", reason: "验收未过" }],
+        },
+        ctx.taskR
+      )
+      const after = readFileSync(tasksMdPath, "utf-8")
+      expect(after).toContain("- [ ] 1.1 Task one")
+      expect(after).not.toContain("- [x] 1.1 Task one")
+    } finally { teardown(root) }
+  })
+})

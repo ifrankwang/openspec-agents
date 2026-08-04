@@ -330,6 +330,29 @@ describe("4. children 联动与门禁", () => {
     expect(childReachedPhase(child({ phase: "todo" }), "in_progress")).toBe(false)
     expect(childReachedPhase(child({ phase: "in_progress" }), "in_progress")).toBe(true)
   })
+
+  // ── task children 门禁（子任务建模为 type=task 的 child）──
+
+  test("task child todo 态不阻塞 analyze→in_progress（targetPhase index<2 豁免）", () => {
+    const item = makeItem()
+    applyAgentVerdict(item, "analyze", "architect", "passed")
+    item.children.push(makeItem({ id: "task-1", type: "task", title: "T1", description: "d" }))
+    expect(forwardGatePassed(item, wf, "in_progress")).toBe(true)
+  })
+
+  test("task child 未达 review 态 → 阻塞 implement→review 跨 phase 门禁", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item, "implement", "developer", "passed")
+    item.children.push(makeItem({ id: "task-1", type: "task", title: "T1", description: "d" }))
+    expect(forwardGatePassed(item, wf, "review")).toBe(false)
+  })
+
+  test("task child 达 review 态 → 放行 implement→review 跨 phase 门禁", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item, "implement", "developer", "passed")
+    item.children.push(makeItem({ id: "task-1", type: "task", title: "T1", description: "d", phase: "review" }))
+    expect(forwardGatePassed(item, wf, "review")).toBe(true)
+  })
 })
 
 describe("5. 重试检查点", () => {
@@ -476,6 +499,26 @@ phases:
     const r = applyTransition(item, wf, "pass")
     expect(r.advanced).toBe(false)
     expect(item.phase).toBe("todo")
+  })
+
+  test("done 转移：存在未终态 task child → 拦截不推进", () => {
+    const item = makeItem({ phase: "review", currentStep: "verify" })
+    item.children.push(makeItem({ id: "task-1", type: "task", title: "T1", description: "d", phase: "todo" }))
+    const r = applyTransition(item, wf, "pass")
+    expect(r.advanced).toBe(false)
+    expect(r.reason).toContain("未完成的子任务")
+    expect(item.phase).toBe("review")
+    expect(item.currentStep).toBe("verify")
+  })
+
+  test("done 转移：task children 终态（done/cancelled）→ 放行", () => {
+    const item = makeItem({ phase: "review", currentStep: "verify" })
+    item.children.push(makeItem({ id: "task-1", type: "task", title: "T1", description: "d", phase: "done" }))
+    item.children.push(makeItem({ id: "task-2", type: "task", title: "T2", description: "d", phase: "cancelled" }))
+    const r = applyTransition(item, wf, "pass")
+    expect(r.advanced).toBe(true)
+    expect(r.target).toBe("done")
+    expect(item.phase).toBe("done")
   })
 
   test("反向回退调用 rollbackChildren 并递增 retryCount", () => {

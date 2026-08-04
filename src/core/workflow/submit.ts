@@ -4,6 +4,7 @@ import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getSte
 import { DIMENSION_AGENT_MAP } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import type { Dimension } from "../types.js"
+import { issueChildrenOf, taskChildrenOf } from "../task-children.js"
 
 /** 豁免申请标记键（非内部下划线前缀，属于业务语义字段） */
 export const EXEMPT_REQUEST_KEY = "exempt_request"
@@ -111,10 +112,17 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
   applyAgentVerdict(item, input.stepId, input.agentKey, input.verdict)
 
   const childById = new Map<string, WorkItem>()
-  for (const c of item.children) {
+  // issue children 优先入 map：fixed/exempt 解析须优先命中 issue child。
+  // task child 短数字 id（"1"）可能与 issue 的 externalId 撞车，且数组序不保证 issue 在前（reopen/recovery 重排）。
+  for (const c of issueChildrenOf(item)) {
     childById.set(c.id, c)
     // 兼容外部以原始 issue id 引用 child（child.id 可能带 issue: 前缀，externalId 为原始 id）
     if (c.externalId) childById.set(c.externalId, c)
+  }
+  // task children 后入且撞车跳过：仅登记未被 issue child 占用的键，保证 issue 优先语义不被打乱
+  for (const c of taskChildrenOf(item)) {
+    if (!childById.has(c.id)) childById.set(c.id, c)
+    if (c.externalId && !childById.has(c.externalId)) childById.set(c.externalId, c)
   }
   const updated = new Set<string>()
 
@@ -122,7 +130,9 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
     const child = childById.get(id)
     if (child) {
       child.phase = "done"
-      updated.add(id)
+      // 记录 canonical child.id（task child 短数字 id 可能与 issue externalId 撞车，
+      // 原始引用 id 渲染时歧义，统一用 child.id 回指）
+      updated.add(child.id)
     }
   }
 
@@ -130,7 +140,7 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
     const child = childById.get(id)
     if (child) {
       child.metadata[EXEMPT_REQUEST_KEY] = { requestedBy: input.agentKey }
-      updated.add(id)
+      updated.add(child.id)
     }
   }
 
@@ -203,7 +213,9 @@ export function adjudicateExempt(
   workflow: LoadedWorkflow,
   input: { issueId: string; agentKey: string; action: "dismissed" | "rejected" },
 ): AdjudicationResult {
-  const child = item.children.find((c) => c.id === input.issueId)
+  const child =
+    issueChildrenOf(item).find((c) => c.id === input.issueId) ??
+    taskChildrenOf(item).find((c) => c.id === input.issueId)
   if (!child) {
     throw new Error(`豁免裁定失败：issue "${input.issueId}" 不存在于 item "${item.id}" 的 children 中。`)
   }
