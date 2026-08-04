@@ -382,4 +382,25 @@ describe("Dashboard", () => {
       expect(html).toContain(label)
     }
   })
+
+  test("index.html contains WorkItem detail modal structure and functions", () => {
+    const html = readFileSync(join(import.meta.dir, "..", "assets", "dashboard", "index.html"), "utf-8")
+    // 弹窗 DOM：遮罩/对话框/关闭按钮，位于 #dashboard 之外（防止被轮询重绘清除）
+    expect(html).toContain('id="wiModal"')
+    expect(html).toContain("modal-overlay")
+    expect(html).toContain("modal-dialog")
+    expect(html).toContain('id="wiBody"')
+    expect(html).toContain("modal-close")
+    // 详情渲染 / 递归查找 / 关闭相关函数
+    expect(html).toContain("function renderDetail")
+    expect(html).toContain("function findWorkItem")
+    expect(html).toContain("function closeDetail")
+    expect(html).toContain("function openDetail")
+    // 卡片渲染输出 data-id，供点击查询详情
+    expect(html).toContain('data-id="${esc(c.id)}"')
+    // 弹窗不在 #dashboard 内部，避免被 innerHTML 重绘清除
+    const dashIdx = html.indexOf('<main id="dashboard">')
+    const modalIdx = html.indexOf('id="wiModal"')
+    expect(modalIdx).toBeGreaterThan(dashIdx)
+  })
 })

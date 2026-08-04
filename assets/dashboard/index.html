@@ -74,6 +74,34 @@ h1{margin:0;font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
 /* severity 色条 */
 .sev-bar{position:absolute;top:0;left:0;right:0;height:4px;border-radius:var(--radius-sm) var(--radius-sm) 0 0}
 .sev-bar.critical{background:var(--red)}.sev-bar.high{background:var(--amber)}.sev-bar.medium{background:var(--violet)}.sev-bar.low{background:var(--teal)}.sev-bar.info{background:var(--line-2)}
+/* WorkItem 详情弹窗 */
+.modal-open{overflow:hidden}
+.modal-overlay{position:fixed;inset:0;z-index:100;background:rgba(15,23,42,.45);display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;overflow:auto}
+.modal-overlay[hidden]{display:none}
+.modal-dialog{background:var(--surface);border-radius:var(--radius);box-shadow:0 20px 50px rgba(15,23,42,.2);max-width:640px;width:100%;max-height:calc(100vh - 96px);display:flex;flex-direction:column}
+.modal-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.modal-title{flex:1;font-size:.92rem;font-weight:700}
+.modal-close{background:none;border:none;font-size:1.2rem;color:var(--muted);line-height:1;padding:4px 8px;border-radius:6px}
+.modal-close:hover{background:var(--surface-2);color:var(--ink)}
+.modal-back{background:none;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:.78rem;color:var(--muted);padding:4px 10px}
+.modal-back:hover{background:var(--surface-2);color:var(--ink)}
+.modal-back[hidden]{display:none}
+.modal-body{padding:18px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+.detail-title{margin:0;font-size:1.1rem;font-weight:700}
+.detail-block{display:flex;flex-direction:column;gap:8px}
+.detail-block h5{margin:0;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--quiet)}
+.meta-row{display:flex;gap:10px;font-size:.8rem;padding:4px 0;border-bottom:1px dashed var(--line)}
+.meta-key{flex:0 0 96px;color:var(--quiet);font:500 .76rem/1.4 var(--mono)}
+.meta-val{flex:1;color:var(--ink);word-break:break-word}
+.detail-desc{margin:0;font-size:.82rem;color:var(--muted);white-space:pre-wrap}
+.detail-verdicts{display:flex;flex-wrap:wrap;gap:6px}
+.detail-verdict{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:var(--pill);font:600 .68rem/1.4 var(--mono);background:var(--surface-2);color:var(--muted)}
+.detail-verdict.passed{background:var(--green-soft);color:var(--green)}
+.detail-verdict.failed{background:var(--red-soft);color:var(--red)}
+.detail-verdict.pending{background:var(--surface-2);color:var(--quiet)}
+.detail-children{display:flex;flex-direction:column;gap:6px}
+.detail-child{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:.8rem;cursor:pointer}
+.detail-child:hover{background:var(--surface-2);border-color:var(--line-2)}
 @media(max-width:1024px){.board{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){.board{grid-template-columns:1fr}.topbar{flex-direction:column;gap:14px}.meta{text-align:left}}
 </style>
@@ -92,6 +120,16 @@ h1{margin:0;font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
     </div>
   </header>
   <main id="dashboard"></main>
+</div>
+<div class="modal-overlay" id="wiModal" hidden>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-label="工作项详情">
+    <header class="modal-head">
+      <button class="modal-back" id="wiBack" hidden>← 返回</button>
+      <span class="modal-title">工作项详情</span>
+      <button class="modal-close" id="wiClose" aria-label="关闭">×</button>
+    </header>
+    <div class="modal-body" id="wiBody"></div>
+  </div>
 </div>
 <script>
 const COLUMNS=[['todo','待办'],['in_progress','处理中'],['review','审核中'],['done','完成'],['cancelled','已取消']];
@@ -146,10 +184,112 @@ function render(){
     const reason=card&&card.querySelector('.suspend-reason');
     if(reason)reason.hidden=!reason.hidden;
   }));
+  if(modalState.id)refreshModal();
 }
+/* WorkItem 详情弹窗 */
+let modalState={id:null,back:[]};
+function findWorkItem(items,id){
+  for(const it of items||[]){
+    if(it.id===id)return it;
+    if(it.children&&it.children.length){
+      const found=findWorkItem(it.children,id);
+      if(found)return found;
+    }
+  }
+  return null;
+}
+function renderTags(tags){
+  const verdicts=Object.entries(tags||{}).map(([key,verdict])=>{
+    const sep=key.indexOf(':');
+    const stepId=sep===-1?key:key.slice(0,sep);
+    const agentKey=sep===-1?key:key.slice(sep+1);
+    return `<span class="detail-verdict ${cls(verdict)}" title="${esc(key)}">${esc(shortAgent(agentKey))}:${VERDICT_ICONS[verdict]||'○'}</span>`;
+  }).join('');
+  return verdicts?`<div class="detail-block"><h5>Agent 裁决</h5><div class="detail-verdicts">${verdicts}</div></div>`:'';
+}
+function renderWriteback(wb){
+  if(!wb)return '';
+  const rows=Object.entries(wb).filter(([k])=>!k.startsWith('_')).map(([k,v])=>{
+    const val=typeof v==='object'?JSON.stringify(v):String(v);
+    return `<div class="meta-row"><span class="meta-key">${esc(k)}</span><span class="meta-val">${esc(val)}</span></div>`;
+  }).join('');
+  return rows?`<div class="detail-block"><h5>写回</h5>${rows}</div>`:'';
+}
+function renderMeta(metadata){
+  const rows=Object.entries(metadata||{}).filter(([k])=>!k.startsWith('_')).map(([k,v])=>{
+    const val=typeof v==='object'?JSON.stringify(v):String(v);
+    return `<div class="meta-row"><span class="meta-key">${esc(k)}</span><span class="meta-val">${esc(val)}</span></div>`;
+  }).join('');
+  return rows?`<div class="detail-block"><h5>元数据</h5>${rows}</div>`:'';
+}
+function renderChildren(children){
+  if(!children||!children.length)return '';
+  const rows=(children||[]).map(ch=>`<div class="detail-child" data-id="${esc(ch.id)}" role="button" tabindex="0">
+    <span class="child-type ${cls(ch.type)}">${ch.type==='issue'?'I':'T'}</span>
+    <span class="child-title">${esc(ch.title)}</span>
+    <span class="child-phase">${esc(ch.phase)}</span>
+  </div>`).join('');
+  return `<div class="detail-block"><h5>Children</h5><div class="detail-children">${rows}</div></div>`;
+}
+function renderDetail(item){
+  const rows=[['类型',item.type],['来源',item.source],['ID',item.id]];
+  if(item.externalId)rows.push(['外部ID',item.externalId]);
+  rows.push(['阶段',item.phase]);
+  if(item.severity)rows.push(['严重级别',item.severity]);
+  rows.push(['当前步骤',item.currentStep||'-']);
+  const kv=rows.map(([k,v])=>`<div class="meta-row"><span class="meta-key">${esc(k)}</span><span class="meta-val">${esc(v)}</span></div>`).join('');
+  return `<h3 class="detail-title">${esc(item.title)}</h3>
+    ${item.suspended?`<div class="suspend-reason">⏸ 暂停：${esc(typeof (item.metadata||{})['suspend_reason']==='string'?(item.metadata||{})['suspend_reason']:'未提供暂停原因')}</div>`:''}
+    ${item.description?`<div class="detail-block"><h5>描述</h5><p class="detail-desc">${esc(item.description)}</p></div>`:''}
+    <div class="detail-block"><h5>字段</h5>${kv}</div>
+    ${item.labels&&item.labels.length?`<div class="detail-block"><h5>标签</h5><div class="card-labels">${item.labels.map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></div>`:''}
+    ${renderTags(item.tags)}
+    ${renderWriteback(item.writeback)}
+    ${renderMeta(item.metadata)}
+    ${renderChildren(item.children)}`;
+}
+function refreshModal(){
+  const modal=document.getElementById('wiModal');
+  const item=findWorkItem(dashboardState.workItems||[],modalState.id);
+  if(!item){closeDetail();return;}
+  document.getElementById('wiBody').innerHTML=renderDetail(item);
+  document.getElementById('wiBack').hidden=!modalState.back.length;
+  modal.hidden=false;
+  document.body.classList.add('modal-open');
+}
+function openDetail(id,back){
+  modalState={id,back:back||[]};
+  refreshModal();
+}
+function closeDetail(){
+  modalState={id:null,back:[]};
+  const modal=document.getElementById('wiModal');
+  if(modal)modal.hidden=true;
+  document.body.classList.remove('modal-open');
+}
+document.addEventListener('click',e=>{
+  if(e.target.closest('.desc-toggle,.suspend-tag'))return;
+  const card=e.target.closest('.card');
+  if(card&&card.dataset.id)openDetail(card.dataset.id,[]);
+});
+document.getElementById('wiModal').addEventListener('click',e=>{
+  if(e.target.closest('#wiBack')){
+    const prev=modalState.back[modalState.back.length-1];
+    openDetail(prev,modalState.back.slice(0,-1));
+    return;
+  }
+  if(e.target.classList.contains('modal-overlay')){closeDetail();return;}
+  if(e.target.closest('.modal-close')){closeDetail();return;}
+  const child=e.target.closest('.detail-child');
+  if(child&&child.dataset.id)openDetail(child.dataset.id,[...modalState.back,modalState.id]);
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){const modal=document.getElementById('wiModal');if(modal&&!modal.hidden)closeDetail();}
+});
 async function loadState(){try{const res=await fetch('/api/state');if(!res.ok)throw new Error('fetch failed');const data=await res.json();if(data&&data.active===true){dashboardState=data;render()}}catch(e){console.error('[dashboard] load state failed',e)}}
 render();
 loadState();
+setInterval(loadState,2000);
 </script>
 </body>
 </html>
