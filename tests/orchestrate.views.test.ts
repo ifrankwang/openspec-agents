@@ -91,7 +91,7 @@ describe("视图「操作指引」段", () => {
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" },
       tasks: [mockTask("1")],
     })
-    const output = renderDeveloperView(state, tg)
+    const output = renderDeveloperView(state, tg, "openspec-developer")
     expect(output).toContain("## 操作指引")
     expect(output).toContain("opx_dev_submit")
     expect(output).toContain("Task (待完成)")
@@ -117,7 +117,7 @@ describe("视图「操作指引」段", () => {
       branchName: "tg-1",
       baseRef: "base",
     })
-    const output = renderDeveloperView(state, tg)
+    const output = renderDeveloperView(state, tg, "openspec-developer")
     expect(output).toContain("## Worktree")
     expect(output).toContain("**隔离标识**: `a1b2c3`")
     expect(output).toContain("建议端口: 27059")
@@ -131,7 +131,7 @@ describe("视图「操作指引」段", () => {
       branchName: "tg-1",
       baseRef: "base",
     })
-    const output = renderToolReviewView(state, tg)
+    const output = renderToolReviewView(state, tg, "openspec-reviewer-tool")
     expect(output).toContain("## 操作指引")
     expect(output).toContain("质量门 skill")
     expect(output).toContain("opx_tool_review_submit")
@@ -151,7 +151,7 @@ describe("视图「操作指引」段", () => {
       tasks: [mockTask("1", "submitted")],
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" },
     })
-    const output = renderTaskReviewView(state, tg)
+    const output = renderTaskReviewView(state, tg, "openspec-reviewer-task")
     expect(output).toContain("## 操作指引")
     expect(output).toContain("Task 产出验证")
     expect(output).toContain("opx_task_review_submit")
@@ -174,7 +174,7 @@ describe("视图「操作指引」段", () => {
       tasks: [mockTask("1", "submitted")],
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes: "" },
     })
-    const output = renderTaskReviewView(state, tg)
+    const output = renderTaskReviewView(state, tg, "openspec-reviewer-task")
     expect(output).toContain("隔离")
     expect(output).toContain("清理隔离环境")
     expect(output).toContain("禁止复用或清空共享开发库")
@@ -194,7 +194,7 @@ describe("视图「操作指引」段", () => {
       tasks: [mockTask("1", "submitted")],
       executionBoundary: { allowed_directories: ["src"], allowed_packages: ["com"], notes },
     })
-    const output = renderTaskReviewView(state, tg)
+    const output = renderTaskReviewView(state, tg, "openspec-reviewer-task")
     expect(output).toContain("## 实施指引")
     expect(output).toContain(notes)
     expect(output).toContain("校验实施内容是否遵循上方「实施指引」")
@@ -210,7 +210,7 @@ describe("视图「操作指引」段", () => {
       tasks: [mockTask("1", "submitted")],
       executionBoundary: null,
     })
-    const output = renderTaskReviewView(state, tg)
+    const output = renderTaskReviewView(state, tg, "openspec-reviewer-task")
     expect(output).not.toContain("## 实施指引")
     expect(output).not.toContain("校验实施内容是否遵循上方「实施指引」")
     expect(output).toContain("Task 产出验证")
@@ -455,5 +455,122 @@ describe("formatFilePath 路径截断", () => {
       const result = formatFilePath(file, line, 60)
       expect(result.length).toBeLessThanOrEqual(60)
     }
+  })
+})
+
+describe("角色隔离与已验证 issue 过滤（回归）", () => {
+  function makeIssue(id: string, sourcePhase: "tool" | "task" | "quality", status: IssueItem["status"]): IssueItem {
+    return {
+      id, dimension: "architecture", sourcePhase,
+      severity: "Low", file: "src/Test.java", line: 1,
+      description: `desc-${id}`, suggestion: "fix",
+      status, refixCount: 0,
+      rootCauseGuess: null, exemptReason: null, rejectReason: null,
+    }
+  }
+
+  const reviewBase = {
+    status: "review" as const,
+    worktreePath: "/wt",
+    branchName: "tg-1",
+    baseRef: "base",
+  }
+
+  test("tool 视图不渲染 verified/exempted issue，只渲染待裁定项", () => {
+    const state = mockState()
+    const tg = baseTg({
+      ...reviewBase,
+      issues: [
+        makeIssue("v1", "tool", "verified"),
+        makeIssue("e1", "tool", "exempted"),
+        makeIssue("s1", "tool", "submitted"),
+      ],
+    })
+    const output = renderToolReviewView(state, tg, "openspec-reviewer-tool")
+    expect(output).not.toContain("desc-v1")
+    expect(output).not.toContain("desc-e1")
+    expect(output).toContain("desc-s1")
+    expect(output).toContain("待裁定 Issue（tool 层）")
+  })
+
+  test("task 视图不渲染 verified/exempted issue，只渲染待裁定项", () => {
+    const state = mockState()
+    const tg = baseTg({
+      ...reviewBase,
+      tasks: [mockTask("1", "submitted")],
+      issues: [
+        makeIssue("v1", "task", "verified"),
+        makeIssue("e1", "task", "exempted"),
+        makeIssue("s1", "task", "submitted"),
+      ],
+    })
+    const output = renderTaskReviewView(state, tg, "openspec-reviewer-task")
+    expect(output).not.toContain("desc-v1")
+    expect(output).not.toContain("desc-e1")
+    expect(output).toContain("desc-s1")
+  })
+
+  test("quality 视图不渲染 verified/exempted issue，只渲染待裁定项", () => {
+    const state = mockState()
+    const tg = baseTg({
+      ...reviewBase,
+      issues: [
+        makeIssue("v1", "quality", "verified"),
+        makeIssue("e1", "quality", "exempted"),
+        makeIssue("s1", "quality", "submitted"),
+      ],
+    })
+    const output = renderQualityReviewView(state, tg, "openspec-reviewer-architecture")
+    expect(output).not.toContain("desc-v1")
+    expect(output).not.toContain("desc-e1")
+    expect(output).toContain("desc-s1")
+  })
+
+  test("角色隔离：各视图只展示自己角色的摘要", () => {
+    const state = mockState()
+    const tg = baseTg({
+      ...reviewBase,
+      tasks: [mockTask("1", "submitted")],
+      agentSummaries: {
+        "openspec-developer": "dev 摘要：完成 task 2 个",
+        "openspec-reviewer-tool": "tool 摘要：确认修复 3 条，豁免 1 条",
+      },
+    })
+    const devOut = renderDeveloperView(state, tg, "openspec-developer")
+    expect(devOut).toContain("dev 摘要：完成 task 2 个")
+    expect(devOut).not.toContain("tool 摘要")
+
+    const toolOut = renderToolReviewView(state, tg, "openspec-reviewer-tool")
+    expect(toolOut).toContain("tool 摘要：确认修复 3 条，豁免 1 条")
+    expect(toolOut).not.toContain("dev 摘要")
+  })
+
+  test("角色隔离：quality 维度视图只展示自己维度的摘要", () => {
+    const state = mockState()
+    const tg = baseTg({
+      ...reviewBase,
+      tasks: [mockTask("1", "submitted")],
+      agentSummaries: {
+        "openspec-reviewer-style": "style 摘要：确认风格问题 3 条",
+        "openspec-reviewer-architecture": "architecture 摘要：确认架构一致 2 处",
+        "openspec-developer": "dev 摘要：完成 task 2 个",
+      },
+    })
+    const output = renderQualityReviewView(state, tg, "openspec-reviewer-style")
+    expect(output).toContain("style 摘要：确认风格问题 3 条")
+    expect(output).not.toContain("architecture 摘要")
+    expect(output).not.toContain("dev 摘要")
+    expect(output).not.toContain("openspec-reviewer-architecture")
+  })
+
+  test("自身无摘要时视图不输出「上轮会话摘要」段", () => {
+    const state = mockState()
+    const tg = baseTg({
+      ...reviewBase,
+      agentSummaries: { "openspec-reviewer-tool": "tool 摘要：确认修复 3 条" },
+    })
+    const output = renderDeveloperView(state, tg, "openspec-developer")
+    expect(output).not.toContain("上轮会话摘要")
+    expect(output).not.toContain("tool 摘要")
   })
 })

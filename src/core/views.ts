@@ -279,13 +279,11 @@ export function renderLayerIssues(
   return lines
 }
 
-function renderAgentSummaries(tg: TaskGroupState): string[] {
+function renderAgentSummaries(tg: TaskGroupState, agentName: string): string[] {
   const summaries = tg.agentSummaries
-  if (!summaries || Object.keys(summaries).length === 0) return []
+  if (!summaries || !summaries[agentName]) return []
   const lines: string[] = ["## 上轮会话摘要", ""]
-  for (const [agent, summary] of Object.entries(summaries)) {
-    lines.push(`- **${agent}**：${summary}`)
-  }
+  lines.push(`- **${agentName}**：${summaries[agentName]}`)
   lines.push("")
   return lines
 }
@@ -539,11 +537,11 @@ export function renderArchitectView(state: OrchestrateState, tg: TaskGroupState)
   return lines.join("\n")
 }
 
-export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState): string {
+export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState, agent: string): string {
   const lines: string[] = []
   lines.push("# 开发上下文", "")
   lines.push(`当前阶段: ${tg.status}`, "")
-  lines.push(...renderAgentSummaries(tg))
+  lines.push(...renderAgentSummaries(tg, agent))
   lines.push(...renderSkillSuggestions("openspec-developer", AGENT_CAPABILITY_SUGGESTIONS["openspec-developer"]))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 执行边界", "")
@@ -609,14 +607,14 @@ export function renderDeveloperView(state: OrchestrateState, tg: TaskGroupState)
   return lines.join("\n")
 }
 
-export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState): string {
+export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState, agent: string): string {
   const lines: string[] = []
   lines.push("# 工具审核上下文", "")
-  lines.push(...renderAgentSummaries(tg))
+  lines.push(...renderAgentSummaries(tg, agent))
   lines.push(...renderSkillSuggestions("openspec-reviewer-tool", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-tool"]))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true }))
   const toolIssues = renderLayerIssues(tg.issues, "tool")
-  renderOptionalSection(lines, "全部 Issue（tool 层可见）", toolIssues)
+  renderOptionalSection(lines, "待裁定 Issue（tool 层）", toolIssues)
   const { tagMap } = scanSkills()
   lines.push("## 操作指引", "")
   lines.push("")
@@ -641,11 +639,11 @@ export function renderToolReviewView(state: OrchestrateState, tg: TaskGroupState
   return lines.join("\n")
 }
 
-export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState): string {
+export function renderTaskReviewView(state: OrchestrateState, tg: TaskGroupState, agent: string): string {
   const lines: string[] = []
   lines.push("# 任务审核上下文", "")
   lines.push(`**tool 层**: ${tg.phases.review.tool.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
-  lines.push(...renderAgentSummaries(tg))
+  lines.push(...renderAgentSummaries(tg, agent))
   lines.push(...renderSkillSuggestions("openspec-reviewer-task", AGENT_CAPABILITY_SUGGESTIONS["openspec-reviewer-task"]))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push("## 推荐阅读文档", "")
@@ -695,7 +693,7 @@ export function renderQualityReviewView(state: OrchestrateState, tg: TaskGroupSt
   const tiSkills = getToolImprovementSkills(agent)
   lines.push(`# AI 审查上下文 — ${dimension}`, "")
   lines.push(`**task 层**: ${tg.phases.review.task.completed ? "✓ 已完成" : "⏳ 待完成"}`, "")
-  lines.push(...renderAgentSummaries(tg))
+  lines.push(...renderAgentSummaries(tg, agent))
   lines.push(...renderSkillSuggestions(agent, AGENT_CAPABILITY_SUGGESTIONS[agent] || []))
   lines.push(...renderWorktreeSection(state, tg))
   if (dimension === "architecture") {

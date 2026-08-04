@@ -1294,7 +1294,7 @@ describe("B11. agentSummaries 会话摘要落盘 + 视图渲染", () => {
     // 直接渲染 developer 视图（dev_submit 后已进入 review，opx_status 门禁会拒绝 developer）
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    const output = renderDeveloperView(state, tg)
+    const output = renderDeveloperView(state, tg, "openspec-developer")
     expect(output).toContain("## 上轮会话摘要")
     expect(output).toContain("**openspec-developer**")
     expect(output).toContain("完成 task 2 个")
@@ -1365,7 +1365,7 @@ describe("B12. IssueItem.rule 透传与分组渲染", () => {
 
     const state = readStateSync(wt, CID)
     const tg = state.taskGroups.find((g: any) => g.id === "1")
-    const output = renderDeveloperView(state, tg)
+    const output = renderDeveloperView(state, tg, "openspec-developer")
     expect(output).toContain("**PMD.AvoidLiteralsInIfCondition**（2 条同类）")
     expect(output).toContain("同类问题建议一次批量修复、一次提交一次重验，避免逐条触发全量复查。")
     expect(output).toContain("未分类")

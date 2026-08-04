@@ -388,11 +388,11 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
   } else if (agent === "openspec-architect") {
     view = renderArchitectView(state, tg)
   } else if (agent === "openspec-developer") {
-    view = renderDeveloperView(state, tg)
+    view = renderDeveloperView(state, tg, agent)
   } else if (agent === "openspec-reviewer-tool") {
-    view = renderToolReviewView(state, tg)
+    view = renderToolReviewView(state, tg, agent)
   } else if (agent === "openspec-reviewer-task") {
-    view = renderTaskReviewView(state, tg)
+    view = renderTaskReviewView(state, tg, agent)
   } else if (Object.values(DIMENSION_AGENT_MAP).includes(agent)) {
     view = renderQualityReviewView(state, tg, agent)
   } else {

@@ -214,7 +214,7 @@ describe("T3: unattended mode suppresses question prompts", () => {
       branchName: "tg-1",
       baseRef: "base",
     })
-    const output = renderToolReviewView(state, tg)
+    const output = renderToolReviewView(state, tg, "openspec-reviewer-tool")
     expect(output).toContain("skipped")
     expect(output).not.toContain("用 question 提请用户裁定")
   })
@@ -239,7 +239,7 @@ describe("T4: normal mode shows question prompts", () => {
       branchName: "tg-1",
       baseRef: "base",
     })
-    const output = renderToolReviewView(state, tg)
+    const output = renderToolReviewView(state, tg, "openspec-reviewer-tool")
     expect(output).toContain("用 question 提请用户裁定")
     expect(output).not.toContain("skipped")
   })
