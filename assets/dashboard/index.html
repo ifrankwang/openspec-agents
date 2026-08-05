@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>编排进度看板 · 重设计 v9</title>
+<title>编排进度看板 · 5 列看板</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 :root{
@@ -23,7 +23,7 @@
 }
 *{box-sizing:border-box}html{font-size:15px}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
 button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-.shell{max-width:1280px;margin:0 auto;padding:32px 28px 80px}
+.shell{max-width:1440px;margin:0 auto;padding:32px 28px 80px}
 /* header */
 .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:26px;border-bottom:1px solid var(--line)}
 .brand{display:flex;flex-direction:column;gap:8px}
@@ -32,100 +32,78 @@ button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid var(--
 h1{margin:0;font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
 .meta{display:flex;gap:28px;text-align:right;font-size:.8rem;color:var(--muted)}
 .meta span{display:flex;flex-direction:column;gap:5px}.meta strong{color:var(--ink);font-weight:600}
-/* group tabs */
-.group-strip{display:flex;gap:8px;overflow-x:auto;padding:20px 2px 24px}
-.group-tab{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 16px;border:1px solid var(--line);border-radius:var(--pill);background:var(--surface);color:var(--muted);font-size:.84rem;transition:.15s}
-.group-tab:hover{border-color:var(--line-2);color:var(--ink)}
-.group-tab[aria-selected="true"]{border-color:transparent;background:var(--ink);color:#fff;box-shadow:var(--shadow)}
-.group-tab .num{font-family:var(--mono);font-size:.72rem;opacity:.7}
-/* stepper */
-.stepper{display:flex;align-items:flex-start;position:relative;padding:24px 20px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:20px}
-.stepper-line{position:absolute;top:38px;left:80px;right:80px;height:3px;background:var(--line);border-radius:var(--pill);z-index:0}
-.step{position:relative;flex:1;display:flex;flex-direction:column;align-items:center;gap:10px;z-index:1;text-align:center}
-.step-dot{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:600 .8rem var(--mono);background:#fff;border:2px solid var(--line);color:var(--muted)}
-.step.done .step-dot{background:var(--green);border-color:var(--green);color:#fff}
-.step.active .step-dot{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 0 0 4px var(--blue-soft)}
-.step-label{font-weight:700;font-size:.85rem}.step-desc{font-size:.75rem;color:var(--muted);max-width:130px;line-height:1.35}
-/* review section (floating, shown on hover over review step) */
-.stepper-wrapper{position:relative;margin-bottom:20px}
-.review-section{position:absolute;top:calc(100% + 8px);left:0;width:auto;max-width:420px;min-width:240px;z-index:10;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px 18px;opacity:0;visibility:hidden;transform:translateY(-8px);transition:all .2s ease;pointer-events:none}
-.review-section.visible{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto}
-.review-section::before,.review-section::after{content:"";position:absolute;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:7px solid var(--line)}
-.review-section::before{top:-7px;z-index:2}
-.review-section::after{top:-6px;border-left-width:6px;border-right-width:6px;border-bottom-width:6px;border-bottom-color:var(--surface);z-index:3}
-.review-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.review-title{margin:0;font-size:1.05rem;font-weight:700}
-.review-status{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:var(--pill);font-size:.8rem;font-weight:600;background:var(--surface-2)}
-.review-status.passed{background:var(--green-soft);color:var(--green)}.review-status.failed{background:var(--red-soft);color:var(--red)}.review-status.pending{background:var(--amber-soft);color:var(--amber)}
-.review-status::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
-/* mini stepper for review gates */
-.review-flow{display:flex;flex-direction:column;align-items:stretch;gap:0;position:relative;padding:10px 12px 10px 40px;background:var(--surface-2);border-radius:var(--radius);margin-bottom:12px;overflow-x:auto}
-.review-flow::before{content:"";position:absolute;left:29px;top:26px;bottom:36px;width:2px;background:var(--line);border-radius:var(--pill)}
-.review-flow-line{display:none}
-.review-flow-step{display:flex;align-items:flex-start;gap:10px;padding:14px 0}
-.review-flow-step.quality{flex-direction:row;align-items:flex-start;gap:10px}
-.review-flow-main{display:flex;align-items:flex-start;gap:8px}
-.review-flow-body{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-.review-flow-dot{position:relative;z-index:1;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid var(--line);color:var(--muted);font-size:.65rem;font-weight:700;margin-left:-20px;flex:0 0 auto}
-.review-flow-dot.done{background:var(--green);border-color:var(--green);color:#fff}
-.review-flow-dot.active{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 0 0 3px var(--blue-soft)}
-.review-flow-dot.failed{background:var(--red);border-color:var(--red);color:#fff}
-.review-flow-dot.pending{background:#fff;border-color:var(--line-2);color:var(--muted)}
-.review-flow-name{font-weight:600;font-size:.85rem;white-space:nowrap}
-.review-flow-desc{font-size:.74rem;color:var(--muted);white-space:nowrap}
-/* quality review dims under Quality Review step */
-.quality-dims{display:flex;flex-wrap:wrap;gap:6px}
-.quality-dim{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:var(--pill);background:#fff;border:1px solid var(--line);font-size:.76rem}
-.quality-dim .status-icon{width:12px;height:12px;display:inline-flex;align-items:center;justify-content:center;font-size:9px}
-.quality-dim.passed .status-icon{color:var(--green)}.quality-dim.failed .status-icon{color:var(--red)}.quality-dim.pending .status-icon{color:var(--amber)}
-/* boards */
-.board{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start}
-.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
-.panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 20px;border-bottom:1px solid var(--line)}
-.panel-head h3{margin:0;font-size:1rem;font-weight:700}.panel-head p{margin:4px 0 0;font-size:.78rem;color:var(--muted)}
-.count{font:600 .78rem/1 var(--mono);padding:4px 10px;background:var(--surface-2);border-radius:var(--pill);color:var(--muted)}
-/* status stats in panel header */
-.status-stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.status-stat{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:var(--pill);background:var(--surface-2);border:1px solid var(--line);font-size:.76rem;color:var(--muted);cursor:pointer;transition:.15s}
-.status-stat:hover{border-color:var(--line-2);color:var(--ink)}
-.status-stat.active{background:var(--blue-soft);border-color:var(--blue);color:var(--blue)}
-.status-stat .stat-count{font-family:var(--mono);font-weight:600}
-/* list items */
-.panel-body{max-height:540px;overflow:auto;padding:0 16px}
-.empty{padding:28px 0;text-align:center;color:var(--quiet);font-size:.85rem}
-.item{padding:14px 0;border-bottom:1px solid var(--line)}
-.item:last-child{border-bottom:0}
-.item-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:6px}
-.item-id{font:.72rem/1.5 var(--mono);color:var(--quiet);padding-top:3px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
-.item-title{font-size:.94rem;font-weight:600;line-height:1.45;display:flex;align-items:flex-start;gap:8px}
-.item-desc{font-size:.82rem;color:var(--muted);margin-top:6px;line-height:1.5}
-.item-desc.collapsed{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.item-desc-toggle{margin-top:6px;font-size:.75rem;color:var(--blue);background:none;border:none;padding:0;cursor:pointer}
-.item-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center}
-/* status badge */
-.badge-status{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:var(--pill);font:600 .74rem/1.4 var(--mono)}
-.badge-status::before{content:"";width:6px;height:6px;border-radius:50%}
-.badge-status.open,.badge-status.submitted,.badge-status.awaiting_user,.badge-status.ready_for_architect,.badge-status.pending{background:var(--blue-soft);color:var(--blue)}
-.badge-status.open::before,.badge-status.submitted::before,.badge-status.awaiting_user::before,.badge-status.ready_for_architect::before,.badge-status.pending::before{background:var(--blue)}
-.badge-status.completed,.badge-status.verified,.badge-status.resolved,.badge-status.passed{background:var(--green-soft);color:var(--green)}
-.badge-status.completed::before,.badge-status.verified::before,.badge-status.resolved::before,.badge-status.passed::before{background:var(--green)}
-.badge-status.rejected,.badge-status.failed,.badge-status.critical{background:var(--red-soft);color:var(--red)}
-.badge-status.rejected::before,.badge-status.failed::before,.badge-status.critical::before{background:var(--red)}
-.badge-status.exemption_requested,.badge-status.exempted,.badge-status.medium{background:var(--amber-soft);color:var(--amber)}
-.badge-status.exemption_requested::before,.badge-status.exempted::before,.badge-status.medium::before{background:var(--amber)}
-.badge-status.low,.badge-status.info{background:var(--surface-2);color:var(--muted)}
-.badge-status.low::before,.badge-status.info::before{background:var(--line-2)}
-/* category tag */
-.tag-cat{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:var(--radius-sm);font:500 .74rem/1.4 var(--mono);background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
-.tag-cat::before{content:"";width:6px;height:6px;border-radius:50%}
-.tag-cat.style::before{background:var(--blue)}.tag-cat.architecture::before{background:var(--violet)}
-.tag-cat.performance::before{background:var(--amber)}.tag-cat.security::before{background:var(--red)}.tag-cat.maintainability::before{background:var(--teal)}
-/* severity chip */
-.severity-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:var(--radius-sm);font:700 .76rem/1.4 var(--mono);color:#fff;flex-shrink:0;margin-top:1px}
-.severity-chip.critical{background:var(--red)}.severity-chip.high{background:var(--amber)}.severity-chip.medium{background:var(--violet)}
-.severity-chip.low,.severity-chip.info{background:var(--line-2);color:var(--ink)}
-@media(max-width:1024px){.board{grid-template-columns:1fr}}
-@media(max-width:640px){.topbar{flex-direction:column;gap:14px}.meta{text-align:left}.stepper{overflow-x:auto}.stepper-line{display:none}.review-flow{flex-direction:column;align-items:flex-start}.review-flow-line{display:none}}
+/* 5 列看板 */
+.board{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;align-items:start;padding-top:24px}
+.col{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column}
+.col-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.col-head h3{margin:0;font-size:.92rem;font-weight:700}
+.col-count{font:600 .78rem/1 var(--mono);padding:4px 10px;background:var(--surface-2);border-radius:var(--pill);color:var(--muted)}
+.col-body{max-height:calc(100vh - 280px);overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.board-empty{grid-column:1/-1;padding:48px 0;text-align:center;color:var(--quiet);font-size:.9rem}
+/* 卡片 */
+.card{position:relative;background:var(--surface);border:1px solid var(--line);border-left-width:3px;border-radius:var(--radius-sm);box-shadow:0 1px 2px rgba(15,23,42,.04);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.card.task{border-left-color:var(--blue)}
+.card.issue{border-left-color:var(--violet)}
+.card.suspended{border-style:dashed;opacity:.94}
+.card-head{display:flex;align-items:center;gap:8px}
+.type-tag{flex:0 0 auto;width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font:700 .7rem/1 var(--mono);color:#fff}
+.type-tag.task{background:var(--blue)}.type-tag.issue{background:var(--violet)}
+.src-icon{flex:0 0 auto;font-size:.85rem;color:var(--quiet);line-height:1}
+.card-title{margin:0;font-size:.9rem;font-weight:700;line-height:1.4;flex:1}
+.card-desc{font-size:.78rem;color:var(--muted);line-height:1.5}
+.card-desc.collapsed{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.desc-toggle{margin-top:-4px;font-size:.72rem;color:var(--blue);background:none;border:none;padding:0;cursor:pointer;text-align:left}
+.card-labels{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:var(--pill);font:500 .68rem/1.4 var(--mono);background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.card-children{display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--line);padding-top:8px}
+.child-row{display:flex;align-items:center;gap:6px;font-size:.76rem;color:var(--muted)}
+.child-type{flex:0 0 auto;width:16px;height:16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font:700 .58rem/1 var(--mono);color:#fff}
+.child-type.task{background:var(--blue)}.child-type.issue{background:var(--violet)}
+.child-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.child-phase{flex:0 0 auto;padding:1px 6px;border-radius:var(--pill);font:600 .62rem/1.3 var(--mono);background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.card-foot{display:flex;justify-content:space-between;align-items:flex-end;gap:8px;margin-top:auto;border-top:1px solid var(--line);padding-top:8px}
+.card-verdicts{display:flex;flex-wrap:wrap;gap:6px}
+.verdict{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:var(--pill);font:600 .68rem/1.4 var(--mono);background:var(--surface-2);color:var(--muted)}
+.verdict.passed{background:var(--green-soft);color:var(--green)}
+.verdict.failed{background:var(--red-soft);color:var(--red)}
+.verdict.pending{background:var(--surface-2);color:var(--quiet)}
+.card-meta{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.step-tag{font:.68rem/1.4 var(--mono);color:var(--quiet)}
+.suspend-tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:var(--pill);font:600 .7rem/1.4 var(--mono);background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);cursor:pointer}
+.suspend-reason{margin-top:4px;font-size:.72rem;color:var(--amber);background:var(--amber-soft);border-radius:var(--radius-sm);padding:6px 8px}
+/* severity 色条 */
+.sev-bar{position:absolute;top:0;left:0;right:0;height:4px;border-radius:var(--radius-sm) var(--radius-sm) 0 0}
+.sev-bar.critical{background:var(--red)}.sev-bar.high{background:var(--amber)}.sev-bar.medium{background:var(--violet)}.sev-bar.low{background:var(--teal)}.sev-bar.info{background:var(--line-2)}
+/* WorkItem 详情弹窗 */
+.modal-open{overflow:hidden}
+.modal-overlay{position:fixed;inset:0;z-index:100;background:rgba(15,23,42,.45);display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;overflow:auto}
+.modal-overlay[hidden]{display:none}
+.modal-dialog{background:var(--surface);border-radius:var(--radius);box-shadow:0 20px 50px rgba(15,23,42,.2);max-width:640px;width:100%;max-height:calc(100vh - 96px);display:flex;flex-direction:column}
+.modal-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.modal-title{flex:1;font-size:.92rem;font-weight:700}
+.modal-close{background:none;border:none;font-size:1.2rem;color:var(--muted);line-height:1;padding:4px 8px;border-radius:6px}
+.modal-close:hover{background:var(--surface-2);color:var(--ink)}
+.modal-back{background:none;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:.78rem;color:var(--muted);padding:4px 10px}
+.modal-back:hover{background:var(--surface-2);color:var(--ink)}
+.modal-back[hidden]{display:none}
+.modal-body{padding:18px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+.detail-title{margin:0;font-size:1.1rem;font-weight:700}
+.detail-block{display:flex;flex-direction:column;gap:8px}
+.detail-block h5{margin:0;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--quiet)}
+.meta-row{display:flex;gap:10px;font-size:.8rem;padding:4px 0;border-bottom:1px dashed var(--line)}
+.meta-key{flex:0 0 96px;color:var(--quiet);font:500 .76rem/1.4 var(--mono)}
+.meta-val{flex:1;color:var(--ink);word-break:break-word}
+.detail-desc{margin:0;font-size:.82rem;color:var(--muted);white-space:pre-wrap}
+.detail-verdicts{display:flex;flex-wrap:wrap;gap:6px}
+.detail-verdict{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:var(--pill);font:600 .68rem/1.4 var(--mono);background:var(--surface-2);color:var(--muted)}
+.detail-verdict.passed{background:var(--green-soft);color:var(--green)}
+.detail-verdict.failed{background:var(--red-soft);color:var(--red)}
+.detail-verdict.pending{background:var(--surface-2);color:var(--quiet)}
+.detail-children{display:flex;flex-direction:column;gap:6px}
+.detail-child{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:.8rem;cursor:pointer}
+.detail-child:hover{background:var(--surface-2);border-color:var(--line-2)}
+@media(max-width:1024px){.board{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){.board{grid-template-columns:1fr}.topbar{flex-direction:column;gap:14px}.meta{text-align:left}}
 </style>
 </head>
 <body>
@@ -141,84 +119,177 @@ h1{margin:0;font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
       <span>最后更新<strong id="updatedAt">-</strong></span>
     </div>
   </header>
-  <nav class="group-strip" id="groupList"></nav>
   <main id="dashboard"></main>
 </div>
+<div class="modal-overlay" id="wiModal" hidden>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-label="工作项详情">
+    <header class="modal-head">
+      <button class="modal-back" id="wiBack" hidden>← 返回</button>
+      <span class="modal-title">工作项详情</span>
+      <button class="modal-close" id="wiClose" aria-label="关闭">×</button>
+    </header>
+    <div class="modal-body" id="wiBody"></div>
+  </div>
+</div>
 <script>
-const PHASES=[['task_analysis','需求分析','确认需求与方案'],['dev_impl','开发实施','按任务开发实现'],['review','审查','工具/任务/质量三层审查'],['completed','完成','所有阶段已通过']];
-const TASK_LABELS={open:'待处理',submitted:'待验证',rejected:'已驳回',verified:'已验证'};
-const ISSUE_LABELS={open:'待处理',submitted:'待验证',rejected:'已驳回',verified:'已验证',exemption_requested:'豁免申请',exempted:'已豁免'};
-const BLOCKER_LABELS={awaiting_user:'等待用户',resolved:'已解决'};
-const DIM_LABELS={style:'风格',architecture:'架构',performance:'性能',security:'安全',maintainability:'可维护'};
-const SOURCE_LABELS={tool:'工具审查',task:'任务审查',quality:'质量审查'};
-const SEVERITY_LABELS={Critical:'严重',High:'高危',Medium:'中危',Low:'低危',Info:'提示'};
-const SEVERITY_ORDER={Critical:0,High:1,Medium:2,Low:3,Info:4};
-let dashboardState={
-  active:true,changeId:'proto-001',baseBranch:'main',updatedAt:new Date().toISOString(),
-  taskGroups:[
-    {id:'tg-1',name:'用户登录',status:'review',lifecycle:'in_progress',reviewCompleted:false,branchName:'task-group/user-login',
-     phases:{architect_review:{completed:true},review:{tool:{completed:true},task:{completed:true},quality:{progress:{style:'pending',architecture:'passed',performance:'pending',security:'failed',maintainability:'passed'}}}},
-     tasks:[
-       {id:'1',title:'登录接口',taskNumber:'1.1',specTrace:'spec.md',status:'open',rejectReason:null},
-       {id:'2',title:'单元测试',taskNumber:'1.2',specTrace:'spec.md',status:'verified',rejectReason:null},
-     ],
-     issues:[
-       {id:'10',dimension:'security',severity:'Critical',file:'Auth.java',line:12,description:'SQL 注入风险，需改用参数化查询。当前代码直接将用户输入拼接到 SQL 语句中，存在严重的安全漏洞，必须在入库前进行转义或使用预编译语句。',suggestion:'使用 PreparedStatement 或 ORM 参数化查询',status:'open',sourcePhase:'quality'},
-       {id:'11',dimension:'style',severity:'Info',file:'Config.java',line:3,description:'命名风格不一致',status:'verified',sourcePhase:'tool'},
-       {id:'12',dimension:'performance',severity:'High',file:'Login.java',line:45,description:'循环内重复查询数据库，建议批量处理或加缓存。',suggestion:'将循环内查询改为批量 IN 查询',status:'submitted',sourcePhase:'task'},
-     ],
-     blockers:[{id:'b1',taskId:'1',description:'依赖服务不可用',evidence:'HTTP 503，上游认证服务返回 Service Unavailable',status:'awaiting_user'}]
-    },
-    {id:'tg-2',name:'订单支付',status:'completed',lifecycle:'completed',reviewCompleted:true,branchName:'task-group/order-pay',
-     phases:{architect_review:{completed:true},review:{tool:{completed:true},task:{completed:true},quality:{progress:{style:'passed',architecture:'passed',performance:'passed',security:'passed',maintainability:'passed'}}}},
-     tasks:[{id:'3',title:'支付流程',taskNumber:'2.1',specTrace:'spec.md',status:'verified',rejectReason:null}],
-     issues:[],blockers:[]
-    }
-  ]
-};
-let selectedGroupId=dashboardState.taskGroups[0].id;
-const filters={task:{status:'all'},issue:{status:'all'},blocker:{status:'all'}};
+const COLUMNS=[['todo','待办'],['in_progress','处理中'],['review','审核中'],['done','完成'],['cancelled','已取消']];
+const SOURCE_ICONS={openspec:'◈',ado:'◆',custom:'✚'};
+const VERDICT_ICONS={passed:'✓',failed:'✕',pending:'○'};
+const AGENT_SHORT={'openspec-architect':'architect','openspec-developer':'dev','openspec-reviewer-tool':'tool','openspec-reviewer-task':'task','openspec-reviewer-style':'style','openspec-reviewer-architecture':'arch','openspec-reviewer-performance':'perf','openspec-reviewer-security':'sec','openspec-reviewer-maintainability':'maint'};
+let dashboardState={};
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]))}
 function cls(v){return String(v??'').replace(/[^a-zA-Z0-9_-]/g,'_')}
-function badgeStatus(value,label){return `<span class="badge-status ${cls(value)}">${esc(label||value)}</span>`}
-function tagCat(source,dim){const text=`${SOURCE_LABELS[source]||source} · ${DIM_LABELS[dim]||dim}`;return `<span class="tag-cat ${cls(dim)}">${esc(text)}</span>`}
-function severityChip(sev){return `<span class="severity-chip ${cls(String(sev).toLowerCase())}">${SEVERITY_LABELS[sev]||sev}</span>`}
-function currentGroup(){return dashboardState.taskGroups.find(g=>g.id===selectedGroupId)||dashboardState.taskGroups[0]}
-function phaseState(group,key,index){const current=PHASES.findIndex(p=>p[0]===group.status);if(key==='task_analysis')return group.phases.architect_review.completed?'done':current===index?'active':'pending';if(key==='dev_impl')return group.status==='review'||group.status==='completed'?'done':current===index?'active':'pending';if(key==='review')return group.reviewCompleted?'done':current===index?'active':'pending';return group.status==='completed'?'done':'pending'}
-function renderGroups(){const el=document.getElementById('groupList');el.innerHTML=dashboardState.taskGroups.map(g=>`<button class="group-tab" data-gid="${esc(g.id)}" aria-selected="${g.id===selectedGroupId}"><span class="num">#${esc(g.id)}</span><span>${esc(g.name)}</span>${badgeStatus(g.lifecycle,g.status)}</button>`).join('')}
-function renderStepper(group){return `<section class="stepper" aria-label="流程进度"><div class="stepper-line"></div>${PHASES.map(([k,l,d],i)=>{const s=phaseState(group,k,i);const icon=s==='done'?'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>':i+1;const idAttr=i===2?' id="reviewStep"':'';return `<div class="step ${s}"${idAttr}><div class="step-dot">${icon}</div><div><div class="step-label">${l}</div><div class="step-desc">${d}</div></div></div>`}).join('')}</section>`}
-function reviewFlowDot(s){return s==='done'||s==='passed'?'<div class="review-flow-dot done"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>':s==='failed'?'<div class="review-flow-dot failed">✕</div>':'<div class="review-flow-dot pending">●</div>'}
-function statusIcon(v){return v==='passed'?'<span class="status-icon">✓</span>':v==='failed'?'<span class="status-icon">✕</span>':'<span class="status-icon">●</span>'}
-function renderReview(group){const r=group.phases.review;const qp=r.quality.progress;const failed=Object.values(qp).filter(v=>v==='failed').length;const pending=Object.values(qp).filter(v=>v==='pending').length;const qs=failed>0?'failed':pending>0?'pending':'passed';const toolStatus=r.tool.completed?'passed':'pending';const taskStatus=r.task.completed?'passed':'pending';const summaryText=qs==='passed'?'所有门禁已通过':qs==='failed'?'存在未通过门禁':'门禁审查中';return `<section class="review-section" id="reviewSection"><div class="review-head"><h2 class="review-title">审查阶段</h2><span class="review-status ${qs}">${summaryText}</span></div><div class="review-flow"><div class="review-flow-step">${reviewFlowDot(toolStatus)}<div><div class="review-flow-name">Tool Review</div></div></div><div class="review-flow-line"></div><div class="review-flow-step">${reviewFlowDot(taskStatus)}<div><div class="review-flow-name">Task Review</div></div></div><div class="review-flow-line"></div><div class="review-flow-step quality"><div class="review-flow-main">${reviewFlowDot(qs)}<div class="review-flow-body"><div class="review-flow-name">Quality Review</div><div class="quality-dims">${Object.entries(qp).map(([d,v])=>`<div class="quality-dim ${v}">${statusIcon(v)}<span>${DIM_LABELS[d]}</span></div>`).join('')}</div></div></div></div></div></section>`}
-function renderStatusStats(kind,items,labels){const counts={};items.forEach(item=>{counts[item.status]=(counts[item.status]||0)+1});let html=`<div class="status-stats" data-kind="${kind}">`;for(const [k,label] of Object.entries(labels)){const count=counts[k]||0;html+=`<button class="status-stat ${filters[kind].status===k?'active':''}" data-kind="${kind}" data-status="${k}"><span>${esc(label)}</span><span class="stat-count">${count}</span></button>`}return html+'</div>'}
-function panel(title,subtitle,count,stats,content){return `<section class="panel"><header class="panel-head"><div><h3>${title}</h3><p>${subtitle}</p>${stats}</div><span class="count">${count}</span></header><div class="panel-body">${content}</div></section>`}
-function longText(text){if(!text||text.length<60)return esc(text);return `<div class="item-desc collapsed">${esc(text)}</div><button class="item-desc-toggle">展开</button>`}
-function shortPath(file, line, maxLen){
-  if(maxLen===undefined)maxLen=45;
-  const suffix=line?':'+line:'';
-  const full=esc(file)+suffix;
-  if(full.length<=maxLen)return full;
-  const p=file.split('/');
-  if(p.length<=1)return full.slice(0,maxLen-3)+'...';
-  const base=p[p.length-1];
-  const parent=p[p.length-2];
-  const tryTwo='.../'+esc(parent)+'/'+esc(base)+suffix;
-  if(tryTwo.length<=maxLen)return tryTwo;
-  const lastSeg=esc(base)+suffix;
-  if(lastSeg.length<=maxLen)return lastSeg;
-  return lastSeg.slice(0,maxLen-3)+'...';
+function shortAgent(key){if(AGENT_SHORT[key])return AGENT_SHORT[key];const m=/^openspec-reviewer-(.+)$/.exec(key)||/^openspec-(.+)$/.exec(key);return m?m[1]:(key||'')}
+function descBlock(text){if(!text)return '';if(text.length<90)return `<div class="card-desc">${esc(text)}</div>`;return `<div class="card-desc collapsed">${esc(text)}</div><button class="desc-toggle">展开</button>`}
+function verdictDot(v){return `<span class="verdict ${cls(v.verdict)}" title="${esc(v.stepId)}">${esc(shortAgent(v.agentKey))}:${VERDICT_ICONS[v.verdict]||'○'}</span>`}
+function renderCard(c){
+  const isIssue=c.type==='issue';
+  const typeTag=`<span class="type-tag ${isIssue?'issue':'task'}">${isIssue?'I':'T'}</span>`;
+  const srcIcon=`<span class="src-icon" title="${esc(c.source||'')}">${SOURCE_ICONS[c.source]||'●'}</span>`;
+  const sevBar=isIssue&&c.severity?`<span class="sev-bar ${cls(String(c.severity).toLowerCase())}" title="${esc(c.severity)}"></span>`:'';
+  const labels=(c.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('');
+  const step=c.currentStep?`<span class="step-tag">${esc(c.currentStep)}</span>`:'';
+  const suspTag=c.suspended?'<span class="suspend-tag" role="button" tabindex="0">⏸ 暂停</span>':'';
+  const suspReason=c.suspended?`<div class="suspend-reason" hidden>${esc(c.suspendReason||'未提供暂停原因')}</div>`:'';
+  const verdicts=(c.agentVerdicts||[]).map(verdictDot).join('');
+  const children=(c.children||[]).map(ch=>`<div class="child-row"><span class="child-type ${cls(ch.type)}">${ch.type==='issue'?'I':'T'}</span><span class="child-title">${esc(ch.title)}</span>${ch.type==='task'?`<span class="child-phase">${esc(ch.phase)}</span>`:''}</div>`).join('');
+  return `<article class="card ${isIssue?'issue':'task'}${c.suspended?' suspended':''}" data-id="${esc(c.id)}">${sevBar}
+    <div class="card-head">${typeTag}${srcIcon}<h4 class="card-title">${esc(c.title)}</h4></div>
+    ${descBlock(c.description)}
+    ${labels?`<div class="card-labels">${labels}</div>`:''}
+    ${children?`<div class="card-children">${children}</div>`:''}
+    <div class="card-foot">${verdicts?`<div class="card-verdicts">${verdicts}</div>`:'<span></span>'}<div class="card-meta">${step}${suspTag}</div></div>
+    ${suspReason}
+  </article>`;
 }
-function bindExpands(){document.querySelectorAll('.item-desc-toggle').forEach(btn=>btn.addEventListener('click',e=>{const d=e.target.previousElementSibling;d.classList.toggle('collapsed');e.target.textContent=d.classList.contains('collapsed')?'展开':'收起';}))}
-function bindStatusStats(){document.querySelectorAll('.status-stat').forEach(btn=>btn.addEventListener('click',e=>{const s=e.target.closest('.status-stat');const k=s.dataset.kind;const st=s.dataset.status;filters[k].status=filters[k].status===st?'all':st;render()}))}
-function bindReviewHover(){const reviewStep=document.getElementById('reviewStep');const reviewSection=document.getElementById('reviewSection');if(!reviewStep||!reviewSection)return;function position(){const wrap=reviewSection.parentElement.getBoundingClientRect();const step=reviewStep.getBoundingClientRect();const sec=reviewSection.getBoundingClientRect();let left=step.left+step.width/2-wrap.left-sec.width/2;left=Math.max(0,Math.min(left,wrap.width-sec.width));reviewSection.style.left=left+'px'}reviewStep.addEventListener('mouseenter',()=>{reviewSection.classList.add('visible');position()});reviewStep.addEventListener('mouseleave',()=>setTimeout(()=>{if(!reviewSection.matches(':hover'))reviewSection.classList.remove('visible')},50));reviewSection.addEventListener('mouseenter',()=>reviewSection.classList.add('visible'));reviewSection.addEventListener('mouseleave',()=>reviewSection.classList.remove('visible'));window.addEventListener('resize',position)}
-function renderTasks(tasks){const f=filters.task;const filtered=tasks.filter(t=>f.status==='all'||t.status===f.status);const stats=renderStatusStats('task',tasks,TASK_LABELS);return panel('Task','实施任务',filtered.length,stats,filtered.length?filtered.map(t=>`<article class="item"><div class="item-top"><span class="item-id">#${esc(t.id)} · ${esc(t.taskNumber)}</span>${badgeStatus(t.status,TASK_LABELS[t.status])}</div><div class="item-title">${esc(t.title)}</div><div class="item-desc">${esc(t.specTrace||'无 Spec 溯源')}${t.rejectReason?' · 驳回：'+esc(t.rejectReason):''}</div></article>`).join(''):'<div class="empty">无 Task</div>')}
-function renderIssues(issues){const f=filters.issue;let all=[...issues].sort((a,b)=>SEVERITY_ORDER[a.severity]-SEVERITY_ORDER[b.severity]);const filtered=all.filter(i=>f.status==='all'||i.status===f.status);const stats=renderStatusStats('issue',issues,ISSUE_LABELS);return panel('Issue','审查发现',filtered.length,stats,filtered.length?filtered.map(i=>`<article class="item"><div class="item-top"><span class="item-id" title="${esc(i.file)}${i.line?':'+i.line:''}">#${esc(i.id)} · ${shortPath(i.file,i.line)}</span>${badgeStatus(i.status,ISSUE_LABELS[i.status])}</div><div class="item-title">${severityChip(i.severity)}${esc(i.description)}</div>${longText(i.suggestion)}<div class="item-meta">${tagCat(i.sourcePhase,i.dimension)}</div></article>`).join(''):'<div class="empty">无 Issue</div>')}
-function renderBlockers(blockers){const f=filters.blocker;const filtered=blockers.filter(b=>f.status==='all'||b.status===f.status);const stats=renderStatusStats('blocker',blockers,BLOCKER_LABELS);return panel('Blocker','待外部处理',filtered.length,stats,filtered.length?filtered.map(b=>`<article class="item"><div class="item-top"><span class="item-id">#${esc(b.id)}${b.taskId?' · TASK #'+esc(b.taskId):''}</span>${badgeStatus(b.status,BLOCKER_LABELS[b.status])}</div><div class="item-title">${esc(b.description)}</div>${longText(b.evidence)}</article>`).join(''):'<div class="empty">无待处理 Blocker</div>')}
-function render(){const g=currentGroup();const showReview=g.status==='review'||g.status==='completed';document.getElementById('changeId').textContent=dashboardState.changeId;document.getElementById('baseBranch').textContent=dashboardState.baseBranch||'-';document.getElementById('updatedAt').textContent=dashboardState.updatedAt?new Date(dashboardState.updatedAt).toLocaleTimeString():'-';document.getElementById('dashboard').innerHTML=`<div class="stepper-wrapper">${renderStepper(g)}${showReview?renderReview(g):''}</div><section class="board">${renderTasks(g.tasks)}${renderIssues(g.issues)}${renderBlockers(g.blockers)}</section>`;bindExpands();bindStatusStats();bindReviewHover()}
-async function loadState(){try{const res=await fetch('/api/state');if(!res.ok) throw new Error('fetch failed');const data=await res.json();if(data&&data.active===true){dashboardState=data;selectedGroupId=data.currentTaskGroupId||dashboardState.taskGroups[0]?.id;renderGroups();render()}}catch(e){console.error('[dashboard] load state failed',e)}}
-renderGroups();render();
+function renderBoard(){
+  const cards=dashboardState.workItemCards||[];
+  if(!cards.length)return `<section class="board"><div class="board-empty">暂无工作项数据（旧格式状态或未初始化）</div></section>`;
+  return `<section class="board">${COLUMNS.map(([key,label])=>{
+    const items=cards.filter(c=>c.phase===key);
+    return `<div class="col" data-col="${key}"><header class="col-head"><h3>${label}</h3><span class="col-count">${items.length}</span></header><div class="col-body">${items.map(renderCard).join('')}</div></div>`;
+  }).join('')}</section>`;
+}
+function render(){
+  document.getElementById('changeId').textContent=dashboardState.changeId||'-';
+  document.getElementById('baseBranch').textContent=dashboardState.baseBranch||'-';
+  document.getElementById('updatedAt').textContent=dashboardState.updatedAt?new Date(dashboardState.updatedAt).toLocaleString():'-';
+  document.getElementById('dashboard').innerHTML=renderBoard();
+  document.querySelectorAll('.desc-toggle').forEach(btn=>btn.addEventListener('click',e=>{
+    const d=e.target.previousElementSibling;
+    if(d&&d.classList.contains('card-desc')){d.classList.toggle('collapsed');e.target.textContent=d.classList.contains('collapsed')?'展开':'收起'}
+  }));
+  document.querySelectorAll('.suspend-tag').forEach(tag=>tag.addEventListener('click',e=>{
+    const card=e.target.closest('.card');
+    const reason=card&&card.querySelector('.suspend-reason');
+    if(reason)reason.hidden=!reason.hidden;
+  }));
+  if(modalState.id)refreshModal();
+}
+/* WorkItem 详情弹窗 */
+let modalState={id:null,back:[]};
+function findWorkItem(items,id){
+  for(const it of items||[]){
+    if(it.id===id)return it;
+    if(it.children&&it.children.length){
+      const found=findWorkItem(it.children,id);
+      if(found)return found;
+    }
+  }
+  return null;
+}
+function renderTags(tags){
+  const verdicts=Object.entries(tags||{}).map(([key,verdict])=>{
+    const sep=key.indexOf(':');
+    const stepId=sep===-1?key:key.slice(0,sep);
+    const agentKey=sep===-1?key:key.slice(sep+1);
+    return `<span class="detail-verdict ${cls(verdict)}" title="${esc(key)}">${esc(shortAgent(agentKey))}:${VERDICT_ICONS[verdict]||'○'}</span>`;
+  }).join('');
+  return verdicts?`<div class="detail-block"><h5>Agent 裁决</h5><div class="detail-verdicts">${verdicts}</div></div>`:'';
+}
+function renderWriteback(wb){
+  if(!wb)return '';
+  const rows=Object.entries(wb).filter(([k])=>!k.startsWith('_')).map(([k,v])=>{
+    const val=typeof v==='object'?JSON.stringify(v):String(v);
+    return `<div class="meta-row"><span class="meta-key">${esc(k)}</span><span class="meta-val">${esc(val)}</span></div>`;
+  }).join('');
+  return rows?`<div class="detail-block"><h5>写回</h5>${rows}</div>`:'';
+}
+function renderMeta(metadata){
+  const rows=Object.entries(metadata||{}).filter(([k])=>!k.startsWith('_')).map(([k,v])=>{
+    const val=typeof v==='object'?JSON.stringify(v):String(v);
+    return `<div class="meta-row"><span class="meta-key">${esc(k)}</span><span class="meta-val">${esc(val)}</span></div>`;
+  }).join('');
+  return rows?`<div class="detail-block"><h5>元数据</h5>${rows}</div>`:'';
+}
+function renderChildren(children){
+  if(!children||!children.length)return '';
+  const rows=(children||[]).map(ch=>`<div class="detail-child" data-id="${esc(ch.id)}" role="button" tabindex="0">
+    <span class="child-type ${cls(ch.type)}">${ch.type==='issue'?'I':'T'}</span>
+    <span class="child-title">${esc(ch.title)}</span>
+    <span class="child-phase">${esc(ch.phase)}</span>
+  </div>`).join('');
+  return `<div class="detail-block"><h5>Children</h5><div class="detail-children">${rows}</div></div>`;
+}
+function renderDetail(item){
+  const rows=[['类型',item.type],['来源',item.source],['ID',item.id]];
+  if(item.externalId)rows.push(['外部ID',item.externalId]);
+  rows.push(['阶段',item.phase]);
+  if(item.severity)rows.push(['严重级别',item.severity]);
+  rows.push(['当前步骤',item.currentStep||'-']);
+  const kv=rows.map(([k,v])=>`<div class="meta-row"><span class="meta-key">${esc(k)}</span><span class="meta-val">${esc(v)}</span></div>`).join('');
+  return `<h3 class="detail-title">${esc(item.title)}</h3>
+    ${item.suspended?`<div class="suspend-reason">⏸ 暂停：${esc(typeof (item.metadata||{})['suspend_reason']==='string'?(item.metadata||{})['suspend_reason']:'未提供暂停原因')}</div>`:''}
+    ${item.description?`<div class="detail-block"><h5>描述</h5><p class="detail-desc">${esc(item.description)}</p></div>`:''}
+    <div class="detail-block"><h5>字段</h5>${kv}</div>
+    ${item.labels&&item.labels.length?`<div class="detail-block"><h5>标签</h5><div class="card-labels">${item.labels.map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></div>`:''}
+    ${renderTags(item.tags)}
+    ${renderWriteback(item.writeback)}
+    ${renderMeta(item.metadata)}
+    ${renderChildren(item.children)}`;
+}
+function refreshModal(){
+  const modal=document.getElementById('wiModal');
+  const item=findWorkItem(dashboardState.workItems||[],modalState.id);
+  if(!item){closeDetail();return;}
+  document.getElementById('wiBody').innerHTML=renderDetail(item);
+  document.getElementById('wiBack').hidden=!modalState.back.length;
+  modal.hidden=false;
+  document.body.classList.add('modal-open');
+}
+function openDetail(id,back){
+  modalState={id,back:back||[]};
+  refreshModal();
+}
+function closeDetail(){
+  modalState={id:null,back:[]};
+  const modal=document.getElementById('wiModal');
+  if(modal)modal.hidden=true;
+  document.body.classList.remove('modal-open');
+}
+document.addEventListener('click',e=>{
+  if(e.target.closest('.desc-toggle,.suspend-tag'))return;
+  const card=e.target.closest('.card');
+  if(card&&card.dataset.id)openDetail(card.dataset.id,[]);
+});
+document.getElementById('wiModal').addEventListener('click',e=>{
+  if(e.target.closest('#wiBack')){
+    const prev=modalState.back[modalState.back.length-1];
+    openDetail(prev,modalState.back.slice(0,-1));
+    return;
+  }
+  if(e.target.classList.contains('modal-overlay')){closeDetail();return;}
+  if(e.target.closest('.modal-close')){closeDetail();return;}
+  const child=e.target.closest('.detail-child');
+  if(child&&child.dataset.id)openDetail(child.dataset.id,[...modalState.back,modalState.id]);
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){const modal=document.getElementById('wiModal');if(modal&&!modal.hidden)closeDetail();}
+});
+async function loadState(){try{const res=await fetch('/api/state');if(!res.ok)throw new Error('fetch failed');const data=await res.json();if(data&&data.active===true){dashboardState=data;render()}}catch(e){console.error('[dashboard] load state failed',e)}}
+render();
 loadState();
-document.getElementById('groupList').addEventListener('click',e=>{const b=e.target.closest('[data-gid]');if(b){selectedGroupId=b.dataset.gid;renderGroups();render()}});
+setInterval(loadState,2000);
 </script>
 </body>
 </html>

@@ -1,153 +1,163 @@
 /**
- * 参数归一化测试：issue id 的 # 前缀归一化、taskNumber → 数字 id 映射
+ * 参数归一化测试（新流 agent_submit 改写）：
+ * N1: issue id 的 # 前缀归一化（fixed_issue_ids / exempt_issue_ids / exempt_adjudications 均接受带 # 的 tg.issue 序号引用）
+ * N2: taskNumber → 数字 id 映射（implement completed_task_ids / verify_task verified_tasks）
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
+import { agent_submit } from "../src/adapters/opencode/tools"
+import { setupWithFakeGit, teardown, readState } from "./helpers"
 import {
-  init, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit, quality_review_submit
-} from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx } from "./helpers"
+  setupToAnalyze, driveToVerifyTool, driveToQuality,
+  taskListOf, taskItemOf, taskIdsOf, rollbackQuality,
+} from "./helpers-workflow"
+import { taskGroupFromWorkItem } from "../src/core/derive"
 
 const CID = "test-norm"
 afterAll(() => { __setGitRunner(null) })
 
-function setupWt(root: string, wt: string): string {
-  mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
+/** 构造 2 子任务 tasks.md（N2 用：1.1/1.2 全部覆盖，避免 setupWorkspace 的 3 任务漏覆盖门禁）。 */
+function buildTwoTaskWt(wt: string): void {
   writeFileSync(
     join(wt, "openspec", "changes", CID, "tasks.md"),
-    `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2\n`,
+    `## 1. G1\n\n- [ ] 1.1 T1\n- [ ] 1.2 T2\n`,
     "utf-8"
   )
-  return wt
 }
 
-function readStateSync(wt: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
-  if (!existsSync(p)) return null
-  return JSON.parse(readFileSync(p, "utf-8"))
-}
-
-async function baseSetup(wt: string): Promise<void> {
-  const o = makeCtx("openspec-orchestrator", wt), a = makeCtx("openspec-architect", wt)
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({change_id: CID, outcome: "ready",
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-  await set_worktree.execute({ change_id: CID }, o)
-}
-
-async function enterReview(wt: string): Promise<void> {
-  const o = makeCtx("openspec-orchestrator", wt)
-  await init.execute({
-    change_id: CID, task_group_id: "1",
-    recovery: { phase: "review" }}, o)
-  await set_worktree.execute({ change_id: CID }, o)
-}
-
-async function toolAndTaskPass(wt: string): Promise<void> {
-  await enterReview(wt)
-  await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx("openspec-reviewer-tool", wt))
-  await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, makeCtx("openspec-reviewer-task", wt))
-}
+const EB = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
 
 // ── 1: issue id # 前缀归一化 ──
 
 describe("N1. issue id # 前缀归一化", () => {
-  test("dev_submit fixed_issue_ids 带 # 前缀 → issue 被接受置 submitted", async () => {
+  test("dev fixed_issue_ids 带 # → 解析到 child 置 done，issue 同步 verified", async () => {
     const root = `/tmp/norm-fixed-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const d = makeCtx("openspec-developer", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
+        ctx.arch
+      )
+      const item0 = taskItemOf(readState(wt, CID)!)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item0) },
+        ctx.dev
+      )
 
-    await baseSetup(wt)
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+      // tool 层报 Low issue → 回 implement，child 落盘 todo
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style" }],
+        },
+        ctx.toolR
+      )
+      expect(taskItemOf(readState(wt, CID)!).currentStep).toBe("implement")
 
-    // quality 层报 Low issue（open）
-    await toolAndTaskPass(wt)
-    await quality_review_submit.execute({ change_id: CID, passed: false,
-      issues: [{ severity: "Low", file: "x.java", line: 1, description: "Style", suggestion: "Fix" }]},
-      makeCtx("openspec-reviewer-style", wt))
-
-    // dev 用 # 前缀修复
-    const result = await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: ["#1"] }, d)
-    expect(result).toContain("提交完成")
-
-    const state = readStateSync(wt)
-    const issue = state.taskGroups.find((g: any) => g.id === "1").issues[0]
-    expect(issue.id).toBe("1")
-    expect(issue.status).toBe("submitted")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // dev 用 # 前缀修复
+      const item1 = taskItemOf(readState(wt, CID)!)
+      const r = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "passed",
+          completed_task_ids: taskIdsOf(item1), fixed_issue_ids: ["#7"],
+        },
+        ctx.dev
+      )
+      expect(r).toContain("passed")
+      const item = taskItemOf(readState(wt, CID)!)
+      const child = item.children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("done")
+      // issue 投影回 tg.issues → verified
+      expect(taskGroupFromWorkItem(item).issues.find((i: any) => i.id === "7")?.status).toBe("verified")
+      // 修复后推进到 verify_tool 且 verify_tool tag 被重置（可重验）
+      expect(item.currentStep).toBe("verify_tool")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+    } finally { teardown(root) }
   })
 
-  test("dev request_exempts 带 # + quality exempt_issue_ids 带 # → issue 置 exempted", async () => {
+  test("dev exempt_issue_ids 带 # + 裁定 exempt_adjudications 带 # → child cancelled + issue exempted", async () => {
     const root = `/tmp/norm-exempt-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const d = makeCtx("openspec-developer", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const { item: preQ } = await driveToQuality(wt, CID)
 
-    await baseSetup(wt)
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+      // style 维度报 Low issue → 其余维度通过后聚合回退 implement
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方库限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
+      expect(taskItemOf(readState(wt, CID)!).currentStep).toBe("implement")
 
-    // quality 层报 Info issue（不阻塞，passed=true）
-    await toolAndTaskPass(wt)
-    await quality_review_submit.execute({ change_id: CID, passed: true,
-      issues: [{ severity: "Info", file: "x.java", line: 1, description: "Info issue", suggestion: "Consider" }]},
-      makeCtx("openspec-reviewer-style", wt))
+      // dev 用 # 前缀申请豁免 → step 不推进
+      const item1 = taskItemOf(readState(wt, CID)!)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item1), exempt_issue_ids: ["#7"] },
+        ctx.dev
+      )
+      let item = taskItemOf(readState(wt, CID)!)
+      let child = item.children.find((c: any) => c.externalId === "7")
+      expect(child.metadata["exempt_request"]).toBeDefined()
+      expect(item.currentStep).toBe("implement")
 
-    // dev 用 # 前缀申请豁免
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
-      request_exempts: [{ issue_id: "#1", reason: "Lib" }]}, d)
+      // 模拟编排将任务移回 review/verify_quality 供豁免复核
+      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const state = JSON.parse(require("node:fs").readFileSync(p, "utf-8"))
+      const wi = state.workItems.find((w: any) => w.id === "task:1")
+      wi.phase = "review"
+      wi.currentStep = "verify_quality"
+      require("node:fs").writeFileSync(p, JSON.stringify(state, null, 2))
 
-    // quality（style）用 # 前缀裁定豁免
-    await quality_review_submit.execute({ change_id: CID, passed: true, issues: [],
-      exempt_issue_ids: ["#1"]}, makeCtx("openspec-reviewer-style", wt))
-
-    const state = readStateSync(wt)
-    const issue = state.taskGroups.find((g: any) => g.id === "1").issues[0]
-    expect(issue.status).toBe("exempted")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // quality（style）用 # 前缀裁定 dismissed
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "passed",
+          exempt_adjudications: [{ issue_id: "#7", action: "dismissed" }],
+        },
+        ctx.dims["style"]
+      )
+      item = taskItemOf(readState(wt, CID)!)
+      child = item.children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("cancelled")
+      expect(taskGroupFromWorkItem(item).issues.find((i: any) => i.id === "7")?.status).toBe("exempted")
+    } finally { teardown(root) }
   })
 
-  test("tool rejected_issue_ids 带 # 前缀 → issue 置 rejected", async () => {
-    const root = `/tmp/norm-rejected-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const d = makeCtx("openspec-developer", wt)
+  test("quality 层 issue dev 用 # 修复 → 对应维度 verify_quality tag 被重置", async () => {
+    const root = `/tmp/norm-qfix-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const { item: preQ } = await driveToQuality(wt, CID)
+      expect(preQ.currentStep).toBe("verify_quality")
 
-    await baseSetup(wt)
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
+      // style 维度报 Low issue → 其余维度通过后聚合回退 implement
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "Style issue", description: "质量层问题", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
 
-    // tool 层报 High issue → 回退 dev_impl
-    await enterReview(wt)
-    await tool_review_submit.execute({ change_id: CID, passed: false,
-      issues: [{ severity: "High", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
-      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-tool", wt))
-
-    // dev 用 # 前缀修复 → tool issue 置 submitted
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: ["#1"] }, d)
-
-    // tool 层用 # 前缀驳回
-    await enterReview(wt)
-    await tool_review_submit.execute({ change_id: CID, passed: false,
-      issues: [], fixed_issue_ids: [],
-      rejected_issue_ids: [{ issue_id: "#1", reason: "未达标准" }]},
-      makeCtx("openspec-reviewer-tool", wt))
-
-    const state = readStateSync(wt)
-    const issue = state.taskGroups.find((g: any) => g.id === "1").issues[0]
-    expect(issue.id).toBe("1")
-    expect(issue.status).toBe("rejected")
-    expect(issue.rejectReason).toBe("未达标准")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // dev 用 # 修复 quality 层 issue
+      const item1 = taskItemOf(readState(wt, CID)!)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "passed",
+          completed_task_ids: taskIdsOf(item1), fixed_issue_ids: ["#7"],
+        },
+        ctx.dev
+      )
+      const item = taskItemOf(readState(wt, CID)!)
+      const child = item.children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("done")
+      // 修复按归因分层重置：仅 style 维度 quality tag 清除，其余已 passed 维度保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(item.currentStep).toBe("verify_tool")
+    } finally { teardown(root) }
   })
 })
 
@@ -156,70 +166,76 @@ describe("N1. issue id # 前缀归一化", () => {
 describe("N2. taskNumber 映射", () => {
   test("dev completed_task_ids 传任务编号 1.1/1.2 → 映射为数字 id 并全部提交", async () => {
     const root = `/tmp/norm-devnum-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const d = makeCtx("openspec-developer", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      buildTwoTaskWt(wt)
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
+        ctx.arch
+      )
 
-    await baseSetup(wt)
-    const result = await dev_submit.execute({ change_id: CID, completed_task_ids: ["1.1", "1.2"] }, d)
-    expect(result).toContain("提交完成")
-
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.tasks.every((t: any) => t.status === "submitted")).toBe(true)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1.1", "1.2"] },
+        ctx.dev
+      )
+      expect(r).toContain("passed")
+      const item = taskItemOf(readState(wt, CID)!)
+      expect(taskListOf(item).every((t: any) => t.status === "submitted")).toBe(true)
+    } finally { teardown(root) }
   })
 
-  test("task_review_submit verified_task_ids 传任务编号 → 映射并验证通过", async () => {
+  test("verify_task verified_tasks 传任务编号 → 映射并验证通过", async () => {
     const root = `/tmp/norm-verifynum-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const d = makeCtx("openspec-developer", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      buildTwoTaskWt(wt)
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
+        ctx.arch
+      )
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] },
+        ctx.dev
+      )
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
 
-    await baseSetup(wt)
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-    await enterReview(wt)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx("openspec-reviewer-tool", wt))
-
-    const result = await task_review_submit.execute({ change_id: CID, passed: true,
-      verified_task_ids: ["1.1", "1.2"], failed_task_ids: [],
-      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-task", wt))
-    expect(result).toContain("审核通过")
-
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.tasks.every((t: any) => t.status === "verified")).toBe(true)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1.1", "1.2"] },
+        ctx.taskR
+      )
+      expect(r).toContain("passed")
+      const item = taskItemOf(readState(wt, CID)!)
+      expect(taskListOf(item).every((t: any) => t.status === "verified")).toBe(true)
+    } finally { teardown(root) }
   })
 
   test("非法 taskNumber → 报错", async () => {
     const root = `/tmp/norm-badnum-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const d = makeCtx("openspec-developer", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      buildTwoTaskWt(wt)
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
+        ctx.arch
+      )
 
-    await baseSetup(wt)
+      // dev 层：非法编号
+      await expect(
+        agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["9.9"] }, ctx.dev)
+      ).rejects.toThrow(/无效 task id/)
 
-    // dev 层：非法编号
-    await expect(
-      dev_submit.execute({ change_id: CID, completed_task_ids: ["9.9"] }, d)
-    ).rejects.toThrow(/无效 task id/)
-
-    // task 层：非法编号
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-    await enterReview(wt)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx("openspec-reviewer-tool", wt))
-    await expect(
-      task_review_submit.execute({ change_id: CID, passed: true,
-        verified_task_ids: ["9.9"], failed_task_ids: [],
-        fixed_issue_ids: [] }, makeCtx("openspec-reviewer-task", wt))
-    ).rejects.toThrow(/非法 task id/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // task 层：非法编号
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] },
+        ctx.dev
+      )
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+      await expect(
+        agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["9.9"] }, ctx.taskR)
+      ).rejects.toThrow(/非法 task id/)
+    } finally { teardown(root) }
   })
 })

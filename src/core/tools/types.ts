@@ -31,19 +31,35 @@ export interface UnattendedParams {
   enabled: boolean
 }
 
-export interface ArchSubmitParams {
+export interface AgentSubmitParams {
   change_id: string
-  outcome: "ready"
-  execution_boundary: {
+  step_id: string
+  verdict: "passed" | "failed"
+  fixed_issue_ids?: string[]
+  exempt_issue_ids?: string[]
+  exempt_adjudications?: Array<{
+    issue_id: string
+    action: "dismissed" | "rejected"
+  }>
+  checkpoint_decision?: "continue" | "giveup"
+  new_children?: Array<{
+    id: string
+    title: string
+    description: string
+    severity?: string
+    source_phase?: "tool" | "task" | "quality"
+    dimension?: string
+    file?: string
+    line?: number
+    suggestion?: string
+    rule?: string
+    root_cause_guess?: string
+  }>
+  execution_boundary?: {
     allowed_directories: string[]
     allowed_packages: string[]
     notes: string
   }
-}
-
-export interface ArchBlockerParams {
-  change_id: string
-  blocker_id?: string
   blockers?: Array<{
     source_role: string
     task_id?: string
@@ -53,14 +69,10 @@ export interface ArchBlockerParams {
     attempted_actions: string
     options?: string[]
   }>
-  user_response?: string
-}
-
-export interface DevSubmitParams {
-  change_id: string
-  outcome?: "completed" | "blocked"
-  completed_task_ids?: string[]
-  self_check_results?: string
+  blocker_updates?: Array<{
+    blocker_id: string
+    user_response: string
+  }>
   blocker?: {
     source_role: string
     task_id?: string
@@ -70,83 +82,22 @@ export interface DevSubmitParams {
     attempted_actions: string
     options?: string[]
   }
-  fixed_issue_ids?: string[]
-  request_exempts?: Array<{ issue_id: string; reason: string }>
-}
-
-export interface ToolReviewParams {
-  change_id: string
-  passed: boolean
-  issues?: Array<{
-    dimension: string
-    severity: string
-    file: string
-    line: number
-    description: string
-    suggestion?: string
-    rule?: string
-  }>
-  fixed_issue_ids?: string[]
-  exempt_issue_ids?: string[]
-  rejected_issue_ids?: Array<{ issue_id: string; reason: string }>
+  self_check_results?: string
+  completed_task_ids?: string[]
   test_results?: string
-  boundary_expansion?: {
-    allowed_directories?: string[]
-    allowed_packages?: string[]
-  }
-}
-
-export interface TaskReviewParams {
-  change_id: string
-  passed: boolean
-  verified_task_ids?: string[]
-  failed_task_ids?: Array<{ task_id: string; reason: string }>
-  issues?: Array<{
-    severity: string
-    file: string
-    line: number
-    description: string
-    suggestion?: string
-    root_cause_guess?: string
-    rule?: string
-  }>
-  fixed_issue_ids?: string[]
-  exempt_issue_ids?: string[]
-  rejected_issue_ids?: Array<{ issue_id: string; reason: string }>
-  boundary_expansion?: {
-    allowed_directories?: string[]
-    allowed_packages?: string[]
-  }
   validation_steps?: Array<{
     step: string
     completed: boolean
     evidence?: string
     skip_reason?: string
   }>
-}
-
-export interface QualityReviewParams {
-  change_id: string
-  passed: boolean
-  issues?: Array<{
-    severity: string
-    file: string
-    line: number
-    description: string
-    suggestion?: string
-    root_cause_guess?: string
-    rule?: string
-  }>
-  fixed_issue_ids?: string[]
-  exempt_issue_ids?: string[]
-  rejected_issue_ids?: Array<{ issue_id: string; reason: string }>
   boundary_expansion?: {
     allowed_directories?: string[]
     allowed_packages?: string[]
   }
-}
-
-export interface ResolveReviewParams {
-  change_id: string
-  decision: "continue" | "giveup"
+  verified_tasks?: string[]
+  failed_tasks?: Array<{
+    task_id: string
+    reason: string
+  }>
 }

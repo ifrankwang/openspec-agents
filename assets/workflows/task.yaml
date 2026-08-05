@@ -1,0 +1,47 @@
+# task workflow：OpenSpec change 的通用任务流转
+# 对应现有编排阶段：分析（todo）→ 实现（in_progress）→ 三重审查（review）
+id: task
+name: Task Workflow
+max_retries: 5
+phases:
+  - name: todo
+    steps:
+      - id: analyze
+        agents: [openspec-architect]
+        capability_tags: [architecture, api-design, db-design, efficiency]
+        transitions:
+          on_pass: implement
+          on_fail: analyze
+  - name: in_progress
+    steps:
+      - id: implement
+        agents: [openspec-developer]
+        capability_tags: [efficiency, api-testing]
+        transitions:
+          on_pass: verify_tool
+          on_fail: analyze
+  - name: review
+    steps:
+      - id: verify_tool
+        agents: [openspec-reviewer-tool]
+        capability_tags: [quality-gate, efficiency, api-testing]
+        transitions:
+          on_pass: verify_task
+          on_fail: implement
+      - id: verify_task
+        agents: [openspec-reviewer-task]
+        capability_tags: [api-testing, quality-gate]
+        transitions:
+          on_pass: verify_quality
+          on_fail: implement
+      - id: verify_quality
+        agents:
+          - openspec-reviewer-style
+          - openspec-reviewer-architecture
+          - openspec-reviewer-performance
+          - openspec-reviewer-security
+          - openspec-reviewer-maintainability
+        capability_tags: [style, architecture, performance, security, maintainability, efficiency]
+        transitions:
+          on_pass: done
+          on_fail: implement

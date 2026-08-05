@@ -1,322 +1,367 @@
 /**
- * sourcePhase 过滤测试：tool/task 层放行门禁仅检本层 blocking issue
+ * source_phase 归因分层重置测试（新流）
+ *
+ * 原语义：sourcePhase 分层（tool/task/quality 各层 issue 只影响本层重置）。
+ * 新流承载于 child.metadata.source_phase + workflow/reset.ts 的 resetReviewTagsOnFix：
+ * dev 在 implement 提交 fixed/exempt 后按 issue 归因分层重置 review 验证标记。
  *
  * 覆盖场景：
- * A. quality 层 blocking issue → tool 层正常通过
- * B. tool 层 blocking issue → tool 层回退 dev_impl，消息含 issue id
- * C. task 层 blocking issue → task 层抛错，消息含 issue id
+ * A. tool 层 issue fixed → 清 verify_tool tag
+ * B. task 层 issue fixed → 清 verify_tool + verify_task
+ * C. quality 层 issue fixed（维度 dim）→ 清 verify_tool + 仅该 dim 的 verify_quality tag
+ * D. quality 层 exempt（不改代码）→ 仅清该 dim 的 verify_quality tag（不动 verify_tool/verify_task）
+ * E. task 层 exempt → 清 verify_tool + verify_task
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { readFileSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
+import { agent_submit } from "../src/adapters/opencode/tools"
+import { FakeGitRunner, makeCtx, setupWorkspace } from "./helpers"
 import {
-  init, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit, quality_review_submit
-} from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx } from "./helpers"
+  setupToAnalyze, driveToVerifyTool, driveToVerifyTask, driveToQuality,
+  taskListOf, readItem,
+} from "./helpers-workflow"
+import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "test-sourcePhase"
 afterAll(() => { __setGitRunner(null) })
 
-function setupWt(root: string, wt: string): string {
-  mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
-  writeFileSync(
-    join(wt, "openspec", "changes", CID, "tasks.md"),
-    `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2\n`,
-    "utf-8"
-  )
-  return wt
+const EB = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
+
+function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
+  const wt = setupWorkspace(root, CID)
+  const fakeGit = new FakeGitRunner()
+  __setGitRunner(fakeGit)
+  return { wt, fakeGit }
 }
 
-function readStateSync(wt: string): any {
+/** 注入带归因字段的 issue child（metadata.source_phase/dimension/file/line/suggestion）。 */
+function injectChild(wt: string, child: any): void {
   const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
-  if (!existsSync(p)) return null
-  return JSON.parse(readFileSync(p, "utf-8"))
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  const item = state.workItems.find((w: any) => w.id === "task:1")
+  item.children.push(child)
+  writeFileSync(p, JSON.stringify(state, null, 2))
 }
 
-function makeSeedIssue(overrides: Record<string, unknown>): Record<string, unknown> {
+function makeChild(id: string, overrides: Record<string, unknown> = {}): any {
   return {
-    id: "i1",
-    dimension: "style",
-    sourcePhase: "quality",
+    id: `issue:${id}`,
+    source: "openspec",
+    externalId: id,
+    type: "issue",
+    title: `issue ${id}`,
+    description: `issue ${id} 描述`,
+    phase: "todo",
+    suspended: false,
+    currentStep: null,
+    tags: {},
+    metadata: { source_phase: "quality", dimension: "style", file: "d.md", line: 0 },
+    children: [],
+    labels: [],
     severity: "High",
-    file: "d.md",
-    line: 0,
-    description: "Test blocking issue",
-    suggestion: "Fix it",
-    status: "open",
-    refixCount: 0,
-    rootCauseGuess: null,
-    exemptReason: null,
-    rejectReason: null,
     ...overrides,
   }
 }
 
-async function setupToReview(root: string, wt: string, fakeGit: FakeGitRunner) {
-  const o = makeCtx("openspec-orchestrator", wt),
-    a = makeCtx("openspec-architect", wt),
-    d = makeCtx("openspec-developer", wt)
-
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({change_id: CID, outcome: "ready", issues: [],
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-  await set_worktree.execute({ change_id: CID }, o)
-  await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-  const state = readStateSync(wt)
-  const tg = state.taskGroups.find((g: any) => g.id === "1")
-  await init.execute({
-    change_id: CID, task_group_id: "1",
-    recovery: { phase: "review" }}, o)
-  await set_worktree.execute({ change_id: CID }, o)
+/** 把 review 验证 tag 全部置 passed（模拟已通过全部 review 子层）。 */
+function seedReviewTags(wt: string): void {
+  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  const item = state.workItems.find((w: any) => w.id === "task:1")
+  item.tags = {
+    "analyze:openspec-architect": "passed",
+    "implement:openspec-developer": "passed",
+    "verify_tool:openspec-reviewer-tool": "passed",
+    "verify_task:openspec-reviewer-task": "passed",
+    "verify_quality:openspec-reviewer-style": "passed",
+    "verify_quality:openspec-reviewer-architecture": "passed",
+    "verify_quality:openspec-reviewer-performance": "passed",
+    "verify_quality:openspec-reviewer-security": "passed",
+    "verify_quality:openspec-reviewer-maintainability": "passed",
+  }
+  writeFileSync(p, JSON.stringify(state, null, 2))
 }
 
-// ── Scene A: quality blocking issue → tool layer passes ──
+/** 把 item 手动拉回 implement step（模拟 review 回退 dev 修复）。 */
+function rewindToImplement(wt: string): void {
+  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  const item = state.workItems.find((w: any) => w.id === "task:1")
+  item.phase = "in_progress"
+  item.currentStep = "implement"
+  writeFileSync(p, JSON.stringify(state, null, 2))
+}
 
-describe("sourcePhase A: quality blocking issue does not block tool layer", () => {
-  test("tool layer with quality blocking issue + Info issues → passes", async () => {
+async function fixIssue(wt: string, fixedIds: string[]): Promise<string> {
+  const item = readItem(wt, CID)
+  return agent_submit.execute(
+    { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: fixedIds, completed_task_ids: taskListOf(item).map((t: any) => t.id) },
+    makeCtx("openspec-developer", wt)
+  )
+}
+
+// ── Scene A: tool 层 issue fixed → 清 verify_tool ──
+
+describe("sourcePhase A: tool 层 issue fixed 只清 verify_tool", () => {
+  test("tool source_phase fixed → verify_tool tag 清，verify_task/quality 保留", async () => {
     const root = `/tmp/sourcePhase-A-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      injectChild(wt, makeChild("t1", { metadata: { source_phase: "tool", dimension: "style", file: "src/a.java", line: 1 } }))
+      seedReviewTags(wt)
 
-    await setupToReview(root, wt, fakeGit)
-
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.issues.push(makeSeedIssue({
-      id: "q1",
-      dimension: "architecture",
-      sourcePhase: "quality",
-      severity: "High",
-      description: "Architecture issue from quality review",
-    }))
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state), "utf-8"
-    )
-
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const result = await tool_review_submit.execute({change_id: CID, passed: true,
-      issues: [{ severity: "Info", file: "d.md", line: 1, dimension: "style" as any, description: "Minor style", suggestion: "Consider" }],
-      fixed_issue_ids: [],}, toolR)
-
-    expect(result).toContain("审核通过")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      await fixIssue(wt, ["t1"])
+      const item = readItem(wt, CID)
+      // tool 层 fixed → verify_tool 清
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      // verify_task 与 verify_quality 保留
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      // child 终态
+      expect(item.children.find((c: WorkItem) => c.externalId === "t1").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
 
-// ── Scene B: tool blocking issue → tool layer rolls back ──
+// ── Scene B: task 层 issue fixed → 清 verify_tool + verify_task ──
 
-describe("sourcePhase B: tool blocking issue causes tool rollback", () => {
-  test("tool layer with tool blocking issue + passed=true → rolls back with issue id", async () => {
+describe("sourcePhase B: task 层 issue fixed 清 verify_tool + verify_task", () => {
+  test("task source_phase fixed → verify_tool + verify_task 清，verify_quality 保留", async () => {
     const root = `/tmp/sourcePhase-B-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      injectChild(wt, makeChild("tk1", { metadata: { source_phase: "task", dimension: "style", file: "src/b.java", line: 2 } }))
+      seedReviewTags(wt)
 
-    await setupToReview(root, wt, fakeGit)
-
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.issues.push(makeSeedIssue({
-      id: "t1",
-      dimension: "tool",
-      sourcePhase: "tool",
-      severity: "High",
-      description: "Tool-level compile error",
-    }))
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state), "utf-8"
-    )
-
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const result = await tool_review_submit.execute({change_id: CID, passed: false,
-      issues: [],
-      fixed_issue_ids: [],}, toolR)
-
-    expect(result).toContain("需回退开发")
-    expect(result).toContain("t1")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      await fixIssue(wt, ["tk1"])
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
 
-// ── Scene C: task blocking issue → task_review_submit throws ──
+// ── Scene C: quality 层 dim issue fixed → 清 verify_tool + 仅该 dim tag ──
 
-describe("sourcePhase C: task blocking issue causes task throw", () => {
-  test("task_review_submit with task blocking issue → throws with issue id", async () => {
+describe("sourcePhase C: quality 层 dim issue fixed 只清该 dim tag", () => {
+  test("quality style fixed → verify_tool + verify_quality:style 清，verify_task 与其他 dim 保留", async () => {
     const root = `/tmp/sourcePhase-C-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const toolR = makeCtx("openspec-reviewer-tool", wt),
-      taskR = makeCtx("openspec-reviewer-task", wt)
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      injectChild(wt, makeChild("q1", { metadata: { source_phase: "quality", dimension: "style", file: "src/c.java", line: 3 } }))
+      seedReviewTags(wt)
 
-    await setupToReview(root, wt, fakeGit)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.issues.push(makeSeedIssue({
-      id: "tk1",
-      dimension: "task",
-      sourcePhase: "task",
-      severity: "High",
-      description: "Task-level verification failure",
-    }))
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state), "utf-8"
-    )
-
-    await expect(
-      task_review_submit.execute({change_id: CID, passed: true,
-        verified_task_ids: ["1", "2"], failed_task_ids: [],
-        fixed_issue_ids: [],}, taskR)
-    ).rejects.toThrow(/passed=true.*Low\+/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      await fixIssue(wt, ["q1"])
+      const item = readItem(wt, CID)
+      // quality fixed 属代码变更 → verify_tool 清
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      // 仅该 dim 的 verify_quality tag 清
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(item.tags["verify_quality:openspec-reviewer-performance"]).toBe("passed")
+      // task 层不受影响
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
 
-// ── Scene D: quality 层维度过滤（仅同维度 quality blocking issue 阻塞） ──
+// ── Scene D: quality 层 exempt → 仅清该 dim tag（不改代码不动 verify_tool/verify_task）──
 
-describe("sourcePhase D: quality 层按 dimension 过滤 blocking issue", () => {
-  async function completeToolTask(wt: string): Promise<void> {
-    const toolR = makeCtx("openspec-reviewer-tool", wt),
-      taskR = makeCtx("openspec-reviewer-task", wt)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    await task_review_submit.execute({
-      change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: []
-    }, taskR)
-  }
+describe("sourcePhase D: quality 层 exempt 仅清该 dim tag", () => {
+  test("quality exempt（dim=architecture）→ 仅 verify_quality:architecture 清，verify_tool/task 保留", async () => {
+    const root = `/tmp/sourcePhase-D-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      injectChild(wt, makeChild("a1", { metadata: { source_phase: "quality", dimension: "architecture", file: "src/d.java", line: 4 } }))
+      seedReviewTags(wt)
 
-  test("style failed 遗留 open issue 不阻塞 architecture passed=true（status=partial）", async () => {
-    const root = `/tmp/sourcePhase-D1-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["a1"], completed_task_ids: taskListOf(item0).map((t: any) => t.id) },
+        makeCtx("openspec-developer", wt)
+      )
+      const item = readItem(wt, CID)
+      // exempt 不改代码 → verify_tool/verify_task 保留
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      // 仅清该 dim
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
 
-    await setupToReview(root, wt, fakeGit)
-    await completeToolTask(wt)
+// ── Scene E: task 层 exempt → 清 verify_tool + verify_task ──
 
-    // style 维度先提交 passed=false 并报 1 个 Low+ quality issue
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-    const r1 = await quality_review_submit.execute({ change_id: CID, passed: false,
-      issues: [{ severity: "Low", file: "d.md", line: 1, dimension: "style" as any,
-        description: "Style residual issue", suggestion: "Fix naming" }],
-      fixed_issue_ids: [] }, styleR)
-    expect(r1).toContain("已提交")
+describe("sourcePhase E: task 层 exempt 清 verify_tool + verify_task", () => {
+  test("task exempt → verify_tool + verify_task 清", async () => {
+    const root = `/tmp/sourcePhase-E-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      injectChild(wt, makeChild("te1", { metadata: { source_phase: "task", dimension: "style", file: "src/e.java", line: 5 } }))
+      seedReviewTags(wt)
 
-    // architecture 维度提交 passed=true 不应被 style 的 open issue 阻塞
-    const archR = makeCtx("openspec-reviewer-architecture", wt)
-    const r2 = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
-    expect(r2).toContain("已提交")
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["te1"], completed_task_ids: taskListOf(item0).map((t: any) => t.id) },
+        makeCtx("openspec-developer", wt)
+      )
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
 
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+// ── Scene F: 集成路径——review 回退 dev 修复后重置生效 ──
+
+describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重置生效", () => {
+  test("verify_quality style failed 聚合回退 implement，dev 修复 style 层 issue → 仅清失败维度与 verify_tool，其余已 passed tag 保留", async () => {
+    const root = `/tmp/sourcePhase-F-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // style reviewer 报 style 层 issue 并 failed → verify_quality 多 agent step 聚合等待，不立即回退
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "q7", title: "Style residual", description: "风格遗留", severity: "Low", source_phase: "quality", dimension: "style", file: "src/f.java", line: 7, suggestion: "改命名" }],
+        },
+        ctx.dims["style"]
+      )
+      let back = readItem(wt, CID)
+      expect(back.phase).toBe("review")
+      expect(back.currentStep).toBe("verify_quality")
+      // 其余 4 维 passed → 全部已裁决 → 聚合回退 implement
+      for (const d of ["architecture", "performance", "security", "maintainability"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      back = readItem(wt, CID)
+      expect(back.phase).toBe("in_progress")
+      expect(back.currentStep).toBe("implement")
+      // fix2 新语义：review failed 不再全清 → 已 passed 的 verify_tool/verify_task 与其余维度 tag 保留
+      expect(back.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(back.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(back.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
+      expect(back.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+
+      // dev 修复 style 层 issue（代码变更）→ reset 按归因清 verify_quality:style + verify_tool；verify_task 与其余维度保留
+      await fixIssue(wt, ["q7"])
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.children.find((c: WorkItem) => c.externalId === "q7").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
-  test("同维度遗留 open quality issue → passed=true rejects（抛错含 passed=true/Low+）", async () => {
-    const root = `/tmp/sourcePhase-D2-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+  test("tool 层 issue fixed 后 verify_tool 需重跑：re-submit 走 verify_tool 门禁路径", async () => {
+    const root = `/tmp/sourcePhase-F2-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      // tool reviewer 报 tool 层 issue 并 failed → 回 implement
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "t7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style", file: "src/g.java", line: 8, suggestion: "修复" }],
+        },
+        ctx.toolR
+      )
+      // tool 层回退到 implement（rollbackChildren：verify_task/quality tag 被清）
+      const item0 = readItem(wt, CID)
+      expect(item0.phase).toBe("in_progress")
+      expect(item0.currentStep).toBe("implement")
+      expect(item0.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
 
-    await setupToReview(root, wt, fakeGit)
-    await completeToolTask(wt)
-
-    // 注入 architecture 同维度遗留 open quality issue
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.issues.push(makeSeedIssue({
-      id: "a1",
-      dimension: "architecture",
-      sourcePhase: "quality",
-      severity: "High",
-      description: "Architecture residual issue",
-    }))
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state), "utf-8"
-    )
-
-    const archR = makeCtx("openspec-reviewer-architecture", wt)
-    await expect(
-      quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
-    ).rejects.toThrow(/passed=true.*Low\+/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // dev 修复 tool 层 issue → 重置 verify_tool tag（此前已 failed 清空，此处保持）
+      await fixIssue(wt, ["t7"])
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.children.find((c: WorkItem) => c.externalId === "t7").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
+})
 
-  test("同维度遗留 rejected quality issue → passed=true rejects（枚举 issue + 引导文案）", async () => {
-    const root = `/tmp/sourcePhase-D2b-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+// ── Scene G: 源头强制归因——quality reviewer 提报缺 source_phase 也归因 quality（死锁根因场景）──
 
-    await setupToReview(root, wt, fakeGit)
-    await completeToolTask(wt)
+describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归因 quality → 回退重审期按维重置", () => {
+  test("architecture reviewer 缺 source_phase 报 issue → child 归因 quality → dev 修复后 verify_quality:architecture tag 被重置", async () => {
+    const root = `/tmp/sourcePhase-G-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // architecture reviewer 报 issue 但不传 source_phase（死锁根因场景：归因 tool → 维 tag 永不清）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "g1", title: "架构遗留", description: "缺 source_phase", severity: "Low", dimension: "architecture", file: "src/g1.java", line: 9, suggestion: "改设计" }],
+        },
+        ctx.dims["architecture"]
+      )
+      let item = readItem(wt, CID)
+      const child = item.children.find((c: WorkItem) => c.externalId === "g1")
+      // 源头强制归因：quality reviewer 提报缺 source_phase → 补写 quality
+      expect(child.metadata["source_phase"]).toBe("quality")
 
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.issues.push(makeSeedIssue({
-      id: "a1",
-      dimension: "architecture",
-      sourcePhase: "quality",
-      severity: "High",
-      status: "rejected",
-      rejectReason: "修复不达标",
-      description: "Architecture rejected issue",
-    }))
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state), "utf-8"
-    )
+      // 其余 4 维 passed → 聚合回退 implement；architecture failed tag 残留
+      for (const d of ["style", "performance", "security", "maintainability"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("failed")
 
-    const archR = makeCtx("openspec-reviewer-architecture", wt)
-    await expect(
-      quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, archR)
-    ).rejects.toThrow(/passed=true[\s\S]*Low\+[\s\S]*#a1\(High\/rejected\/architecture\)[\s\S]*被驳回（rejected）的 issue 仍为未解决阻塞[\s\S]*fixed_issue_ids/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // dev 修复 → resetReviewTagsOnFix 按 quality 归因清 architecture 维 tag（死锁打破）
+      await fixIssue(wt, ["g1"])
+      item = readItem(wt, CID)
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.children.find((c: WorkItem) => c.externalId === "g1").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
+})
 
-  test("5 维 dispatch 完成（4 passed + style failed）→ retry 回 dev_impl，遗留 style issue 未逃逸", async () => {
-    const root = `/tmp/sourcePhase-D3-${Date.now()}`
-    const wt = setupWt(root, join(root, "w"))
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+// ── Scene H: 兜底归因——历史 state（source_phase 缺失但报源是 quality reviewer）也按维重置 ──
 
-    await setupToReview(root, wt, fakeGit)
-    await completeToolTask(wt)
+describe("sourcePhase H: 缺 source_phase 但报源为 quality reviewer 的历史 child → 兜底按维重置", () => {
+  test("legacy child（metadata.source=architecture reviewer、无 source_phase）fixed → verify_quality:architecture tag 被重置", async () => {
+    const root = `/tmp/sourcePhase-H-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      // 模拟修复前遗留 state：报源为 quality reviewer（metadata.source）但 source_phase 缺失
+      injectChild(wt, makeChild("h1", { metadata: { source: "openspec-reviewer-architecture", dimension: "architecture", file: "src/h.java", line: 10 } }))
+      seedReviewTags(wt)
 
-    // style failed 报 1 个 Low+ issue
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-    await quality_review_submit.execute({ change_id: CID, passed: false,
-      issues: [{ severity: "Low", file: "d.md", line: 1, dimension: "style" as any,
-        description: "Style residual issue", suggestion: "Fix naming" }],
-      fixed_issue_ids: [] }, styleR)
-
-    // 其余 4 维 passed=true
-    for (const d of ["architecture", "performance", "security", "maintainability"]) {
-      await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
-    }
-
-    const state = readStateSync(wt)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.status).toBe("dev_impl")
-    expect(tg.phases.review.retryCount).toBe(1)
-    const residual = tg.issues.find((i: any) => i.sourcePhase === "quality" && i.dimension === "style")
-    expect(residual).toBeTruthy()
-    expect(residual.status).toBe("open")
-    expect(tg.phases.review.quality.progress.style).toBe("failed")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      await fixIssue(wt, ["h1"])
+      const item = readItem(wt, CID)
+      // 兜底归因：即使 source_phase 缺省解析为 tool，报源反查命中 architecture 维 → 该维 tag 清
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      // 其余维度 tag 保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      // 报源是 quality reviewer 而非 tool/task 层 → 不清 verify_tool 维度逻辑之外的层级（fixed 属代码变更仍清 verify_tool）
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.children.find((c: WorkItem) => c.externalId === "h1").phase).toBe("done")
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

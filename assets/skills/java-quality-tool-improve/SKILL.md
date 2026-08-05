@@ -136,7 +136,7 @@ sonar.issue.ignore.multicriteria.e1.resourceKey=**/model/*.java
 ```
 
 - 排除范围仅限确实不需要单元测试的类，不得为凑覆盖率扩大排除范围——过度排除属质量配置削弱。
-- 验证命令：`mvn verify -q`（含 JaCoCo check 阶段）或 `mvn jacoco:check`
+- 验证命令：`mvn verify -q; echo "BUILD_STATUS=$?"`（含 JaCoCo check 阶段）或 `mvn jacoco:check`，构建成败以退出码为判据
 
 ## 规则与 severity 映射
 

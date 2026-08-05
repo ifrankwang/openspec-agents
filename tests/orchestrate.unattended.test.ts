@@ -3,29 +3,19 @@ import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
-import { MAX_RETRIES } from "../src/core/constants"
 import {
-  init, status, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit, quality_review_submit,
-  set_unattended
+  init, status, set_unattended,
 } from "../src/adapters/opencode/tools"
-import { handleRetryCheckpoint } from "../src/core/derive"
+import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+import { setupToAnalyze, driveToVerifyTool } from "./helpers-workflow"
 import {
-  renderOrchestratorView, renderArchitectView, renderToolReviewView,
-} from "../src/core/views"
-import type { OrchestrateState, TaskGroupState } from "../src/core/types"
-import { REVIEW_DIMENSIONS } from "../src/core/types"
-import { FakeGitRunner, makeCtx } from "./helpers"
+  createInitialWorkItem, checkpointTriggered, effectiveMaxRetries,
+} from "../src/core/workflow/engine"
+import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
 
 const CID = "test-unattended"
 
 afterAll(() => { __setGitRunner(null) })
-
-function readStateSync(wt: string, cid: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${cid}.json`)
-  if (!existsSync(p)) return null
-  return JSON.parse(readFileSync(p, "utf-8"))
-}
 
 function freshWt(root: string): string {
   const id = `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
@@ -39,50 +29,10 @@ function freshWt(root: string): string {
   return wt
 }
 
-function makeState(overrides?: Partial<OrchestrateState>): OrchestrateState {
-  return {
-    changeId: CID,
-    isolationNamespace: "a1b2c3",
-    taskGroupId: "1",
-    baseBranch: "main",
-    taskGroups: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    ...overrides,
-  } as OrchestrateState
-}
-
-function makeTg(overrides?: Partial<TaskGroupState>): TaskGroupState {
-  return {
-    id: "1",
-    name: "Test Group",
-    taskCount: 2,
-    status: "task_analysis",
-    worktreePath: null,
-    branchName: null,
-    baseRef: null,
-    executionBoundary: null,
-    relevantSpecs: [],
-    devSelfCheckResults: undefined,
-    phases: {
-      architect_review: { completed: false },
-      review: {
-        retryCount: 0,
-        lastResolvedRetryCount: 0,
-        tool: { completed: false },
-        task: { completed: false },
-        quality: {
-          progress: Object.fromEntries(
-            REVIEW_DIMENSIONS.map((d) => [d, "pending"])
-          ) as TaskGroupState["phases"]["review"]["quality"]["progress"],
-        },
-      },
-    },
-    tasks: [],
-    issues: [],
-    blockers: [],
-    ...overrides,
-  }
+/** 从 state 取 task WorkItem。 */
+function taskItemOf(wt: string): any {
+  const state = readState(wt, CID)
+  return state?.workItems?.find((w: any) => w.id === "task:1")
 }
 
 // ───── Test 1: set_unattended sets/clears flag ─────
@@ -90,232 +40,173 @@ function makeTg(overrides?: Partial<TaskGroupState>): TaskGroupState {
 describe("T1: set_unattended tool", () => {
   test("sets unattended=true", async () => {
     const root = `/tmp/ut1-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await set_unattended.execute({ change_id: CID, enabled: true }, o)
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await set_unattended.execute({ change_id: CID, enabled: true }, o)
 
-    const state = readStateSync(wt, CID)
-    expect(state.unattended).toBe(true)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const state = readState(wt, CID)
+      expect(state.unattended).toBe(true)
+    } finally { teardown(root) }
   })
 
   test("clears unattended=false", async () => {
     const root = `/tmp/ut2-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await set_unattended.execute({ change_id: CID, enabled: true }, o)
-    await set_unattended.execute({ change_id: CID, enabled: false }, o)
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await set_unattended.execute({ change_id: CID, enabled: true }, o)
+      await set_unattended.execute({ change_id: CID, enabled: false }, o)
 
-    const state = readStateSync(wt, CID)
-    expect(state.unattended).toBe(false)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      const state = readState(wt, CID)
+      expect(state.unattended).toBe(false)
+    } finally { teardown(root) }
   })
 
   test("orchestrator-only: non-orchestrator gets error", async () => {
     const root = `/tmp/ut3-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const d = makeCtx("openspec-developer", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-
+    const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      await set_unattended.execute({ change_id: CID, enabled: true }, d)
-      expect.unreachable("should have thrown")
-    } catch (e: any) {
-      expect(e.message).toContain("仅限编排者")
-    }
+      const o = makeCtx("openspec-orchestrator", wt)
+      const d = makeCtx("openspec-developer", wt)
 
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-})
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
-// ───── Test 2: Unattended suppresses checkpoint in opx_status ─────
-
-describe("T2: unattended suppresses checkpoint in status", () => {
-  test("status does NOT contain resolve_review when unattended at checkpoint", async () => {
-    const root = `/tmp/ut4-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-    const d = makeCtx("openspec-developer", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-    await set_unattended.execute({ change_id: CID, enabled: true }, o)
-
-    let prevIssueT2: string | undefined
-    for (let round = 1; round <= MAX_RETRIES; round++) {
-      state = readStateSync(wt, CID)
-      const tg = state.taskGroups.find((g: any) => g.id === "1")
-      if (round > 1) {
-        await init.execute({
-          change_id: CID, task_group_id: "1",
-          recovery: { phase: "review" }}, o)
-        await set_worktree.execute({ change_id: CID }, o)
-        await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
-          fixed_issue_ids: prevIssueT2 ? [prevIssueT2] : [] }, d)
+      try {
+        await set_unattended.execute({ change_id: CID, enabled: true }, d)
+        expect.unreachable("should have thrown")
+      } catch (e: any) {
+        expect(e.message).toContain("仅限编排者")
       }
-      await tool_review_submit.execute({ change_id: CID, passed: false,
-        issues: [{ severity: "Low", file: "src/x.java", line: 1, dimension: "style" as any, description: "Tool issue", suggestion: "Fix" }],
-        fixed_issue_ids: prevIssueT2 ? [prevIssueT2] : [] }, toolR)
+    } finally { teardown(root) }
+  })
+})
 
-      state = readStateSync(wt, CID)
-      const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-      prevIssueT2 = tgAfter.issues.length > 0 ? tgAfter.issues[tgAfter.issues.length - 1].id : undefined
+// ───── Test 2: checkpoint 时 unattended 行为（新流：检查点由引擎触发，不因 unattended 抑制）─────
+
+describe("T2: checkpoint 时 unattended 行为", () => {
+  test("unattended 开启下检查点仍由引擎触发：opx_status 渲染检查点视图", async () => {
+    const root = `/tmp/ut4-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      await setupToAnalyze(wt, CID)
+      await driveToVerifyTool(wt, CID)
+      expect(taskItemOf(wt).currentStep).toBe("verify_tool")
+
+      // 注入未终态 child + retryCount 达上限 → 检查点态
+      const state = readState(wt, CID)
+      const item = state.workItems.find((w: any) => w.id === "task:1")
+      item.metadata["_retryCount"] = 5
+      item.children.push({
+        id: "issue:7", externalId: "7", source: "openspec", type: "issue",
+        title: "遗留 issue", description: "d", phase: "todo", suspended: false,
+        currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low",
+      })
+      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      writeFileSync(p, JSON.stringify(state, null, 2))
+
+      const o = makeCtx("openspec-orchestrator", wt)
+      await set_unattended.execute({ change_id: CID, enabled: true }, o)
+
+      const output = await status.execute({ change_id: CID }, o)
+      // 检查点视图（unattended 不抑制）
+      expect(output).toContain("检查点")
+      expect(output).toContain("continue / giveup")
+      expect(output).toContain("checkpoint_decision")
+    } finally { teardown(root) }
+  })
+
+  test("引擎 checkpointTriggered 判定与 unattended 无关（retry 达上限 + 未终态 children）", async () => {
+    const root = `/tmp/ut5-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      await setupToAnalyze(wt, CID)
+      await driveToVerifyTool(wt, CID)
+
+      const state = readState(wt, CID)
+      const item = state.workItems.find((w: any) => w.id === "task:1")
+      item.metadata["_retryCount"] = 5
+      item.children.push({
+        id: "issue:7", externalId: "7", source: "openspec", type: "issue",
+        title: "遗留 issue", description: "d", phase: "todo", suspended: false,
+        currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low",
+      })
+      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      writeFileSync(p, JSON.stringify(state, null, 2))
+
+      const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+      const step = workflow.stepMap.get("verify_tool")!.step
+      expect(checkpointTriggered(item, workflow, step)).toBe(true)
+      expect(effectiveMaxRetries(workflow, step)).toBe(5)
+
+      // 关闭 unattended 后判定不变（引擎按 retry 计数，与无人值守标志无关）
+      const o = makeCtx("openspec-orchestrator", wt)
+      await set_unattended.execute({ change_id: CID, enabled: false }, o)
+      const again = JSON.parse(readFileSync(p, "utf-8"))
+      const item2 = again.workItems.find((w: any) => w.id === "task:1")
+      expect(checkpointTriggered(item2, workflow, step)).toBe(true)
+    } finally { teardown(root) }
+  })
+})
+
+// ───── Test 5: 引擎 checkpointTriggered / effectiveMaxRetries（替代已删 handleRetryCheckpoint）─────
+
+describe("T5: checkpointTriggered / effectiveMaxRetries", () => {
+  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+  const step = workflow.stepMap.get("verify_tool")!.step
+
+  /** 构造含 child 的 WorkItem（hasUnresolvedChildren 由 children 相位决定）。 */
+  function itemWithChildren(resolvedAll: boolean): any {
+    const item = createInitialWorkItem({
+      id: "task:1", source: "openspec", externalId: "1", type: "task",
+      title: "G1", description: "G1",
+    })
+    if (!resolvedAll) {
+      item.children.push({
+        id: "issue:7", externalId: "7", source: "openspec", type: "issue",
+        title: "遗留 issue", description: "d", phase: "todo", suspended: false,
+        currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low",
+      })
     }
-
-    const output = await status.execute({ change_id: CID }, o)
-    expect(output).not.toContain("opx_orch_resolve_review")
-    expect(output).not.toContain("检查点")
-    expect(output).toContain("openspec-developer")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-})
-
-// ───── Test 3: Unattended suppresses question prompts ─────
-
-describe("T3: unattended mode suppresses question prompts", () => {
-  test("architect view: '自行推断' present, '用 question' absent", () => {
-    const state = makeState({ unattended: true })
-    const tg = makeTg({ status: "task_analysis" })
-    const output = renderArchitectView(state, tg)
-    expect(output).toContain("自行推断")
-    expect(output).not.toContain("缺用户答复用 question")
-  })
-
-  test("tool reviewer view: 'skipped' present, '用 question' absent", () => {
-    const state = makeState({ unattended: true })
-    const tg = makeTg({
-      status: "review",
-      worktreePath: "/wt",
-      branchName: "tg-1",
-      baseRef: "base",
-    })
-    const output = renderToolReviewView(state, tg, "openspec-reviewer-tool")
-    expect(output).toContain("skipped")
-    expect(output).not.toContain("用 question 提请用户裁定")
-  })
-})
-
-// ───── Test 4: Normal mode shows question prompts ─────
-
-describe("T4: normal mode shows question prompts", () => {
-  test("architect view: '用 question' present when unattended=false", () => {
-    const state = makeState({ unattended: false })
-    const tg = makeTg({ status: "task_analysis" })
-    const output = renderArchitectView(state, tg)
-    expect(output).toContain("缺用户答复用 question")
-    expect(output).not.toContain("自行推断")
-  })
-
-  test("tool reviewer view: '用 question' present when unattended=false", () => {
-    const state = makeState({ unattended: false })
-    const tg = makeTg({
-      status: "review",
-      worktreePath: "/wt",
-      branchName: "tg-1",
-      baseRef: "base",
-    })
-    const output = renderToolReviewView(state, tg, "openspec-reviewer-tool")
-    expect(output).toContain("用 question 提请用户裁定")
-    expect(output).not.toContain("skipped")
-  })
-
-  test("unattended undefined behaves like false", () => {
-    const state = makeState()
-    const tg = makeTg({ status: "task_analysis" })
-    const output = renderArchitectView(state, tg)
-    expect(output).toContain("缺用户答复用 question")
-    expect(output).not.toContain("自行推断")
-  })
-})
-
-// ───── Test 5: handleRetryCheckpoint behavior ─────
-
-describe("T5: handleRetryCheckpoint unattended behavior", () => {
-  function tgWithRetry(retryCount = 0): TaskGroupState {
-    return makeTg({
-      status: "review",
-      phases: {
-        architect_review: { completed: true },
-        review: {
-          retryCount,
-          lastResolvedRetryCount: 0,
-          tool: { completed: false },
-          task: { completed: false },
-          quality: {
-            progress: Object.fromEntries(
-              REVIEW_DIMENSIONS.map((d) => [d, "pending"])
-            ) as TaskGroupState["phases"]["review"]["quality"]["progress"],
-          },
-        },
-      },
-    })
+    return item
   }
 
-  test("unattended=true returns checkpoint=false even at retryCount=5", () => {
-    const tg = tgWithRetry(4)
-    const result = handleRetryCheckpoint(tg, true)
-    expect(result).not.toBeNull()
-    expect(result!.checkpoint).toBe(false)
-    expect(result!.retryCount).toBe(5)
+  test("retryCount=0 → 不触发检查点", () => {
+    const item = itemWithChildren(false)
+    expect(checkpointTriggered(item, workflow, step)).toBe(false)
   })
 
-  test("unattended=true returns checkpoint=false at retryCount=0", () => {
-    const tg = tgWithRetry(0)
-    const result = handleRetryCheckpoint(tg, true)
-    expect(result).not.toBeNull()
-    expect(result!.checkpoint).toBe(false)
-    expect(result!.retryCount).toBe(1)
+  test("retryCount 未达上限 → 不触发检查点", () => {
+    const item = itemWithChildren(false)
+    item.metadata["_retryCount"] = 3
+    expect(checkpointTriggered(item, workflow, step)).toBe(false)
   })
 
-  test("unattended=false returns null at retryCount=5 (existing behavior)", () => {
-    const tg = tgWithRetry(4)
-    const result = handleRetryCheckpoint(tg, false)
-    expect(result).toBeNull()
+  test("retryCount 达上限且存在未终态 children → 触发检查点", () => {
+    const item = itemWithChildren(false)
+    item.metadata["_retryCount"] = 5
+    expect(checkpointTriggered(item, workflow, step)).toBe(true)
   })
 
-  test("unattended=false returns result below MAX_RETRIES (existing behavior)", () => {
-    const tg = tgWithRetry(2)
-    const result = handleRetryCheckpoint(tg, false)
-    expect(result).not.toBeNull()
-    expect(result!.checkpoint).toBe(false)
-    expect(result!.retryCount).toBe(3)
+  test("retryCount 达上限但全部 children 已终态 → 不触发", () => {
+    const item = itemWithChildren(true)
+    item.metadata["_retryCount"] = 5
+    expect(checkpointTriggered(item, workflow, step)).toBe(false)
   })
 
-  test("unattended=undefined returns null at retryCount=5 (backward compat)", () => {
-    const tg = tgWithRetry(4)
-    const result = handleRetryCheckpoint(tg)
-    expect(result).toBeNull()
+  test("effectiveMaxRetries：step 无 max_retries 时回退 workflow.max_retries", () => {
+    const wf = { ...workflow, max_retries: 5 } as any
+    const s = { ...step, max_retries: undefined } as any
+    expect(effectiveMaxRetries(wf, s)).toBe(5)
   })
 
-  test("unattended=undefined returns result below MAX_RETRIES (backward compat)", () => {
-    const tg = tgWithRetry(1)
-    const result = handleRetryCheckpoint(tg)
-    expect(result).not.toBeNull()
-    expect(result!.retryCount).toBe(2)
+  test("effectiveMaxRetries：step 声明 max_retries 时优先", () => {
+    const wf = { ...workflow, max_retries: 5 } as any
+    const s = { ...step, max_retries: 3 } as any
+    expect(effectiveMaxRetries(wf, s)).toBe(3)
   })
 })

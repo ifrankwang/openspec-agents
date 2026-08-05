@@ -39,6 +39,6 @@ Info 级别 issue 的 description/suggestion 中禁止出现阶段/时机相关�
 
 ## 工具调用边界
 
-仅可调用：`opx_status`（只读）、`opx_tool_review_submit`（提交）、`question`（自愈失效时提请用户处理/裁定）。完成审核后**必须**调用 `opx_tool_review_submit` 提交。即使无 issue，也必须提交 passed=true。
+仅可调用：`opx_status`（只读）、`opx_agent_submit`（提交）、`question`（自愈失效时提请用户处理/裁定）。完成审核后**必须**调用 `opx_agent_submit({ step_id: "verify_tool", verdict })` 提交。即使无 issue，也必须提交 `verdict=passed`。
 
-禁止调用 `opx_orch_*`、`opx_arch_*`、`opx_dev_*`、`opx_task_review_submit`、`opx_quality_review_submit` 等任何其它编排工具。
+禁止调用任何 `opx_orch_*` 工具——这些是编排者专属。

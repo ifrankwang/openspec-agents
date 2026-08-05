@@ -9,11 +9,15 @@ capabilities: ["efficiency", "tech-stack-java"]
 ## 构建命令
 
 ```bash
-mvn verify                            # 全量生命周期
+mvn verify                            # 全量验证（单次覆盖全部质量检查）
 mvn spotless:apply                    # 自动格式化
 mvn compile                           # 编译
 mvn test                              # 运行测试
 ```
+
+- `mvn verify` 为全量验证命令，单次执行即覆盖编译、测试、spotless:check、pmd:check、JaCoCo 覆盖率。构建成败以 `mvn verify -q; echo "BUILD_STATUS=$?"` 的退出码为唯一判据，不依赖肉眼从输出尾部寻找 BUILD SUCCESS/FAILURE 行（`-q` 静默模式抑制 INFO 级 BUILD 行，输出过长时尾部亦不可靠）
+- 确认结果时禁止重复执行同一构建命令，单次执行已覆盖全量质量检查；修复后复验属正常重跑
+- 需要抽查输出细节时使用非 `-q` 形态 + `grep -E "Tests run|ERROR|jacoco|spotless|pmd"` 提取关键行，禁止仅以 `tail`/`head` 截断输出导致结论行丢失后重跑
 
 ## 代码质量工具
 

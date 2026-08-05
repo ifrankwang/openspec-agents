@@ -1,34 +1,8 @@
-import type { TaskGroupState, TaskItem, IssueItem, OrchestrateState, Phase, OrchestrateStatus, ReviewDimension, DimensionVerdict, QualityLayerProgress, Phases } from "./types.js"
-import { BLOCKING_SEVERITIES, MAX_RETRIES, ORCHESTRATOR_AGENT, DIMENSION_AGENT_MAP } from "./constants.js"
-import { REVIEW_DIMENSIONS } from "./types.js"
-
-export function createEmptyPhases(): Phases {
-  return {
-    architect_review: { completed: false },
-    review: {
-      retryCount: 0,
-      lastResolvedRetryCount: 0,
-      tool: { completed: false },
-      task: { completed: false },
-      quality: { progress: createEmptyQualityProgress() },
-    },
-  }
-}
-
-export function handleRetryCheckpoint(
-  tg: TaskGroupState,
-  unattended?: boolean
-): { checkpoint: boolean; retryCount: number } | null {
-  tg.phases.review.retryCount++
-  if (unattended) {
-    return { checkpoint: false, retryCount: tg.phases.review.retryCount }
-  }
-  const retryCount = tg.phases.review.retryCount
-  if (retryCount > 0 && retryCount % MAX_RETRIES === 0) {
-    return null
-  }
-  return { checkpoint: false, retryCount }
-}
+import type { TaskGroupState, IssueItem, OrchestrateState, Phase, QualityLayerProgress, ExecutionBoundary, BlockerItem } from "./types.js"
+import { BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT } from "./constants.js"
+import type { WorkItem, WorkItemPhase } from "./workflow/types.js"
+import { resolveChildIssueFields } from "./workflow/reset.js"
+import { taskListOf, issueChildrenOf } from "./task-children.js"
 
 export function createEmptyQualityProgress(): QualityLayerProgress {
   return {
@@ -38,22 +12,6 @@ export function createEmptyQualityProgress(): QualityLayerProgress {
     security: "pending",
     maintainability: "pending",
   }
-}
-
-export function deriveStatus(tg: TaskGroupState, currentTaskGroupId: string): OrchestrateStatus {
-  if (tg.status === "completed") return "completed"
-  if (tg.status === "task_analysis" && tg.id !== currentTaskGroupId && phasesAllEmpty(tg)) return "not_started"
-  return "in_progress"
-}
-
-export function phasesAllEmpty(tg: TaskGroupState): boolean {
-  const hasReviewActivity = tg.phases.review.retryCount > 0
-  return !tg.phases.architect_review.completed
-    && tg.status === "task_analysis"
-    && tg.tasks.every((t) => t.status === "open")
-    && !isReviewCompleted(tg)
-    && tg.issues.length === 0
-    && !hasReviewActivity
 }
 
 export function blockingIssues<T extends { severity: string; status?: string; sourcePhase?: string; dimension?: string }>(
@@ -84,30 +42,6 @@ export function isStatusUnresolved(status?: string): boolean {
   return !status || (ISSUE_UNRESOLVED_STATUSES as readonly string[]).includes(status)
 }
 
-export function allTasksVerified(tasks: TaskItem[]): boolean {
-  return tasks.length > 0 && tasks.every((t) => t.status === "verified")
-}
-
-export function dimsWithPendingAction(tg: TaskGroupState): Set<string> {
-  const dims = new Set<string>()
-  for (const i of tg.issues) {
-    if (i.sourcePhase === "quality" && (i.status === "submitted" || i.status === "exemption_requested")) dims.add(i.dimension)
-  }
-  return dims
-}
-
-export function isReviewCompleted(tg: TaskGroupState): boolean {
-  return tg.phases.review.tool.completed
-    && tg.phases.review.task.completed
-    && REVIEW_DIMENSIONS.every(d => tg.phases.review.quality.progress[d] === "passed")
-    && !hasBlockingIssues(tg.issues)
-    && !tg.blockers.some((blocker) => blocker.status !== "resolved")
-}
-
-export function computeRequiredDims(tg: TaskGroupState): ReviewDimension[] {
-  return REVIEW_DIMENSIONS.filter(d => tg.phases.review.quality.progress[d] !== "passed")
-}
-
 export function assertOrchestrator(agent: string, toolName: string): void {
   if (agent !== ORCHESTRATOR_AGENT) {
     throw new Error(
@@ -122,28 +56,88 @@ export function assertAgent(agent: string, toolName: string, allowedAgents: stri
   }
 }
 
-export function deriveCurrentAgents(tg: TaskGroupState): string[] {
-  if (tg.status === "task_analysis") return ["openspec-architect"]
-  if (tg.status === "dev_impl") return tg.worktreePath && tg.baseRef ? ["openspec-developer"] : []
-  if (tg.status === "review") {
-    if (!tg.phases.review.tool.completed) return ["openspec-reviewer-tool"]
-    if (!tg.phases.review.task.completed) return ["openspec-reviewer-task"]
-    const requiredDims = computeRequiredDims(tg)
-    return requiredDims.map((d) => DIMENSION_AGENT_MAP[d])
-  }
-  return []
-}
-
-export function assertPassWithIssues(passed: boolean, issues: Array<{ severity: string }>, toolName: string): void {
-  if (passed && hasBlockingIssues(issues)) {
-    throw new Error(
-      `工具 "${toolName}"：报告声称 passed=true，但 issues 中包含 Low 及以上严重级别的问题。passed=true 只能带 Info 级别 issue；有 Low+ issue 时必须设 passed=false。`
-    )
-  }
-}
-
 export function findTaskGroup(state: OrchestrateState, id: string): TaskGroupState {
-  const tg = state.taskGroups.find((g) => g.id === id)
-  if (!tg) throw new Error(`任务组 "${id}" 不在任务清单中。`)
-  return tg
+  const item = state.workItems.find((w) => w.id === `task:${id}`)
+  if (!item) throw new Error(`任务组 "${id}" 不在任务清单中。`)
+  return taskGroupFromWorkItem(item)
+}
+
+// ─── 单轨只读投影：workItems（事实源）→ TaskGroupState（旧流工具/视图读侧兼容）───
+
+function childPhaseToIssueStatus(phase: WorkItemPhase): IssueItem["status"] {
+  switch (phase) {
+    case "done": return "verified"
+    case "cancelled": return "exempted"
+    case "review": return "submitted"
+    default: return "open"
+  }
+}
+
+/** child → IssueItem 投影（旧流工具/视图读侧兼容，children 为事实源）。 */
+function projectIssueFromChild(child: WorkItem): IssueItem {
+  const f = resolveChildIssueFields(child)
+  const baseStatus = childPhaseToIssueStatus(child.phase)
+  const hasExemptRequest = child.metadata["exempt_request"] !== undefined
+  return {
+    id: child.externalId ?? child.id.replace(/^issue:/, ""),
+    dimension: f.dimension,
+    sourcePhase: f.sourcePhase,
+    severity: child.severity ?? "Info",
+    file: f.file,
+    line: f.line,
+    description: child.description,
+    suggestion: typeof child.metadata["suggestion"] === "string" ? child.metadata["suggestion"] : "",
+    status: baseStatus === "open" && hasExemptRequest ? "exemption_requested" : baseStatus,
+    refixCount: 0,
+    rootCauseGuess: typeof child.metadata["root_cause_guess"] === "string" ? child.metadata["root_cause_guess"] : null,
+    exemptReason: typeof child.metadata["exempt_reason"] === "string" ? child.metadata["exempt_reason"] : null,
+    rejectReason: typeof child.metadata["reject_reason"] === "string" ? child.metadata["reject_reason"] : null,
+    rule: typeof child.metadata["rule"] === "string" ? child.metadata["rule"] : undefined,
+  }
+}
+
+/** WorkItem phase → 旧 tg.status（投影用；done 归 review 待收尾，cancelled 归 completed）。 */
+function workItemPhaseToTaskGroupStatus(phase: WorkItemPhase): Phase {
+  switch (phase) {
+    case "todo": return "task_analysis"
+    case "in_progress": return "dev_impl"
+    case "review":
+    case "done": return "review"
+    default: return "completed"
+  }
+}
+
+/**
+ * workItems（单轨事实源）→ TaskGroupState 只读投影。
+ * 供旧流工具（arch_submit 等）与旧视图读侧兼容：字段全部由 WorkItem.metadata/children 派生，
+ * 变更不写回（单轨下 workItems 为唯一事实源）。reviews/phases 等旧结构无对应新流数据时给空值。
+ */
+export function taskGroupFromWorkItem(item: WorkItem): TaskGroupState {
+  const m = item.metadata
+  const tasks = taskListOf(item)
+  return {
+    id: item.externalId ?? item.id.replace(/^task:/, ""),
+    name: typeof m["name"] === "string" ? m["name"] : item.title,
+    taskCount: typeof m["task_count"] === "number" ? m["task_count"] : tasks.length,
+    worktreePath: typeof m["worktree_path"] === "string" ? m["worktree_path"] : null,
+    branchName: typeof m["branch_name"] === "string" ? m["branch_name"] : null,
+    baseRef: typeof m["base_ref"] === "string" ? m["base_ref"] : null,
+    executionBoundary: (m["execution_boundary"] as ExecutionBoundary) ?? null,
+    relevantSpecs: Array.isArray(m["relevant_specs"]) ? (m["relevant_specs"] as string[]) : [],
+    status: workItemPhaseToTaskGroupStatus(item.phase),
+    phases: {
+      architect_review: { completed: false },
+      review: {
+        retryCount: 0,
+        lastResolvedRetryCount: 0,
+        tool: { completed: false },
+        task: { completed: false },
+        quality: { progress: createEmptyQualityProgress() },
+      },
+    },
+    tasks,
+    issues: issueChildrenOf(item).map(projectIssueFromChild),
+    blockers: Array.isArray(m["blockers"]) ? (m["blockers"] as BlockerItem[]) : [],
+    agentSummaries: typeof m["agent_summaries"] === "object" ? (m["agent_summaries"] as Record<string, string>) : undefined,
+  }
 }

@@ -1,1376 +1,738 @@
 /**
- * 编排优化测试：阶段门禁、Recovery 自动补 executionBoundary、
- * Recovery review_layer 子阶段参数、空 issue 提交回归
+ * 编排优化测试（M1e 新流单轨重写版）
  *
- * 这些测试验证即将新增的行为。当前代码可能尚未实现，测试预期部分失败。
- * 测试失败时应如实汇报失败内容，不得弱化断言。
+ * 旧流 B1-B12 场景语义全部迁移到新流（workItems 单轨，经 opx_agent_submit 驱动）：
+ * B1   opx_status 阶段门禁视图（✅ 当前轮到你执行 / ⛔ 阶段门禁 / 当前预期角色）
+ * B2   Recovery 阶段恢复（item.phase / currentStep / tags 断言）
+ * B3   Recovery review_layer 子阶段参数（tool→task→quality 起始层 + 非法组合报错）
+ * B4   boundary（analyze execution_boundary 必传/落盘 + verify_* boundary_expansion 合并/拦截）
+ * B5   retryCount 不重置（dev 修复提交 / checkpoint continue 均不清 _retryCount）
+ * B6   opx_status 视图（orchestrator 分派 / working / gate 三态）
+ * B7/B9 verify_quality 维度 gate（5 维全推荐、提交后不再分派、全提交→done 终态）
+ * B8   taskNumber 数字 ID 归一化（normalizeTaskIds）+ init base_branch
+ * B10  dev 提交后 review 层按 issue sourcePhase 精化重置（resetReviewTagsOnFix 集成路径）
+ * B11  agentSummaries 会话摘要（metaOf 断言 + 视图渲染 + recovery 保留）
+ * B12  new_children rule 透传（child.metadata.rule）
+ *
+ * 状态断言映射：taskGroups → taskItemOf/readItem；tg.status → item.phase；
+ * tg.tasks → metaOf(item,"tasks")；tg.agentSummaries → metaOf(item,"agent_summaries")。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-
 import { __setGitRunner } from "../src/core/git"
-import { MAX_RETRIES } from "../src/core/constants"
+import { init, status, agent_submit } from "../src/adapters/opencode/tools"
+import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
-  init, status, set_worktree, arch_submit, dev_submit,
-  tool_review_submit, task_review_submit, quality_review_submit
-} from "../src/adapters/opencode/tools"
-import { renderDeveloperView } from "../src/core/views"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+  setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
+  taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS, rollbackQuality,
+} from "./helpers-workflow"
 
 const CID = "test-optimize"
+
 afterAll(() => { __setGitRunner(null) })
 
-function freshWt(root: string, cid: string = CID): string {
-  const id = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-  const wt = join(root, id, "w")
-  mkdirSync(join(wt, "openspec", "changes", cid), { recursive: true })
-  writeFileSync(
-    join(wt, "openspec", "changes", cid, "tasks.md"),
-    `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2 [spec:s2]\n\n## 2. G2\n\n- [ ] 2.1 T3\n`,
-    "utf-8"
-  )
-  return wt
+function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
+  const root = `/tmp/opt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const { worktree, fakeGit } = setupWithFakeGit(root, CID)
+  return { wt: worktree, root, fakeGit }
 }
 
-function readStateSync(wt: string, cid: string = CID): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${cid}.json`)
-  if (!existsSync(p)) return null
-  return JSON.parse(readFileSync(p, "utf-8"))
+function statePath(wt: string): string {
+  return join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
 }
 
-/** 将当前状态推进到 dev_submit 已完成（dev_impl 阶段结束） */
-async function setupThroughDevSubmit(
-  wt: string, fakeGit: FakeGitRunner
-): Promise<{ orch: any; arch: any; dev: any }> {
-  const o = makeCtx("openspec-orchestrator", wt)
-  const a = makeCtx("openspec-architect", wt)
-  const d = makeCtx("openspec-developer", wt)
-
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({change_id: CID, outcome: "ready",
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-  await set_worktree.execute({ change_id: CID }, o)
-  const state = readStateSync(wt, CID)
-  const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-  await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-  return { orch: o, arch: a, dev: d }
+/** 直接改写活跃 task WorkItem（手动构造前置状态用）。 */
+function rewriteItem(wt: string, mutate: (item: any) => void): void {
+  const p = statePath(wt)
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  mutate(state.workItems.find((w: any) => w.id === "task:1"))
+  writeFileSync(p, JSON.stringify(state, null, 2))
 }
 
-/** 将当前状态推进到 review 阶段（tool+task 已完成） */
-async function setupThroughReviewReady(
-  wt: string, fakeGit: FakeGitRunner
-): Promise<{ orch: any; arch: any; dev: any; toolR: any; taskR: any }> {
-  const o = makeCtx("openspec-orchestrator", wt)
-  const a = makeCtx("openspec-architect", wt)
-  const d = makeCtx("openspec-developer", wt)
-  const toolR = makeCtx("openspec-reviewer-tool", wt)
-  const taskR = makeCtx("openspec-reviewer-task", wt)
-
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({change_id: CID, outcome: "ready",
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-  await set_worktree.execute({ change_id: CID }, o)
-  let state = readStateSync(wt, CID)
-  const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-  await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-  const s1 = readStateSync(wt, CID)
-  const tg1 = s1.taskGroups.find((g: any) => g.id === "1")
-  await init.execute({
-    change_id: CID, task_group_id: "1",
-    recovery: { phase: "review" }}, o)
-  await set_worktree.execute({ change_id: CID }, o)
-  await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-  await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
-
-  return { orch: o, arch: a, dev: d, toolR, taskR }
+/** 注入 issue child（metadata 承载归因字段），返回 externalId。 */
+function injectIssue(wt: string, overrides: Record<string, unknown>): string {
+  const id = `inj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  rewriteItem(wt, (item) => {
+    item.children.push({
+      id: `issue:${id}`,
+      source: "openspec",
+      externalId: id,
+      type: "issue",
+      title: "注入 issue",
+      description: "注入 issue 描述",
+      phase: "todo",
+      suspended: false,
+      currentStep: null,
+      tags: {},
+      metadata: {
+        source_phase: (overrides.sourcePhase as string) ?? "tool",
+        dimension: (overrides.dimension as string) ?? "style",
+        file: overrides.file ?? "",
+        line: overrides.line ?? 0,
+        suggestion: overrides.suggestion ?? "",
+        rule: overrides.rule ?? "",
+      },
+      children: [],
+      labels: [],
+      severity: (overrides.severity as string) ?? "Low",
+    })
+  })
+  return id
 }
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 1: opx_status 阶段门禁（gate）
-// ════════════════════════════════════════════════════════════════
+/** 把所有 review 层验证 tag 置为 passed（模拟 review 已全量通过），并把 item 移回 implement 供 dev 提交。 */
+function setReviewAllPassed(wt: string): void {
+  rewriteItem(wt, (item) => {
+    item.phase = "in_progress"
+    item.currentStep = "implement"
+    item.tags = {
+      "analyze:openspec-architect": "passed",
+      "implement:openspec-developer": "passed",
+      "verify_tool:openspec-reviewer-tool": "passed",
+      "verify_task:openspec-reviewer-task": "passed",
+    }
+    for (const d of DIMENSION_AGENTS) {
+      item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
+    }
+  })
+}
+
+/** 捕获抛错并断言错误文案。 */
+async function expectError(p: Promise<unknown>, pattern: RegExp): Promise<Error> {
+  const err = await p.catch((e: Error) => e)
+  expect(err).toBeInstanceOf(Error)
+  expect(err.message).toMatch(pattern)
+  return err
+}
 
 describe("B1. opx_status 阶段门禁", () => {
-
-  // B1.1 初始化后 status=task_analysis → architect 可过 gate，developer 被拒绝
-  test("task_analysis 阶段 → architect 可过 gate，developer 被拒绝", async () => {
-    const root = `/tmp/optimize-b1a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-    const d = makeCtx("openspec-developer", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-
-    // architect should pass gate
-    const archView = await status.execute({ change_id: CID }, a)
-    const archStr = typeof archView === "string" ? archView : JSON.stringify(archView)
-    expect(archStr).toMatch(/✅ 当前轮到你执行/)
-
-    // developer should be rejected by gate
-    const devView = await status.execute({ change_id: CID }, d)
-    const devStr = typeof devView === "string" ? devView : JSON.stringify(devView)
-    expect(devStr).toMatch(/⛔ 阶段门禁/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("todo/analyze：architect 可过 gate，developer 被门禁且预期角色为 architect", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const archView = await status.execute({ change_id: CID }, ctx.arch)
+      expect(archView).toContain("# ✅ 当前轮到你执行")
+      const devView = await status.execute({ change_id: CID }, ctx.dev)
+      expect(devView).toContain("# ⛔ 阶段门禁")
+      expect(devView).toContain("当前预期角色为：`openspec-architect`")
+    } finally { teardown(root) }
   })
 
-  // B1.2 dev_impl 阶段 → developer 可过 gate，reviewer-tool 被拒绝
-  test("dev_impl 阶段 → developer 可过 gate，reviewer-tool 被拒绝", async () => {
-    const root = `/tmp/optimize-b1b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-    const d = makeCtx("openspec-developer", wt)
-
-    // 只做到 set_worktree（status=dev_impl），不调 dev_submit（dev_submit 现在自动进 review）
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-
-    // developer should pass gate
-    const devView = await status.execute({ change_id: CID }, d)
-    const devStr = typeof devView === "string" ? devView : JSON.stringify(devView)
-    expect(devStr).toMatch(/✅ 当前轮到你执行/)
-
-    // reviewer-tool should be rejected
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const toolView = await status.execute({ change_id: CID }, toolR)
-    const toolStr = typeof toolView === "string" ? toolView : JSON.stringify(toolView)
-    expect(toolStr).toMatch(/⛔ 阶段门禁/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("in_progress/implement：developer 可过 gate，reviewer-tool 被门禁", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      const devView = await status.execute({ change_id: CID }, ctx.dev)
+      expect(devView).toContain("# ✅ 当前轮到你执行")
+      const toolView = await status.execute({ change_id: CID }, ctx.toolR)
+      expect(toolView).toContain("# ⛔ 阶段门禁")
+      expect(toolView).toContain("当前预期角色为：`openspec-developer`")
+    } finally { teardown(root) }
   })
 
-  // B1.3 review 阶段未完成 tool → reviewer-tool 可过 gate，reviewer-task 被拒绝
-  test("review 阶段 tool 未完成 → reviewer-tool 可过 gate，reviewer-task 被拒绝", async () => {
-    const root = `/tmp/optimize-b1c-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-
-    // 设置到 dev_submit 完成
-    const { orch, arch, dev } = await setupThroughDevSubmit(wt, fakeGit)
-
-    // recovery 到 review（此时 tool 未完成）
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const taskR = makeCtx("openspec-reviewer-task", wt)
-
-    const toolView = await status.execute({ change_id: CID }, toolR)
-    const toolStr = typeof toolView === "string" ? toolView : JSON.stringify(toolView)
-    expect(toolStr).toMatch(/✅ 当前轮到你执行/)
-
-    const taskView = await status.execute({ change_id: CID }, taskR)
-    const taskStr = typeof taskView === "string" ? taskView : JSON.stringify(taskView)
-    expect(taskStr).toMatch(/⛔ 阶段门禁/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("review/verify_tool：reviewer-tool 可过 gate，reviewer-task 被门禁", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      const toolView = await status.execute({ change_id: CID }, ctx.toolR)
+      expect(toolView).toContain("# ✅ 当前轮到你执行")
+      const taskView = await status.execute({ change_id: CID }, ctx.taskR)
+      expect(taskView).toContain("# ⛔ 阶段门禁")
+      expect(taskView).toContain("当前预期角色为：`openspec-reviewer-tool`")
+    } finally { teardown(root) }
   })
 
-  // B1.4 review 阶段 tool 完成 task 未完成 → reviewer-task 可过，quality 被拒绝
-  test("review 阶段 tool 完成 task 未完成 → reviewer-task 可过 gate，quality 被拒绝", async () => {
-    const root = `/tmp/optimize-b1d-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-
-    const { orch, arch, dev } = await setupThroughDevSubmit(wt, fakeGit)
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-
-    const taskR = makeCtx("openspec-reviewer-task", wt)
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-
-    const taskView = await status.execute({ change_id: CID }, taskR)
-    const taskStr = typeof taskView === "string" ? taskView : JSON.stringify(taskView)
-    expect(taskStr).toMatch(/✅ 当前轮到你执行/)
-
-    const styleView = await status.execute({ change_id: CID }, styleR)
-    const styleStr = typeof styleView === "string" ? styleView : JSON.stringify(styleView)
-    expect(styleStr).toMatch(/⛔ 阶段门禁/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("review/verify_task：reviewer-task 可过 gate，quality reviewer 被门禁", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTask(wt, CID)
+      const taskView = await status.execute({ change_id: CID }, ctx.taskR)
+      expect(taskView).toContain("# ✅ 当前轮到你执行")
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("# ⛔ 阶段门禁")
+      expect(styleView).toContain("当前预期角色为：`openspec-reviewer-task`")
+    } finally { teardown(root) }
   })
 
-  // B1.5 review 阶段全部完成 → 对应 quality reviewer 可过 gate
-  test("review 阶段 tool+task 完成 → quality reviewer 可过 gate", async () => {
-    const root = `/tmp/optimize-b1e-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-
-    const { orch } = await setupThroughReviewReady(wt, fakeGit)
-
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-    const archR = makeCtx("openspec-reviewer-architecture", wt)
-
-    const styleView = await status.execute({ change_id: CID }, styleR)
-    const styleStr = typeof styleView === "string" ? styleView : JSON.stringify(styleView)
-    expect(styleStr).toMatch(/✅ 当前轮到你执行/)
-
-    const archView = await status.execute({ change_id: CID }, archR)
-    const archStr = typeof archView === "string" ? archView : JSON.stringify(archView)
-    expect(archStr).toMatch(/✅ 当前轮到你执行/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("review/verify_quality：5 维 quality reviewer 均可过 gate", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      for (const d of DIMENSION_AGENTS) {
+        const view = await status.execute({ change_id: CID }, ctx.dims[d])
+        expect(view).toContain("# ✅ 当前轮到你执行")
+      }
+    } finally { teardown(root) }
   })
 
-  // B1.6 orchestrator 不受 gate 影响（所有阶段均正常）
-  test("orchestrator 不受 gate 影响 → 始终正常渲染", async () => {
-    const root = `/tmp/optimize-b1f-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-
-    // task_analysis 阶段
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const view1 = await status.execute({ change_id: CID }, o)
-    const s1 = typeof view1 === "string" ? view1 : JSON.stringify(view1)
-    expect(s1).toMatch(/编排进度/)
-
-    // dev_impl 阶段 — status 不应抛 gate 异常
-    // 通过 arch_submit + set_worktree 进入 dev_impl
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, o)
-    const view2 = await status.execute({ change_id: CID }, o)
-    const s2 = typeof view2 === "string" ? view2 : JSON.stringify(view2)
-    expect(s2).toMatch(/编排进度/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("orchestrator 不受 gate 影响：todo/implement 阶段均正常渲染", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const view1 = await status.execute({ change_id: CID }, ctx.orch)
+      expect(view1).toContain("# 编排进度")
+      await driveToImplement(wt, CID)
+      const view2 = await status.execute({ change_id: CID }, ctx.orch)
+      expect(view2).toContain("# 编排进度")
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 2: Recovery 自动补非空 executionBoundary
-// ════════════════════════════════════════════════════════════════
-
-describe("B2. Recovery 自动补非空 executionBoundary", () => {
-
-  // B2.1 恢复到 review 且无 existing 边界 → 自动填充，边界非 null
-  test("recovery review 无 existing 边界 → 自动填充 executionBoundary", async () => {
-    const root = `/tmp/optimize-b2a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-
-    // 先走正常流程设好 worktree
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-
-    // null out executionBoundary 模拟无边界场景
-    tg.executionBoundary = null
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-
-    // 再 init recovery to review → 应自动填充边界
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-
-    state = readStateSync(wt, CID)
-    const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.executionBoundary).toBeNull()
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+describe("B2. Recovery 阶段恢复", () => {
+  test("recovery dev_impl → in_progress/implement，analyze passed tag", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(item.tags["analyze:openspec-architect"]).toBe("passed")
+    } finally { teardown(root) }
   })
 
-  // B2.2 recovery 不再自动填充 executionBoundary（需 arch_submit 设置）
-  test("recovery 后 executionBoundary 为空", async () => {
-    const root = `/tmp/optimize-b2b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-
-    tg.executionBoundary = null
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-
-    state = readStateSync(wt, CID)
-    const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.executionBoundary).toBeNull()
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("recovery review → review/verify_tool，analyze+implement passed tag", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_tool")
+      expect(item.tags["analyze:openspec-architect"]).toBe("passed")
+      expect(item.tags["implement:openspec-developer"]).toBe("passed")
+    } finally { teardown(root) }
   })
 
-  // B2.3 恢复到 review 有 existing 边界 → recovery 不生成边界
-  test("recovery review 有 existing 边界 → 不覆盖（继承原值）", async () => {
-    const root = `/tmp/optimize-b2c-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-
-    // 走完整的流程设边界
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src/main"], allowed_packages: ["com.original"], notes: "original notes" }}, makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    const devWt = tg.worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, makeCtx("openspec-developer", wt))
-
-    state = readStateSync(wt, CID)
-    const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-    // 改 diff 的内容，但边界应有原值
-
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-
-    state = readStateSync(wt, CID)
-    const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.executionBoundary.allowed_directories).toEqual(["src/main"])
-    expect(tgAfter.executionBoundary.allowed_packages).toContain("com.original")
-    expect(tgAfter.executionBoundary.notes).toBe("original notes")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-
-  // B2.4 提 issue 时 boundary_expansion → 边界 directories 能正常 append
-  test("提 issue 时 boundary_expansion → 边界 directories 正常 append", async () => {
-    const root = `/tmp/optimize-b2d-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-    const d = makeCtx("openspec-developer", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-
-    // 正常走到 tool review（有边界）
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    const devWt = tg.worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-    state = readStateSync(wt, CID)
-    const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-
-    // 提一条 issue 在新目录 + boundary_expansion
-    await tool_review_submit.execute({change_id: CID, passed: false,
-      issues: [{ dimension: "style", severity: "Low", file: "new-dir/x.java", line: 1, description: "Style issue", suggestion: "Fix" }],
-      fixed_issue_ids: [],
-      boundary_expansion: { allowed_directories: ["new-dir"] }}, toolR)
-
-    state = readStateSync(wt, CID)
-    const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.executionBoundary).not.toBeNull()
-    expect(tgAfter.executionBoundary.allowed_directories).toContain("new-dir")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("无 recovery 重复 init 保留既有阶段", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await driveToImplement(wt, CID)
+      const r = await init.execute({ change_id: CID, task_group_id: "1" }, ctx.orch)
+      expect(r).toBe("编排会话已初始化。")
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+    } finally { teardown(root) }
   })
 })
-
-// ════════════════════════════════════════════════════════════════
-//  Behavior 3: Recovery review_layer 子阶段参数
-// ════════════════════════════════════════════════════════════════
 
 describe("B3. Recovery review_layer 子阶段参数", () => {
-
-  // B3.1 recovery review + review_layer=task → tool.completed=true
-  test("recovery review + review_layer=task → tool.completed=true", async () => {
-    const root = `/tmp/optimize-b3a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", review_layer: "task" }}, o)
-
-    const state2 = readStateSync(wt, CID)
-    const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
-    expect(tg2.phases.review.tool.completed).toBe(true)
-    expect(tg2.phases.review.task.completed).toBe(false)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("recovery review + review_layer=task → verify_task 起始，tool passed tag", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "task" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.currentStep).toBe("verify_task")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+    } finally { teardown(root) }
   })
 
-  // B3.2 recovery review + review_layer=quality → tool+task.completed=true
-  test("recovery review + review_layer=quality → tool+task.completed=true", async () => {
-    const root = `/tmp/optimize-b3b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", review_layer: "quality" }}, o)
-
-    const state2 = readStateSync(wt, CID)
-    const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
-    expect(tg2.phases.review.tool.completed).toBe(true)
-    expect(tg2.phases.review.task.completed).toBe(true)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("recovery review + review_layer=quality → verify_quality 起始，tool+task passed tag", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.currentStep).toBe("verify_quality")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+    } finally { teardown(root) }
   })
 
-  // B3.3 recovery review + review_layer=tool → 同默认（全部未完成）
-  test("recovery review + review_layer=tool → 同默认（全部未完成）", async () => {
-    const root = `/tmp/optimize-b3c-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", review_layer: "tool" }}, o)
-
-    const state2 = readStateSync(wt, CID)
-    const tg2 = state2.taskGroups.find((g: any) => g.id === "1")
-    expect(tg2.phases.review.tool.completed).toBe(false)
-    expect(tg2.phases.review.task.completed).toBe(false)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("recovery review + review_layer=tool → 同默认 verify_tool 起始", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "tool" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.currentStep).toBe("verify_tool")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+    } finally { teardown(root) }
   })
 
-  // B3.4 recovery dev_impl + review_layer=task（非法组合）→ 报错
-  test("recovery dev_impl + review_layer=task — 非法组合 → 报错", async () => {
-    const root = `/tmp/optimize-b3d-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.executionBoundary = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
-    tg.worktreePath = "/tmp/fake-worktree"
-    tg.branchName = "task-group/1"
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    await expect(
-      init.execute({
-        change_id: CID, task_group_id: "1",
-        recovery: { phase: "dev_impl", review_layer: "task" }}, o)
-    ).rejects.toThrow(/review_layer/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-
-  // B3.6a recovery review + review_layer=quality + preserve_progress=true → 保留 quality 进度
-  test("B3.6a preserve_progress=true → 保留 baselineDone/retryCount/progress", async () => {
-    const root = `/tmp/optimize-b3fa-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-    const d = makeCtx("openspec-developer", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const taskR = makeCtx("openspec-reviewer-task", wt)
-
-    // 跑完整到 review + tool pass + task pass
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-    state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
-
-    // 模拟 quality 已有历史：retryCount=2, baselineDone=true, 部分维度已提交
-    state = readStateSync(wt, CID)
-    const tg1 = state.taskGroups.find((g: any) => g.id === "1")
-    tg1.phases.review.retryCount = 2
-    tg1.phases.review.quality.progress.style = "passed"
-    tg1.phases.review.quality.progress.architecture = "passed"
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // 恢复时指定 review_layer=quality，preserve_progress=true
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", review_layer: "quality" }}, o)
-
-    // 验证 quality 进度全部保留
-    state = readStateSync(wt, CID)
-    const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg2.phases.review.retryCount).toBe(2)
-    expect(tg2.phases.review.quality.progress.style).toBe("passed")
-    expect(tg2.phases.review.quality.progress.architecture).toBe("passed")
-    expect(tg2.phases.review.quality.progress.performance).toBe("pending")
-    expect(tg2.phases.review.tool.completed).toBe(true)
-    expect(tg2.phases.review.task.completed).toBe(true)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-
-  // B3.6b recovery review + review_layer=quality + preserve_progress=false → 仅清 retryCount，保留维度进度
-  test("B3.6b preserve_progress=false → 清空 retryCount，保留 passed 维度，门禁仅放行非 passed 3 维", async () => {
-    const root = `/tmp/optimize-b3fb-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const a = makeCtx("openspec-architect", wt)
-    const d = makeCtx("openspec-developer", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const taskR = makeCtx("openspec-reviewer-task", wt)
-
-    // 跑完整到 review + tool pass + task pass
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, a)
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-    state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
-
-    // 模拟 quality 已有历史：retryCount=2, baselineDone=true, 部分维度已提交
-    state = readStateSync(wt, CID)
-    const tg1 = state.taskGroups.find((g: any) => g.id === "1")
-    tg1.phases.review.retryCount = 2
-    tg1.phases.review.quality.progress.style = "passed"
-    tg1.phases.review.quality.progress.architecture = "passed"
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // 恢复时指定 review_layer=quality，preserve_progress=false（清空 quality）
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", review_layer: "quality" }}, o)
-
-    // 验证 quality 进度：retryCount 保留，passed 维度保留，其余 pending
-    state = readStateSync(wt, CID)
-    const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg2.phases.review.retryCount).toBe(2)
-    expect(tg2.phases.review.quality.progress.style).toBe("passed")
-    expect(tg2.phases.review.quality.progress.architecture).toBe("passed")
-    expect(tg2.phases.review.quality.progress.performance).toBe("pending")
-    expect(tg2.phases.review.quality.progress.security).toBe("pending")
-    expect(tg2.phases.review.quality.progress.maintainability).toBe("pending")
-
-    // 验证 tool/task 层状态仍正确
-    expect(tg2.phases.review.tool.completed).toBe(true)
-    expect(tg2.phases.review.task.completed).toBe(true)
-
-    // 验证门禁仅放行非 passed 的 3 维 quality reviewer
-    for (const agent of ["openspec-reviewer-performance", "openspec-reviewer-security", "openspec-reviewer-maintainability"]) {
-      const ctx = makeCtx(agent, wt)
-      const view = await status.execute({ change_id: CID }, ctx)
-      const str = typeof view === "string" ? view : JSON.stringify(view)
-      expect(str).toMatch(/✅ 当前轮到你执行/)
-    }
-    // 已 passed 的维度 reviewer 不再被分派
-    for (const agent of ["openspec-reviewer-style", "openspec-reviewer-architecture"]) {
-      const ctx = makeCtx(agent, wt)
-      const view = await status.execute({ change_id: CID }, ctx)
-      const str = typeof view === "string" ? view : JSON.stringify(view)
-      expect(str).not.toMatch(/当前轮到你执行/)
-    }
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-
-  // B3.5 review_layer + preserveProgress 叠加 → 验证子层状态正确合并
-  test("review_layer + preserveProgress 叠加 → 子层状态正确合并", async () => {
-    const root = `/tmp/optimize-b3e-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const d = makeCtx("openspec-developer", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const taskR = makeCtx("openspec-reviewer-task", wt)
-
-    // 跑完整到 review + tool pass + task pass
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-
-    state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
-
-    // 写状态文件设 retryCount=5, lastResolvedRetryCount=5
-    state = readStateSync(wt, CID)
-    const tg2 = state.taskGroups.find((g: any) => g.id === "1")
-    tg2.phases.review.retryCount = MAX_RETRIES
-    tg2.phases.review.lastResolvedRetryCount = MAX_RETRIES
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // 恢复时指定 review_layer=quality 且 preserveProgress
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review", review_layer: "quality" }}, o)
-
-    state = readStateSync(wt, CID)
-    const tg3 = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg3.phases.review.tool.completed).toBe(true)
-    expect(tg3.phases.review.task.completed).toBe(true)
-    // preserveProgress 应保留 retryCount 和 lastResolvedRetryCount
-    expect(tg3.phases.review.retryCount).toBe(MAX_RETRIES)
-    expect(tg3.phases.review.lastResolvedRetryCount).toBe(MAX_RETRIES)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("recovery dev_impl + review_layer=task 非法组合 → 抛错", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await expectError(
+        init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl", review_layer: "task" } }, ctx.orch),
+        /review_layer 参数仅当 recovery.phase 为 review/
+      )
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 4: 空 issue 正常提交（回归）
-// ════════════════════════════════════════════════════════════════
-
-describe("B4. 空 issue 正常提交回归", () => {
-  const ROOT = `/tmp/optimize-b4-${Date.now()}`
-
-  // B4.1 tool_review_submit(passed=true, issues=[]) 正常通过
-  test("tool_review_submit(passed=true, issues=[]) → 正常通过", async () => {
-    const root = `${ROOT}-b4a`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }}, makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, o)
-    let state = readStateSync(wt, CID)
-    const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, makeCtx("openspec-developer", wt))
-
-    state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, o)
-    await set_worktree.execute({ change_id: CID }, o)
-
-    const result = await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: []}, toolR)
-    expect(result).toContain("审核通过")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+describe("B4. boundary 参数", () => {
+  test("analyze passed 必须携带 execution_boundary；缺省抛错", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await expectError(
+        agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed" }, ctx.arch),
+        /execution_boundary/
+      )
+      expect(readItem(wt, CID).phase).toBe("todo")
+    } finally { teardown(root) }
   })
 
-  // B4.2 quality_review_submit(passed=true, issues=[]) 正常通过
-  test("quality_review_submit(passed=true, issues=[]) → 正常通过", async () => {
-    const root = `${ROOT}-b4b`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-
-    const { orch } = await setupThroughReviewReady(wt, fakeGit)
-
-    const result = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, styleR)
-    expect(result).toContain("已提交") // 仍有 4 维未提交
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("analyze passed 携带 execution_boundary → metadata 落盘", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { item } = await driveToImplement(wt, CID)
+      expect(metaOf(item, "execution_boundary")).toEqual({ allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" })
+    } finally { teardown(root) }
   })
-})
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 8: submit 工具支持数字类型 task/issue ID
-// ════════════════════════════════════════════════════════════════
+  test("verify_tool failed + boundary_expansion → 合并进执行边界并回 implement", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          boundary_expansion: { allowed_directories: ["src/extra"] },
+          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style" }],
+        },
+        ctx.toolR
+      )
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(metaOf(item, "execution_boundary").allowed_directories).toContain("src/extra")
+    } finally { teardown(root) }
+  })
 
-describe("B8. submit 工具支持数字类型 ID", () => {
-  test("tool/task/quality_review_submit 接受数字 fixed_issue_ids", async () => {
-    const root = `/tmp/optimize-b8a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const orch = makeCtx("openspec-orchestrator", wt)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    const taskR = makeCtx("openspec-reviewer-task", wt)
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
-    await arch_submit.execute({change_id: CID, outcome: "ready",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }},
-      makeCtx("openspec-architect", wt))
-    await set_worktree.execute({ change_id: CID }, orch)
-
-    let state = readStateSync(wt, CID)
-    const devWt = state.taskGroups.find((g: any) => g.id === "1").worktreePath
-
-    // dev_submit: completed_task_ids 传数字
-    await dev_submit.execute({ change_id: CID, completed_task_ids: [1, 2] as any }, makeCtx("openspec-developer", wt))
-
-    state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-
-    // tool_review_submit: fixed_issue_ids 传数字
-    const r1 = await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-    expect(r1).toContain("审核通过")
-
-    // task_review_submit: verified_task_ids 传数字
-    const r2 = await task_review_submit.execute({change_id: CID, passed: true, verified_task_ids: [1, 2] as any, failed_task_ids: [], fixed_issue_ids: []}, taskR)
-    expect(r2).toContain("审核通过")
-
-    // quality_review_submit: 数字 passed 亦通过（非关键，但验证 type coercion 无副作用）
-    const r3 = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, styleR)
-    expect(r3).toContain("已提交")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("verify_tool passed + boundary_expansion → 抛错", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_tool", verdict: "passed", boundary_expansion: { allowed_directories: ["src/extra"] } },
+          ctx.toolR
+        ),
+        /passed=true 时不允许边界扩展/
+      )
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 5: dev_submit 不再重置 retryCount（修复 B 验证）
-// ════════════════════════════════════════════════════════════════
+describe("B5. retryCount 不重置", () => {
+  test("quality failed 回 implement（_retryCount=1）→ dev 修复提交后 _retryCount 保持 1", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "命名问题", description: "命名不规范", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
+      expect(metaOf(readItem(wt, CID), "_retryCount")).toBe(1)
 
-describe("B5. dev_submit 不再重置 retryCount", () => {
-  test("quality 失败 → dev 修复提交 → retryCount 保持 1, quality gate 仅调有 issue 的维度", async () => {
-    const root = `/tmp/optimize-b5-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: ["7"], completed_task_ids: taskIdsOf(item0) },
+        ctx.dev
+      )
+      expect(metaOf(readItem(wt, CID), "_retryCount")).toBe(1)
+    } finally { teardown(root) }
+  })
 
-    const { orch, dev, toolR, taskR } = await setupThroughReviewReady(wt, fakeGit)
-
-    // 1. quality 首轮：style 报阻塞 issue
-    const passDimsB5 = ["architecture", "performance", "security", "maintainability"]
-    for (const d of passDimsB5) {
-      await quality_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, makeCtx(`openspec-reviewer-${d}`, wt))
-    }
-    await quality_review_submit.execute({ change_id: CID, passed: false,
-      issues: [{ severity: "Low", file: "src/x.java", line: 1, description: "Naming", suggestion: "Fix" }],
-      fixed_issue_ids: [] }, makeCtx("openspec-reviewer-style", wt))
-
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.phases.review.retryCount).toBe(1)
-    expect(tg.status).toBe("dev_impl")
-
-    const issueId = tg.issues[0].id
-    const devWt = tg.worktreePath
-
-    // 2. developer 修复并提交
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, dev)
-
-    state = readStateSync(wt, CID)
-    const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.phases.review.retryCount).toBe(1) // 保持累加，不清零
-
-    // 3. quality-only 修复：dev 修复触发 tool 层重验（tool.completed=false），task 层保持通过；style reviewer 直接确认修复
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-    const confirmRes = await quality_review_submit.execute({ change_id: CID, passed: true,
-      fixed_issue_ids: [issueId], issues: [] }, styleR)
-    expect(confirmRes).toContain("全部审查维度通过")
-
-    // 4. 全部维度通过后不再分派任何 quality reviewer
-    const archR = makeCtx("openspec-reviewer-architecture", wt)
-    const styleView = await status.execute({ change_id: CID }, styleR)
-    const styleStr = typeof styleView === "string" ? styleView : JSON.stringify(styleView)
-    expect(styleStr).not.toMatch(/✅ 当前轮到你执行/)
-    const archView = await status.execute({ change_id: CID }, archR)
-    const archStr = typeof archView === "string" ? archView : JSON.stringify(archView)
-    expect(archStr).not.toMatch(/✅ 当前轮到你执行/) // architecture 已 passed，不过 gate
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("checkpoint continue 后 _retryCount 保持且该 step tag 重置", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.metadata["_retryCount"] = 3
+        item.metadata["_checkpoint"] = true
+        item.tags["verify_tool:openspec-reviewer-tool"] = "failed"
+      })
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", checkpoint_decision: "continue" },
+        ctx.toolR
+      )
+      expect(r).toContain("continue")
+      const item = readItem(wt, CID)
+      expect(metaOf(item, "_retryCount")).toBe(3)
+      expect(item.metadata["_checkpoint"]).toBe(false)
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 6: opx_status 编排者视图 review 进展渲染（修复 A 验证）
-// ════════════════════════════════════════════════════════════════
-
-describe("B6. opx_status 编排者视图 review 进展", () => {
-  test("tool+task 完成后显示全部已完成层 + 当前待推进层", async () => {
-    const root = `/tmp/optimize-b6a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-
-    const { orch } = await setupThroughReviewReady(wt, fakeGit)
-
-    const view = await status.execute({ change_id: CID }, orch)
-    const str = typeof view === "string" ? view : JSON.stringify(view)
-    expect(str).toMatch(/tool✓.*→.*task✓.*→.*quality⏳/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+describe("B6. opx_status 视图", () => {
+  test("orchestrator 分派视图：编排进度 + 下一步分派", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const view = await status.execute({ change_id: CID }, ctx.orch)
+      expect(view).toContain("# 编排进度")
+      expect(view).toContain("## 下一步")
+      expect(view).toContain("分派子代理：`openspec-architect`")
+    } finally { teardown(root) }
   })
 
-  test("tool 已完成 task 未完成显示 tool✓ → task⏳（不显示 quality）", async () => {
-    const root = `/tmp/optimize-b6b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+  test("architect working 视图：✅ 当前轮到你执行 + 操作指引", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const view = await status.execute({ change_id: CID }, ctx.arch)
+      expect(view).toContain("# ✅ 当前轮到你执行")
+      expect(view).toContain("## 操作指引")
+      expect(view).toContain("opx_agent_submit")
+    } finally { teardown(root) }
+  })
 
-    const { orch } = await setupThroughDevSubmit(wt, fakeGit)
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    await init.execute({
-      change_id: CID, task_group_id: "1",
-      recovery: { phase: "review" }}, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-
-    const view = await status.execute({ change_id: CID }, orch)
-    const str = typeof view === "string" ? view : JSON.stringify(view)
-    expect(str).toMatch(/tool✓.*→.*task⏳/)
-    expect(str).not.toMatch(/quality/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("developer gate 视图：⛔ 阶段门禁 + 当前预期角色", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      const view = await status.execute({ change_id: CID }, ctx.dev)
+      expect(view).toContain("# ⛔ 阶段门禁")
+      expect(view).toContain("当前预期角色为：`openspec-architect`")
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 7: computeRequiredDims 异常回退（修复 C 验证）
-// ════════════════════════════════════════════════════════════════
+describe("B7. verify_quality 维度 gate", () => {
+  test("verify_quality 起始：5 维全部可过 gate（pending 全推荐）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      for (const d of DIMENSION_AGENTS) {
+        const view = await status.execute({ change_id: CID }, ctx.dims[d])
+        expect(view).toContain("# ✅ 当前轮到你执行")
+      }
+    } finally { teardown(root) }
+  })
 
-describe("B7. computeRequiredDims 异常回退", () => {
-  test("retryCount>0 但无 pending issue → 空激活集 → 全都不过 gate", async () => {
-    const root = `/tmp/optimize-b7-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
+  test("style 提交 passed 后不再分派；其余 4 维仍可过 gate", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["style"])
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("# ⛔ 阶段门禁")
+      for (const d of DIMENSION_AGENTS.filter((x) => x !== "style")) {
+        const view = await status.execute({ change_id: CID }, ctx.dims[d])
+        expect(view).toContain("# ✅ 当前轮到你执行")
+      }
+    } finally { teardown(root) }
+  })
 
-    await setupThroughReviewReady(wt, fakeGit)
-
-    // 手动制造僵尸状态：retryCount=2 但无 pending issue（无 submitted/exemption issue）
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.phases.review.retryCount = 2
-    tg.phases.review.quality.progress = {
-      style: "passed",
-      architecture: "passed",
-      performance: "passed",
-      security: "passed",
-      maintainability: "passed"}
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // retryCount>0 且无 pending → 空激活集 → 全都不过 gate
-    const styleR = makeCtx("openspec-reviewer-style", wt)
-    const archR = makeCtx("openspec-reviewer-architecture", wt)
-    const styleView = await status.execute({ change_id: CID }, styleR)
-    const styleStr = typeof styleView === "string" ? styleView : JSON.stringify(styleView)
-    expect(styleStr).not.toMatch(/✅ 当前轮到你执行/)
-    const archView = await status.execute({ change_id: CID }, archR)
-    const archStr = typeof archView === "string" ? archView : JSON.stringify(archView)
-    expect(archStr).not.toMatch(/✅ 当前轮到你执行/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("全部 5 维提交 → done 终态；之后任意维度不再被分派", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      for (const d of DIMENSION_AGENTS) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      const done = readItem(wt, CID)
+      expect(done.phase).toBe("done")
+      expect(done.currentStep).toBeNull()
+      // done 终态：quality reviewer 拿到终态视图而非 ✅ 执行视图
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("任务组已完成，待收尾")
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 9: retryCount>0 但 baseline 未建 → 仍走 5 维全审（回归 bug: tool/task 驳回污染 retryCount）
-// ════════════════════════════════════════════════════════════════
-
-describe("B9. retryCount>0 但 baseline 未建 → 全维门禁", () => {
-  test("retryCount=2, baselineDone=false → 全部 5 维可过 gate", async () => {
-    const root = `/tmp/optimize-b9a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-
-    const { orch, arch, dev, toolR, taskR } = await setupThroughReviewReady(wt, fakeGit)
-
-    // 模拟 tool/task 已驳回 2 轮，quality 从未运行
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.phases.review.retryCount = 2
-    // baselineDone 保持 false（新建状态本来就没有该字段，undefined→falsy）
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // 全部 5 维 reviewer 均应通过门禁
-    const dims = ["style", "architecture", "performance", "security", "maintainability"]
-    for (const dim of dims) {
-      const ctx = makeCtx(`openspec-reviewer-${dim}`, wt)
-      const view = await status.execute({ change_id: CID }, ctx)
-      const str = typeof view === "string" ? view : JSON.stringify(view)
-      expect(str).toMatch(/✅ 当前轮到你执行/)
-    }
-
-    // 提交全部 5 维 → 基线建立，全部通过
-    for (let i = 0; i < dims.length; i++) {
-      const res = await quality_review_submit.execute({ change_id: CID, passed: true, issues: []}, makeCtx(`openspec-reviewer-${dims[i]}`, wt))
-      if (i < dims.length - 1) expect(res).toContain("已提交")
-      else expect(res).toBe("全部审查维度通过。职责已完成，请立即结束当前会话。")
-    }
-
-    state = readStateSync(wt, CID)
-    const tgAfter = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tgAfter.phases.review.tool.completed).toBe(true)
-    expect(tgAfter.phases.review.task.completed).toBe(true)
-    for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
-      expect(tgAfter.phases.review.quality.progress[d]).toBe("passed")
-    }
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+describe("B7.5. verify_quality 聚合判定", () => {
+  test("一维 failed 后其余维度仍可提交（不报 currentStep 校验错误），全部提交后才回退 implement", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // style 维 failed（带 Low 新报理由）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+        },
+        ctx.dims["style"]
+      )
+      // 聚合等待：单维 failed 不触发回退，其余维度仍可提交
+      expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      for (const d of ["architecture", "performance", "security"]) {
+        const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+        expect(r).toContain("- **推进**: 否")
+        expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      }
+      // 最后一个维度提交 → 全部已裁决 → 聚合回退 implement
+      const last = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
+      expect(last).toContain("- **推进**: 是")
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+    } finally { teardown(root) }
   })
 
-  test("retryCount=0, baselineDone=true → 空激活集", async () => {
-    const root = `/tmp/optimize-b9b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-
-    const { orch, arch, dev, toolR, taskR } = await setupThroughReviewReady(wt, fakeGit)
-
-    // 模拟 quality 全部已通过，无 pending issue
-    let state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    tg.phases.review.quality.progress = {
-      style: "passed",
-      architecture: "passed",
-      performance: "passed",
-      security: "passed",
-      maintainability: "passed"}
-    tg.phases.review.retryCount = 0
-    writeFileSync(
-      join(wt, ".opencode", ".orchestrate_state", `${CID}.json`),
-      JSON.stringify(state, null, 2)
-    )
-
-    // 全部 5 维 reviewer 均不应通过门禁（无 pending issue）
-    const dims = ["style", "architecture", "performance", "security", "maintainability"]
-    for (const dim of dims) {
-      const ctx = makeCtx(`openspec-reviewer-${dim}`, wt)
-      const view = await status.execute({ change_id: CID }, ctx)
-      const str = typeof view === "string" ? view : JSON.stringify(view)
-      expect(str).not.toMatch(/✅ 当前轮到你执行/)
-    }
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("全部 5 维 passed 才推进 done（多 agent 聚合通过）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      for (const d of ["style", "architecture", "performance"]) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+        expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      }
+      const last = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["security"])
+      expect(last).toContain("- **推进**: 否")
+      const done = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
+      expect(done).toContain("- **推进**: 是")
+      expect(readItem(wt, CID).phase).toBe("done")
+    } finally { teardown(root) }
   })
-})
 
+  test("review failed 后已 passed 层/维度 tag 保留，下次只重审失败维度", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+        },
+        ctx.dims["style"]
+      )
+      for (const d of DIMENSION_AGENTS.filter((x) => x !== "style")) {
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      const back = readItem(wt, CID)
+      expect(back.phase).toBe("in_progress")
+      expect(back.currentStep).toBe("implement")
+      // review failed 不再全清：已 passed 的 verify_tool/verify_task 与其余维度 tag 保留，失败维度保留 failed
+      expect(back.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(back.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(back.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(back.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 8: 编排视图暴露 baseBranch
-// ════════════════════════════════════════════════════════════════
-
-describe("B8. 编排视图暴露 baseBranch", () => {
-  test("opx_status 编排者头部含基准分支行", async () => {
-    const root = `/tmp/optimize-b8-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
-
-    // 自动推导：currentBranch="main"
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
-    const view = await status.execute({ change_id: CID }, o)
-    const str = typeof view === "string" ? view : JSON.stringify(view)
-    expect(str).toMatch(/\*\*基准分支\*\*: main/)
-
-    // 显式指定：用独立 changeId 验证
-    const CID2 = "test-optimize-b8-dev"
-    const tasksMdPath2 = join(wt, "openspec", "changes", CID2, "tasks.md")
-    mkdirSync(join(wt, "openspec", "changes", CID2), { recursive: true })
-    writeFileSync(tasksMdPath2, "## 1. G1\n\n- [ ] 1.1 T1\n", "utf-8")
-    await init.execute({ change_id: CID2, task_group_id: "1", base_branch: "develop" }, o)
-    const view2 = await status.execute({ change_id: CID2 }, o)
-    const str2 = typeof view2 === "string" ? view2 : JSON.stringify(view2)
-    expect(str2).toMatch(/\*\*基准分支\*\*: develop/)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // dev 仅豁免 style 层 issue（不改代码）→ reset 只清该维度 tag，verify_tool/verify_task 保留
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["7"], completed_task_ids: taskIdsOf(item0) },
+        ctx.dev
+      )
+      // 模拟编排将任务移回 verify_quality 恢复重审
+      rewriteItem(wt, (item) => { item.phase = "review"; item.currentStep = "verify_quality" })
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      // 只重审失败维度：仅 style 可过 gate，其余已 passed 维度不可分派
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("# ✅ 当前轮到你执行")
+      const archView = await status.execute({ change_id: CID }, ctx.dims["architecture"])
+      expect(archView).toContain("# ⛔ 阶段门禁")
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 10: dev 提交后 review 层重置粒度按 issue sourcePhase 精化
-// ════════════════════════════════════════════════════════════════
+describe("B8. taskNumber 数字 ID 归一化 + init base_branch", () => {
+  test("completed_task_ids 用 taskNumber（1.1/1.2/1.3）→ normalizeTaskIds → 全 submitted", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1.1", "1.2", "1.3"] },
+        ctx.dev
+      )
+      expect(taskListOf(readItem(wt, CID)).every((t: any) => t.status === "submitted")).toBe(true)
+    } finally { teardown(root) }
+  })
 
-/** 推进到 tool+task+全部 5 维 quality 均完成（review 阶段） */
-async function setupToolTaskPassed(wt: string, fakeGit: FakeGitRunner): Promise<{ dev: any }> {
-  const o = makeCtx("openspec-orchestrator", wt)
-  const a = makeCtx("openspec-architect", wt)
-  const d = makeCtx("openspec-developer", wt)
-  const toolR = makeCtx("openspec-reviewer-tool", wt)
-  const taskR = makeCtx("openspec-reviewer-task", wt)
+  test("verified_tasks 用 taskNumber → 全 verified", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTask(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1.1", "1.2", "1.3"] },
+        ctx.taskR
+      )
+      expect(taskListOf(readItem(wt, CID)).every((t: any) => t.status === "verified")).toBe(true)
+      expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+    } finally { teardown(root) }
+  })
 
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
-  await arch_submit.execute({ change_id: CID, outcome: "ready",
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } }, a)
-  await set_worktree.execute({ change_id: CID }, o)
-  await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"] }, d)
-  await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, o)
-  await set_worktree.execute({ change_id: CID }, o)
-  await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-  await task_review_submit.execute({ change_id: CID, passed: true, verified_task_ids: ["1", "2"], failed_task_ids: [], fixed_issue_ids: [] }, taskR)
-  for (const dim of ["style", "architecture", "performance", "security", "maintainability"]) {
-    await quality_review_submit.execute({ change_id: CID, passed: true, issues: [] }, makeCtx(`openspec-reviewer-${dim}`, wt))
-  }
-  return { dev: d }
-}
-
-function injectOpenIssue(wt: string, overrides: Record<string, unknown>): string {
-  const state = readStateSync(wt, CID)
-  const tg = state.taskGroups.find((g: any) => g.id === "1")
-  const issue = {
-    id: `inj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    dimension: "style",
-    sourcePhase: "quality",
-    severity: "Low",
-    file: "src/x.java",
-    line: 1,
-    description: "Injected issue",
-    suggestion: "Fix",
-    status: "open",
-    refixCount: 0,
-    rootCauseGuess: null,
-    exemptReason: null,
-    rejectReason: null,
-    ...overrides,
-  }
-  tg.issues.push(issue)
-  writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state, null, 2))
-  return issue.id
-}
+  test("init 显式传 base_branch → state.baseBranch 正确", async () => {
+    const { wt, root } = fresh()
+    try {
+      const o = makeCtx("openspec-orchestrator", wt)
+      await init.execute({ change_id: CID, task_group_id: "1", base_branch: "develop" }, o)
+      const state = JSON.parse(readFileSync(statePath(wt), "utf-8"))
+      expect(state.baseBranch).toBe("develop")
+    } finally { teardown(root) }
+  })
+})
 
 describe("B10. dev 提交后 review 层按 sourcePhase 精化重置", () => {
-  test("dev 仅修 tool 层 issue → task.completed 保持 true、tool.completed 为 false、quality 维度不动", async () => {
-    const root = `/tmp/optimize-b10a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { dev } = await setupToolTaskPassed(wt, fakeGit)
-
-    const issueId = injectOpenIssue(wt, { sourcePhase: "tool", dimension: "style", severity: "Low" })
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, dev)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.phases.review.tool.completed).toBe(false)
-    expect(tg.phases.review.task.completed).toBe(true)
-    expect(tg.phases.review.quality.progress.style).toBe("passed")
-    expect(tg.phases.review.quality.progress.architecture).toBe("passed")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("dev 仅修 tool 层 issue → 清 verify_tool；verify_task/verify_quality 保留", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      setReviewAllPassed(wt)
+      const id = injectIssue(wt, { sourcePhase: "tool", dimension: "style", severity: "Low" })
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: [id], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      const tags = readItem(wt, CID).tags
+      expect(tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+    } finally { teardown(root) }
   })
 
-  test("dev 仅修 quality 层 issue（style）→ tool.completed 重置为 false、task.completed 保持 true、style 维度 pending", async () => {
-    const root = `/tmp/optimize-b10b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { dev } = await setupToolTaskPassed(wt, fakeGit)
-
-    const issueId = injectOpenIssue(wt, { sourcePhase: "quality", dimension: "style", severity: "Low" })
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, dev)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    // 修复即代码变更：tool 层确定性检查须基于最新代码重跑
-    expect(tg.phases.review.tool.completed).toBe(false)
-    expect(tg.phases.review.task.completed).toBe(true)
-    expect(tg.phases.review.quality.progress.style).toBe("pending")
-    expect(tg.phases.review.quality.progress.architecture).toBe("passed")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("dev 仅修 quality 层 issue（style）→ 清 verify_tool + quality style 维度；verify_task 保留", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      setReviewAllPassed(wt)
+      const id = injectIssue(wt, { sourcePhase: "quality", dimension: "style", severity: "Low" })
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: [id], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      const tags = readItem(wt, CID).tags
+      expect(tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+    } finally { teardown(root) }
   })
 
-  test("dev 修 task 层 issue → tool.completed 与 task.completed 均为 false", async () => {
-    const root = `/tmp/optimize-b10c-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { dev } = await setupToolTaskPassed(wt, fakeGit)
-
-    const issueId = injectOpenIssue(wt, { sourcePhase: "task", dimension: "style", severity: "Low" })
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"], fixed_issue_ids: [issueId] }, dev)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.phases.review.tool.completed).toBe(false)
-    expect(tg.phases.review.task.completed).toBe(false)
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("dev 修 task 层 issue → 清 verify_tool + verify_task", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      setReviewAllPassed(wt)
+      const id = injectIssue(wt, { sourcePhase: "task", dimension: "style", severity: "Low" })
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: [id], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      const tags = readItem(wt, CID).tags
+      expect(tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+    } finally { teardown(root) }
   })
 
-  test("dev 仅豁免 quality 层 issue（不改代码）→ tool/task.completed 保持 true、style 维度 pending、豁免裁定者仍被分派", async () => {
-    const root = `/tmp/optimize-b10d-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { dev } = await setupToolTaskPassed(wt, fakeGit)
+  test("dev 仅豁免 quality 层 issue → verify_tool/verify_task 保留；style 维度清空且可被分派", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      setReviewAllPassed(wt)
+      const id = injectIssue(wt, { sourcePhase: "quality", dimension: "style", severity: "Low" })
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: [id], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      const item = readItem(wt, CID)
+      // 豁免不改代码：tool/task 层不重置
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      // 仅重置对应 quality 维度
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      // 豁免申请标记落盘
+      expect(item.children.find((c: any) => c.externalId === id).metadata["exempt_request"]).toBeDefined()
 
-    const issueId = injectOpenIssue(wt, { sourcePhase: "quality", dimension: "style", severity: "Low" })
-    await dev_submit.execute({ change_id: CID, completed_task_ids: ["1", "2"],
-      request_exempts: [{ issue_id: issueId, reason: "风格约定豁免" }] }, dev)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.issues.find((i: any) => i.id === issueId).status).toBe("exemption_requested")
-    // 豁免不改代码：tool/task 层不重置
-    expect(tg.phases.review.tool.completed).toBe(true)
-    expect(tg.phases.review.task.completed).toBe(true)
-    // 仅重置对应 quality 维度
-    expect(tg.phases.review.quality.progress.style).toBe("pending")
-    expect(tg.phases.review.quality.progress.architecture).toBe("passed")
-
-    // 豁免裁定者（style quality reviewer）仍可被分派
-    const styleView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-style", wt))
-    const styleStr = typeof styleView === "string" ? styleView : JSON.stringify(styleView)
-    expect(styleStr).toMatch(/✅ 当前轮到你执行/)
-    const archView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-architecture", wt))
-    const archStr = typeof archView === "string" ? archView : JSON.stringify(archView)
-    expect(archStr).not.toMatch(/✅ 当前轮到你执行/) // architecture 已 passed，不过 gate
-
-    // 裁定者可直接裁定豁免
-    const r = await quality_review_submit.execute({ change_id: CID, passed: true, issues: [],
-      exempt_issue_ids: [issueId] }, makeCtx("openspec-reviewer-style", wt))
-    expect(r).toContain("全部审查维度通过")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+      // 豁免裁定者（style reviewer）仍被分派；architecture 已 passed 不再分派
+      rewriteItem(wt, (it) => { it.phase = "review"; it.currentStep = "verify_quality" })
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("# ✅ 当前轮到你执行")
+      const archView = await status.execute({ change_id: CID }, ctx.dims["architecture"])
+      expect(archView).toContain("# ⛔ 阶段门禁")
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 11: agentSummaries 会话摘要落盘 + 视图渲染
-// ════════════════════════════════════════════════════════════════
-
-describe("B11. agentSummaries 会话摘要落盘 + 视图渲染", () => {
-  test("dev_submit 后 agentSummaries['openspec-developer'] 存在且含摘要内容", async () => {
-    const root = `/tmp/optimize-b11a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    await setupThroughDevSubmit(wt, fakeGit)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.agentSummaries).toBeTruthy()
-    expect(tg.agentSummaries["openspec-developer"]).toBeTruthy()
-    expect(tg.agentSummaries["openspec-developer"]).toContain("完成 task 2 个")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+describe("B11. agentSummaries 会话摘要", () => {
+  test("metadata.agent_summaries 落盘 → metaOf 断言存在", async () => {
+    const { wt, root } = fresh()
+    try {
+      await driveToImplement(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.metadata["agent_summaries"] = { "openspec-architect": "预检通过，已输出执行边界" }
+      })
+      expect(metaOf(readItem(wt, CID), "agent_summaries")["openspec-architect"]).toBe("预检通过，已输出执行边界")
+    } finally { teardown(root) }
   })
 
-  test("tool_review_submit 后 agentSummaries['openspec-reviewer-tool'] 存在", async () => {
-    const root = `/tmp/optimize-b11b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { orch } = await setupThroughDevSubmit(wt, fakeGit)
-    await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    await tool_review_submit.execute({ change_id: CID, passed: true, issues: [], fixed_issue_ids: [] }, toolR)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.agentSummaries["openspec-reviewer-tool"]).toBeTruthy()
-    expect(tg.agentSummaries["openspec-reviewer-tool"]).toContain("通过")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("developer 视图会话摘要按角色隔离：只渲染 dev 自己的摘要，不跨 agent 传递", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.metadata["agent_summaries"] = {
+          "openspec-architect": "预检通过，已输出执行边界",
+          "openspec-developer": "完成 task 2 个",
+        }
+      })
+      const view = await status.execute({ change_id: CID }, ctx.dev)
+      expect(view).toContain("## 上轮会话摘要")
+      expect(view).toContain("**openspec-developer**：完成 task 2 个")
+      expect(view).not.toContain("预检通过，已输出执行边界")
+    } finally { teardown(root) }
   })
 
-  test("developer 视图包含「上轮会话摘要」区块", async () => {
-    const root = `/tmp/optimize-b11c-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { orch } = await setupThroughDevSubmit(wt, fakeGit)
-
-    // 直接渲染 developer 视图（dev_submit 后已进入 review，opx_status 门禁会拒绝 developer）
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    const output = renderDeveloperView(state, tg, "openspec-developer")
-    expect(output).toContain("## 上轮会话摘要")
-    expect(output).toContain("**openspec-developer**")
-    expect(output).toContain("完成 task 2 个")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-
-  test("agentSummaries 在 init(recovery) 后保留（跨会话续接）", async () => {
-    const root = `/tmp/optimize-b11d-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { orch } = await setupThroughDevSubmit(wt, fakeGit)
-
-    await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, orch)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.agentSummaries).toBeTruthy()
-    expect(tg.agentSummaries["openspec-developer"]).toBeTruthy()
-    expect(tg.agentSummaries["openspec-developer"]).toContain("完成 task 2 个")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("agent_summaries 在 init(recovery) 后保留（跨会话续接）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.metadata["agent_summaries"] = { "openspec-architect": "预检通过，已输出执行边界" }
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, ctx.orch)
+      expect(metaOf(readItem(wt, CID), "agent_summaries")["openspec-architect"]).toBe("预检通过，已输出执行边界")
+    } finally { teardown(root) }
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-//  Behavior 12: IssueItem.rule 字段透传 + 视图按 rule 分组
-// ════════════════════════════════════════════════════════════════
-
-describe("B12. IssueItem.rule 透传与分组渲染", () => {
-  test("tool_review_submit 提交带 rule 的 issue → IssueItem.rule 已保存", async () => {
-    const root = `/tmp/optimize-b12a-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { orch } = await setupThroughDevSubmit(wt, fakeGit)
-    await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, orch)
-    await set_worktree.execute({ change_id: CID }, orch)
-    const toolR = makeCtx("openspec-reviewer-tool", wt)
-    await tool_review_submit.execute({ change_id: CID, passed: false,
-      issues: [{ dimension: "style", severity: "Low", file: "src/x.java", line: 1,
-        description: "Magic number", suggestion: "Extract constant",
-        rule: "PMD.AvoidLiteralsInIfCondition" }],
-      fixed_issue_ids: [] }, toolR)
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    expect(tg.issues).toHaveLength(1)
-    expect(tg.issues[0].rule).toBe("PMD.AvoidLiteralsInIfCondition")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+describe("B12. new_children rule 透传", () => {
+  test("verify_tool failed + new_children 带 rule → child.metadata.rule 保存", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "7", title: "Magic number", description: "魔法数字", severity: "Low", rule: "PMD.AvoidLiteralsInIfCondition" }],
+        },
+        ctx.toolR
+      )
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child.metadata["rule"]).toBe("PMD.AvoidLiteralsInIfCondition")
+      expect(readItem(wt, CID).phase).toBe("in_progress")
+    } finally { teardown(root) }
   })
 
-  test("developer 视图含 rule 分组标题与批量修复提示", async () => {
-    const root = `/tmp/optimize-b12b-${Date.now()}`
-    const wt = freshWt(root)
-    const fakeGit = new FakeGitRunner()
-    __setGitRunner(fakeGit)
-    const { dev } = await setupToolTaskPassed(wt, fakeGit)
-
-    injectOpenIssue(wt, { sourcePhase: "tool", dimension: "style", severity: "Low",
-      description: "Literal 1", rule: "PMD.AvoidLiteralsInIfCondition" })
-    injectOpenIssue(wt, { sourcePhase: "tool", dimension: "style", severity: "Low",
-      description: "Literal 2", rule: "PMD.AvoidLiteralsInIfCondition" })
-    injectOpenIssue(wt, { sourcePhase: "quality", dimension: "maintainability", severity: "Info",
-      description: "Naming hint", rule: "" })
-
-    const state = readStateSync(wt, CID)
-    const tg = state.taskGroups.find((g: any) => g.id === "1")
-    const output = renderDeveloperView(state, tg, "openspec-developer")
-    expect(output).toContain("**PMD.AvoidLiteralsInIfCondition**（2 条同类）")
-    expect(output).toContain("同类问题建议一次批量修复、一次提交一次重验，避免逐条触发全量复查。")
-    expect(output).toContain("未分类")
-    expect(output).toContain("PMD.AvoidLiteralsInIfCondition")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  test("developer 视图渲染带 rule 的 issue child", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.children.push({
+          id: "issue:r1",
+          source: "openspec",
+          externalId: "r1",
+          type: "issue",
+          title: "Magic number",
+          description: "魔法数字",
+          phase: "todo",
+          suspended: false,
+          currentStep: null,
+          tags: {},
+          metadata: { source_phase: "tool", dimension: "style", rule: "PMD.AvoidLiteralsInIfCondition" },
+          children: [],
+          labels: [],
+          severity: "Low",
+        })
+      })
+      const view = await status.execute({ change_id: CID }, ctx.dev)
+      expect(view).toContain("PMD.AvoidLiteralsInIfCondition")
+      expect(view).toContain("魔法数字")
+    } finally { teardown(root) }
   })
 })
