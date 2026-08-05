@@ -64,7 +64,7 @@ export function effectiveMaxRetries(workflow: LoadedWorkflow, step: StepConfig):
   return step.max_retries ?? workflow.max_retries
 }
 
-function resolveCurrentStep(
+export function resolveCurrentStep(
   item: WorkItem,
   workflow: LoadedWorkflow,
 ): { step: StepConfig; phaseName: WorkItemPhase } | null {
@@ -79,6 +79,19 @@ function resolveCurrentStep(
     }
   }
   return null
+}
+
+/**
+ * phase↔step 归属一致性判定：currentStep 非空时，其配置归属 phase 与 item.phase 错位视为状态异常。
+ * - currentStep 为 null（todo 初始态 / 终态）恒为 false，不误报；
+ * - currentStep 指向未声明 step（resolveCurrentStep 返 null）视为 true（安全侧，宁拒勿放）。
+ * 正常一致态（各写入点原子一致）恒返回 false。
+ */
+export function phaseStepMismatch(item: WorkItem, workflow: LoadedWorkflow): boolean {
+  if (item.currentStep === null) return false
+  const current = resolveCurrentStep(item, workflow)
+  if (!current) return true
+  return current.phaseName !== item.phase
 }
 
 export function getStepVerdict(item: WorkItem, stepId: string, agentKey: string): Verdict {

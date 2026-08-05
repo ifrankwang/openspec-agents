@@ -85,6 +85,19 @@ export function renderWorktreeNotReady(): string[] {
   return ["- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)"]
 }
 
+/** 状态异常（phase ↔ step 归属错位）诊断行：subagent 拒绝视图与 orchestrator 分派视图共用。 */
+export function renderStateMismatchDiagnostic(
+  phase: string,
+  currentStep: string | null,
+  expectedPhase: string | null,
+): string[] {
+  return [
+    `- **当前阶段 (phase)**: \`${phase}\``,
+    `- **当前 step**: \`${currentStep ?? "(无)"}\``,
+    `- **step 预期归属阶段**: \`${expectedPhase ?? "(未知)"}\``,
+  ]
+}
+
 export function renderWorktreeSection(
   state: OrchestrateState,
   tg: TaskGroupState,

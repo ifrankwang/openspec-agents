@@ -2,14 +2,14 @@ import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, 
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity } from "./engine.js"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch } from "./engine.js"
 import { ORCHESTRATOR_AGENT, agentToReviewDimension } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
 import { taskListOf, issueChildrenOf } from "../task-children.js"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
   renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
-  isWorktreeReady, renderWorktreeNotReady, interpolateText,
+  isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
 } from "../views.js"
 
 export interface WorkflowStatusViewOptions {
@@ -36,6 +36,13 @@ export function renderWorkflowStatusView(
   ctxAgent: string,
   options: WorkflowStatusViewOptions,
 ): string {
+  // 状态异常（phase ↔ step 归属错位）最高优先级：子代理一律拒绝执行；
+  // orchestrator 继续走分派视图，由 renderOrchestratorDispatch 渲染 ⚠️ 诊断。
+  if (phaseStepMismatch(item, workflow)) {
+    if (ctxAgent !== ORCHESTRATOR_AGENT) {
+      return renderStateMismatch(item, workflow)
+    }
+  }
   if (item.metadata["_checkpoint"] === true || rec.status === "checkpoint") {
     return renderCheckpoint(rec)
   }
@@ -167,6 +174,15 @@ function renderOrchestratorDispatch(
     `**当前阶段**: ${item.phase}（step \`${rec.stepId ?? "(无)"}\`）`,
     "",
   ]
+  // 状态异常（phase ↔ step 归属错位）诊断：错位态禁止分派，提示 recovery 恢复。
+  if (phaseStepMismatch(item, workflow)) {
+    const entry = item.currentStep ? workflow.stepMap.get(item.currentStep) : undefined
+    lines.push("## ⚠️ 状态异常（phase ↔ step 归属不一致）", "")
+    lines.push(...renderStateMismatchDiagnostic(item.phase, item.currentStep, entry?.phase.name ?? null))
+    lines.push("")
+    lines.push("WorkItem 阶段与当前 step 归属错位，禁止分派任何子代理执行；请调用 `opx_orch_init(recovery=...)` 重置异常状态后重新调度。")
+    lines.push("")
+  }
   // 推进被拦时附阻塞原因（优先取 submit 工具写入 metadata 的实际原因，次取引擎 blocked 推荐原因），
   // 编排者据此决策（修复 / recovery / 收尾）
   const metaReason = item.metadata["_advance_block_reason"]
@@ -290,6 +306,21 @@ function renderGate(rec: EngineRecommendation, item: WorkItem, ctxAgent: string)
     `当前预期角色为：\`${expected}\``,
     "",
     "请立即结束当前会话，不要执行任何操作。",
+    "",
+  ].join("\n")
+}
+
+/** 状态异常拒绝视图：phase ↔ step 归属错位时拒绝 agent 执行（复用 renderWorktreeNotReady 拒绝模式），指引 recovery 恢复。 */
+function renderStateMismatch(item: WorkItem, workflow: LoadedWorkflow): string {
+  const entry = item.currentStep ? workflow.stepMap.get(item.currentStep) : undefined
+  return [
+    "# ⛔ 状态异常，当前拒绝执行",
+    "",
+    "WorkItem 阶段与当前 step 归属不一致（phase ↔ step 错位），状态异常：",
+    ...renderStateMismatchDiagnostic(item.phase, item.currentStep, entry?.phase.name ?? null),
+    "",
+    "请立即结束当前会话，不执行任何操作、不调用任何 `opx_*` 变更工具。",
+    "请报告编排者调用 `opx_orch_init(recovery=...)` 重置异常状态后重新调度。",
     "",
   ].join("\n")
 }
