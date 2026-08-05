@@ -82,7 +82,7 @@ tests/                        — Bun 测试，使用 FakeGitRunner
 - **编排进度看板**：插件加载时启动 HTTP 看板服务，按 WorkItem phase 实时展示 5 列看板及 step:agent 裁决、children 明细（2s 轮询、只读）
 - **状态持久化**：状态文件按 changeId 拆分并写入主仓库；会话通过工具显式传入的 change_id 定位状态文件；worktree 内 session 通过 `context.json` 指针辅助解析
 - **阻塞升级**：不可自主决策的问题持久化、暂停、用户恢复、架构复核
-- **Worktree 隔离**：`git worktree` 分支隔离，自动合并清理。`opx_arch_submit` 检测到主仓库本 change 目录下的 openspec 文档污染时自动并入 worktree 分支并清理主仓库工作树
+- **Worktree 隔离**：`git worktree` 分支隔离，自动合并清理。`opx_agent_submit` 检测到主仓库本 change 目录下的 openspec 文档污染时自动并入 worktree 分支并清理主仓库工作树
 - **执行边界**：架构师限定 developer 的目录和包范围，reviewer 新报 issue 自动扩展
 - **豁免机制**：developer 通过 `exempt_issue_ids` 申请豁免 → 报 issue 的 review step 通过 `exempt_adjudications` 裁定（dismissed→cancelled、rejected→回修）
 - **校验守卫**：多维度校验确保流程完整性

@@ -286,6 +286,8 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
 
     const output = await status.execute({ change_id: CID }, d)
     expect(output).toContain("# ✅ 当前轮到你执行")
+    // 构建验证句仅对 dev 角色渲染（56ddfe9 回归）
+    expect(output).toContain("按已加载的质量门类 skill 在本地执行构建验证")
     // 执行边界渲染
     expect(output).toContain("## 执行边界")
     expect(output).toContain("- **允许目录**:")
@@ -396,6 +398,8 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const a = makeCtx("openspec-architect", wt)
     const output = await status.execute({ change_id: CID }, a)
     expect(output).toContain("# ✅ 当前轮到你执行")
+    // 构建验证句仅对 dev 角色渲染，analyze 视图不得出现（56ddfe9 回归）
+    expect(output).not.toContain("构建验证")
     expect(output).toContain("## Blocker")
     expect(output).toContain("接口契约未定")
     expect(output).toContain("⏳ 待用户答复")

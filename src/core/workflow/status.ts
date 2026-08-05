@@ -309,7 +309,10 @@ function renderAgentWorking(
   }
   lines.push(`${n++}. 执行当前 step（\`${rec.stepId}\`）职责范围内的全部工作——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${n++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
-  lines.push(`${n++}. 按已加载的质量门类 skill 在本地执行构建验证，并本地核对覆盖率门禁达标后再提交（避免提交后由审核层复核发现不达标来回返工）`)
+  // 构建验证只对产出/验证可构建工件的 dev 角色引导；analyze/review 不执行本地构建验证
+  if (ctxAgent === "openspec-developer") {
+    lines.push(`${n++}. 按已加载的质量门类 skill 在本地执行构建验证，并本地核对覆盖率门禁达标后再提交（避免提交后由审核层复核发现不达标来回返工）`)
+  }
   lines.push(`${n++}. 全部完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed" })\``)
   lines.push(`${n++}. 遇阻塞无法继续 → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "failed" })\``)
   lines.push("")
