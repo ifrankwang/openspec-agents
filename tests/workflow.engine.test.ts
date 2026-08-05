@@ -159,6 +159,51 @@ phases:
     const wf = loadWorkflow(BASE_YAML)
     expect(wf.stepMap.get("verify")?.step.transitions.on_pass).toBe("done")
   })
+
+  test("step 语义字段解析：instructions / constraints", () => {
+    const wf = loadWorkflow(`
+id: x
+max_retries: 1
+phases:
+  - name: in_progress
+    steps:
+      - id: implement
+        agents: [dev]
+        instructions:
+          - 提交时须带 completed_task_ids 必传参数
+        constraints:
+          - 允许变更目录范围：{{allowed_directories}}
+        transitions:
+          on_pass: done
+          on_fail: implement
+`)
+    const step = wf.stepMap.get("implement")!.step
+    expect(step.instructions).toEqual(["提交时须带 completed_task_ids 必传参数"])
+    expect(step.constraints).toEqual(["允许变更目录范围：{{allowed_directories}}"])
+  })
+
+  test("step 语义字段校验：空字符串元素报错", () => {
+    expect(() => loadWorkflow(`
+id: x
+max_retries: 1
+phases:
+  - name: todo
+    steps:
+      - id: s1
+        agents: [a]
+        instructions: ["  "]
+`)).toThrow(/instructions/)
+    expect(() => loadWorkflow(`
+id: x
+max_retries: 1
+phases:
+  - name: todo
+    steps:
+      - id: s1
+        agents: [a]
+        constraints: ["ok", 42]
+`)).toThrow(/constraints/)
+  })
 })
 
 describe("3. tag 裁决与裁决缓存", () => {

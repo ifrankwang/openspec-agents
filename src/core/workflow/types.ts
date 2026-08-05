@@ -1,3 +1,6 @@
+import { SEVERITY_LEVELS, BLOCKING_SEVERITIES } from "../constants.js"
+export { SEVERITY_LEVELS, BLOCKING_SEVERITIES }
+
 export const WORK_ITEM_PHASES = ["todo", "in_progress", "review", "done", "cancelled"] as const
 export type WorkItemPhase = typeof WORK_ITEM_PHASES[number]
 
@@ -7,10 +10,7 @@ export type WorkItemType = typeof WORK_ITEM_TYPES[number]
 export const VERDICTS = ["pending", "passed", "failed"] as const
 export type Verdict = typeof VERDICTS[number]
 
-export const SEVERITY_LEVELS = ["Critical", "High", "Medium", "Low", "Info"] as const
 export type Severity = typeof SEVERITY_LEVELS[number]
-
-export const BLOCKING_SEVERITIES = ["Critical", "High", "Medium", "Low"] as const
 
 export interface WorkItemWriteback {
   lastAttempt?: string
@@ -56,9 +56,9 @@ export interface StepConfig {
   agents: string[]
   always_run?: boolean
   capability_tags?: string[]
-  allowed_tools?: string[]
-  timeout_ms?: number
   max_retries?: number
+  instructions?: string[]
+  constraints?: string[]
   transitions: StepTransitions
 }
 
@@ -67,11 +67,21 @@ export interface PhaseConfig {
   steps: StepConfig[]
 }
 
+/** 跨所有 step 共享的通用指引/约束（step 自动继承，渲染时合并进对应视图区块），缺省 undefined。 */
+export interface WorkflowCommon {
+  /** 通用操作指引（所有 step 的操作指引均前置追加）。 */
+  instructions?: string[]
+  /** 通用约束（所有 step 的约束区块均前置追加）。 */
+  constraints?: string[]
+}
+
 export interface WorkflowConfig {
   id: string
   name?: string
   max_retries: number
   phases: PhaseConfig[]
+  /** 跨 step 共享的通用语义（step 自动继承），缺省 undefined。 */
+  common?: WorkflowCommon
 }
 
 export type StepAdjudication = "passed" | "failed" | "pending"

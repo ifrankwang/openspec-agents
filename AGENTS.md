@@ -21,9 +21,9 @@ tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/
 
 | 目录 | 内容 |
 |------|------|
-| `assets/agents/` | 子代理定义文件（`openspec-*.md`）。技能加载、权限声明、行为约束在此修改。 |
+| `assets/agents/` | 子代理定义文件（`openspec-*.md`）。frontmatter（mode/description/permission）、角色定位、严重级别判例、审查内容与工具权限边界在此修改。 |
 | `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`。扫描遵循 OpenCode 标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
-| `assets/workflows/` | workflow 定义（`task.yaml`）。引擎按此驱动 step 流转与 agent 归属。 |
+| `assets/workflows/` | workflow 定义（`task.yaml`）。引擎按此驱动 step 流转与 agent 归属，并承载 step 级语义（instructions/constraints）与顶层 `common` 共享语义。 |
 | `.agents/skills/` | 项目内部分析用 skill，如 `openspec-orchestrate-optimizer`。非子代理加载目标。 |
 | `src/core/tools/` | 编排工具实现（生命周期 / 通用 step 提交）。行为以源码为准。 |
 | `src/core/workflow/` | workflow 引擎（状态机、collector、poller、状态视图）。 |
@@ -52,21 +52,25 @@ AGENTS.md 只记录设计准则、职责边界和协作约束，不记录阶段�
 
 ### 工具/Agent 二者逻辑必须统一一致
 
-工具与 agent 定义描述的是同一套编排逻辑。修改其中任意一个，必须同步更新另一个。术语、参数名、流程描述、角色职责等必须完全一致。
+工具与 agent 定义描述的是同一套编排逻辑。修改其中任意一个，必须同步更新另一个。术语、参数名、流程描述、角色职责等必须完全一致。agent.md 中的角色定位须与 workflow 配置 `common` / step 语义字段描述的角色一致。
 
-### 实现先改工具，再同步 agent
+### 实现先改工具，再同步配置
 
-所有编排行为以工具实现为准。agent 文档是对工具的说明和指令化封装，不得包含工具未实现的逻辑。
+所有编排行为以工具实现为准。workflow 配置（`common` 块与 step 级语义字段）是对工具的说明和指令化封装，不得包含工具未实现的逻辑。agent.md 随配置同步。
 
 ### Agent 定义不含实现细节
 
-agent.md 只描述角色的职责边界和可调用工具，不描述编排流程细节（状态机、状态持久化、重试策略等）。当前编排流程见 README.md。
+agent.md 描述身份（frontmatter 引擎契约、工具权限边界）、角色定位、严重级别判例、审查内容与工具权限边界，不描述编排流程细节（状态机、状态持久化、重试策略等）。这些内容见 workflow 配置 `common` / step 语义与 README.md。
 
 ### Agent 不赘述工具已实现的逻辑
 
 工具代码实现了参数校验、状态转换、维度推导、涉敏逻辑等。agent.md 中不得重复描述这些工具内部行为——子代理调用工具后按工具返回的错误消息处理即可。提示词仅需告知"调用 xxx 工具提交"或"按工具提示实施"，不需要解释工具内部做了什么。
 
-agent doc 禁止枚举/赘述 `opx_status` 的返回内容（字段清单、"返回了 X"、"不会返回 Y"等）。子代理一律"调用 `opx_status` 自取上下文"，文档中不描述返回项。操作指引由 `opx_status` 按角色和阶段动态渲染，agent.md 不得记录操作步骤。
+agent doc 禁止枚举/赘述 `opx_status` 的返回内容（字段清单、"返回了 X"、"不会返回 Y"等）。子代理一律"调用 `opx_status` 自取上下文"，文档中不描述返回项。操作指引由 `opx_status` 按角色和阶段动态渲染（来源为 workflow 配置 `common` 块与 step 级 `instructions` / `constraints`），agent.md 不得记录操作步骤。
+
+### Agent 语义归属 agent.md，操作指引归属 workflow 配置
+
+agent 专属语义（角色定位、严重级别判例、审查内容、工具权限边界）单一事实源在 `assets/agents/*.md`。跨 step 共享操作指引在 workflow 配置 `common` 块，step 专属操作指引在 step 级 `instructions` / `constraints`。`opx_status` 将 `common` 与 step 语义合并渲染为操作指引与约束区块。修改 agent 专属语义改 agent.md，修改操作指引改 workflow 配置，禁止同一概念双源。
 
 ### 子代理上下文不得转述
 
@@ -94,7 +98,7 @@ quality review 的维度通过 `DIMENSION_AGENT_MAP` 从 `context.agent` 反查�
 
 ### 编排层不涉及被编排 agent 的内部逻辑
 
-orchestrator agent 定义仅描述编排逻辑（分派原则、门禁诊断），不涉及被编排 agent 的审查内容、审查范围、严重级别认定等内部逻辑。这些内容属于各 agent 自身提示词范畴，出现偏差在各 agent 层面修正。
+orchestrator agent 定义仅描述编排逻辑（分派原则、门禁诊断），不涉及被编排 agent 的审查内容、审查范围、严重级别认定等内部逻辑。这些内容属于各 agent 自身定义（agent.md 与 workflow 配置 step 语义）与 skill 范畴，出现偏差在各 agent 层面修正。
 
 ### agent 与技术栈 skill 解耦（单向依赖）
 
@@ -106,7 +110,7 @@ agent 只按"能力类别"发起查找：读 available_skills，靠 skill 的 de
 
 ### 工具产出不得硬编码技术栈
 
-opx_status 视图等工具产出的上下文文本不得硬编码技术栈名称、构建命令、框架约定、技术栈工具（如 Maven/PMD/ArchUnit）或任何 skill 名；skill 引用须通过 capability tag 动态解析。工具产出与 agent.md 内容准则一致，只用"能力类别"语言提示分流优先级与职责；具体技术栈实现方式由 agent 加载的技术栈 skill 指导。
+opx_status 视图等工具产出的上下文文本不得硬编码技术栈名称、构建命令、框架约定、技术栈工具（如 Maven/PMD/ArchUnit）或任何 skill 名；skill 引用须通过 capability tag 动态解析。工具产出与 workflow 配置内容准则一致，只用"能力类别"语言提示分流优先级与职责；具体技术栈实现方式由 agent 加载的技术栈 skill 指导。
 
 git 属编排基础设施而非技术栈，视图操作指引可给出 git 命令（如变更范围查询、分支操作）；技术栈构建/检查命令（如 Maven/PMD/ArchUnit）仍禁止。此界限与「三层职责分离」中"验证类别清单（不含具体 how）"一致——how 的豁免仅限编排基础设施本身。
 
@@ -132,19 +136,20 @@ Skill 定义的是该维度的最低审查基线，不限于所列维度。revie
 
 ### Agent 定义职责与约束一致性
 
-同一 `agent.md` 中角色职责描述与行为约束不得矛盾。修改职责或约束任一端时，必须同步审查另一端是否存在冲突。
+agent.md 内角色定位与行为约束不得矛盾；workflow 配置 `common` / step 语义中的约束与 agent.md 的角色定位不得冲突。修改职责或约束任一端时，必须同步审查另一端是否存在冲突。
 
 ### Skill 不含编排流程概念
 
-Skill 定义只描述技术/领域规范（格式、目录结构、覆盖标准、认证方式等），不得包含编排流程概念（如"提交 issue"、"等待审批"、"进入下一阶段"）。流程指引由 `opx_status` 视图操作步骤和 agent 职责描述承载。
+Skill 定义只描述技术/领域规范（格式、目录结构、覆盖标准、认证方式等），不得包含编排流程概念（如"提交 issue"、"等待审批"、"进入下一阶段"）。流程指引由 `opx_status` 视图操作步骤和 workflow 配置（`common` / step 语义）承载。
 
 ### 三层职责分离
 
-agent.md 定义角色、工具边界与行为约束，不包含具体执行流程。
+agent.md 定义身份（frontmatter 引擎契约、工具权限边界）、角色定位、严重级别判例、审查内容与工具权限边界，不包含具体执行流程。
+workflow 配置（`common` 块与 step 级语义）承载操作指引与约束（跨 step 共享 + step 专属），由 `opx_status` 合并渲染。
 opx_status 视图提供动态上下文、skill 加载建议、验证类别清单（不含具体 how）以及步骤顺序（流程控制）。
 skill 定义纯领域/技术规范——在不同场景下（新功能开发、Bug 修复、API 测试等）应完成哪些事、遵循什么格式与质量标准。skill 不定义步骤顺序。
 
-三者严禁重叠：同一概念只在一处权威定义。
+四者严禁重叠：同一概念只在一处权威定义。
 
 ### Skill 可插拔设计
 

@@ -7,11 +7,14 @@ import type {
   StepConfig,
   StepTransitions,
   WorkItemPhase,
+  WorkflowCommon,
 } from "./types.js"
 import { WORK_ITEM_PHASES } from "./types.js"
+import { DIMENSION_AGENT_MAP } from "../constants.js"
 
 const SPECIAL_TRANSITIONS = ["done", "halt"] as const
 const PHASE_NAMES = new Set<string>(WORK_ITEM_PHASES)
+const QUALITY_REVIEW_STEP_ID = "verify_quality"
 
 export interface LoadedWorkflow extends WorkflowConfig {
   stepMap: Map<string, { step: StepConfig; phase: PhaseConfig }>
@@ -36,9 +39,9 @@ interface RawStep {
   agents?: unknown
   always_run?: unknown
   capability_tags?: unknown
-  allowed_tools?: unknown
-  timeout_ms?: unknown
   max_retries?: unknown
+  instructions?: unknown
+  constraints?: unknown
   transitions?: unknown
 }
 
@@ -52,6 +55,7 @@ interface RawWorkflow {
   name?: unknown
   max_retries?: unknown
   phases?: unknown
+  common?: unknown
 }
 
 function fail(message: string): never {
@@ -90,6 +94,40 @@ function expectOptionalStringArray(value: unknown, path: string): string[] | und
 function expectOptionalPositiveInt(value: unknown, path: string): number | undefined {
   if (value === undefined) return undefined
   return expectPositiveInt(value, path)
+}
+
+function expectOptionalNonEmptyStringArray(value: unknown, path: string): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0 || value.some((v) => typeof v !== "string" || v.trim() === "")) {
+    fail(`workflow 配置非法：${path} 必须是非空字符串数组，收到 ${JSON.stringify(value)}`)
+  }
+  return value as string[]
+}
+
+/** common 块解析：instructions / constraints 可选非空字符串数组（全缺省时降级 undefined）。 */
+function parseCommon(raw: unknown, workflowId: string): WorkflowCommon | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail(`workflow "${workflowId}" 配置非法：common 必须是对象`)
+  }
+  const c = raw as { instructions?: unknown; constraints?: unknown }
+  const instructions = expectOptionalNonEmptyStringArray(c.instructions, "common.instructions")
+  const constraints = expectOptionalNonEmptyStringArray(c.constraints, "common.constraints")
+  if (instructions === undefined && constraints === undefined) return undefined
+  return { instructions, constraints }
+}
+
+/** verify_quality 双源一致性校验：存在该 step 时，agents 集合须等于质量维度 agent 映射值集合（改一处不同步即不一致）。 */
+function assertQualityAgentsConsistent(workflowId: string, stepMap: Map<string, { step: StepConfig; phase: PhaseConfig }>): void {
+  const qualityStep = stepMap.get(QUALITY_REVIEW_STEP_ID)
+  if (!qualityStep) return
+  const declared = new Set(qualityStep.step.agents)
+  const expected = new Set(Object.values(DIMENSION_AGENT_MAP))
+  if (declared.size !== expected.size || ![...expected].every((a) => declared.has(a))) {
+    fail(
+      `workflow "${workflowId}" 配置非法：${QUALITY_REVIEW_STEP_ID}.agents（${JSON.stringify([...declared])}）与质量维度 agent 映射（${JSON.stringify([...expected])}）不一致，两处须保持同一集合`
+    )
+  }
 }
 
 function parseTransitions(raw: unknown, stepId: string, validStepIds: Set<string>): StepTransitions {
@@ -175,9 +213,9 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
         agents,
         always_run: typeof rs.always_run === "boolean" ? rs.always_run : undefined,
         capability_tags: expectOptionalStringArray(rs.capability_tags, `step "${stepId}" 的 capability_tags`),
-        allowed_tools: expectOptionalStringArray(rs.allowed_tools, `step "${stepId}" 的 allowed_tools`),
-        timeout_ms: expectOptionalPositiveInt(rs.timeout_ms, `step "${stepId}" 的 timeout_ms`),
         max_retries: expectOptionalPositiveInt(rs.max_retries, `step "${stepId}" 的 max_retries`),
+        instructions: expectOptionalNonEmptyStringArray(rs.instructions, `step "${stepId}" 的 instructions`),
+        constraints: expectOptionalNonEmptyStringArray(rs.constraints, `step "${stepId}" 的 constraints`),
         transitions: { on_pass: "done", on_fail: "halt" },
       }
       phase.steps.push(step)
@@ -190,7 +228,9 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
     step.transitions = parseTransitions(rawTransitions.get(step.id), step.id, allStepIds)
   }
 
-  return { id, name, max_retries: maxRetries, phases, stepMap }
+  assertQualityAgentsConsistent(id, stepMap)
+
+  return { id, name, max_retries: maxRetries, phases, stepMap, common: parseCommon(wf.common, id) }
 }
 
 export function findStepByWorkItemPhase(

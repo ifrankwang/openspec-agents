@@ -286,8 +286,8 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
 
     const output = await status.execute({ change_id: CID }, d)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    // 构建验证句仅对 dev 角色渲染（56ddfe9 回归）
-    expect(output).toContain("按已加载的质量门类 skill 在本地执行构建验证")
+    // 构建验证指引由配置 implement instructions 承载（P2 去双源），developer 视图仍渲染
+    expect(output).toContain("提交前按已加载的质量门类 skill 完成本地构建验证并核对覆盖率门禁达标后再提交")
     // 执行边界渲染
     expect(output).toContain("## 执行边界")
     expect(output).toContain("- **允许目录**:")
@@ -303,9 +303,9 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     // Info 级单独分栏
     expect(output).toContain("Issue (待修复 · Info，建议修复，不阻塞提交)")
     expect(output).toContain("Info 级问题")
-    // 5-Why 根因分析提示（refix_count>=2）
+    // 高 refix 区块仅列 issue 清单；5-Why 规则句由配置 implement instructions 承载（P3 去双源）
     expect(output).toContain("修复多次未过的 issue")
-    expect(output).toContain("5-Why")
+    expect(output).toContain("对修复未过次数≥2 的 issue 须先完成 5-Why 根因分析再动手")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

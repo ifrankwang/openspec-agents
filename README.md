@@ -30,7 +30,7 @@ Review 阶段依次执行 tool、task、quality 三层门禁；任一 step 裁�
 
 ## Workflow 引擎
 
-编排状态机由单一 task workflow 驱动：`assets/workflows/task.yaml` 声明任务流转（phase → steps → agents → transitions）。`opx_agent_submit` 提交裁决后沿 transitions 推进状态机；`src/core/workflow/` 为引擎实现（loader / engine / submit / status），collector 负责从外部源拉取并产出 WorkItem，poller 定时将新增项写入 state.workItems。
+编排状态机由单一 task workflow 驱动：`assets/workflows/task.yaml` 声明任务流转（phase → steps → agents → transitions），并通过顶层 `common` 块与 step 级 `instructions`/`constraints` 承载跨 step 共享与 step 专属的操作指引与约束，由 `opx_status` 合并渲染。`opx_agent_submit` 提交裁决后沿 transitions 推进状态机；`src/core/workflow/` 为引擎实现（loader / engine / submit / status），collector 负责从外部源拉取并产出 WorkItem，poller 定时将新增项写入 state.workItems。
 
 ## 快速开始
 

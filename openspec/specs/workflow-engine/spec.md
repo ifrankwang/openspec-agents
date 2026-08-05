@@ -17,7 +17,7 @@ WorkItem 的 phase 与 workflow YAML 的 phases 共用同一命名空间：YAML 
 - **THEN** issue 作为 child 写入 children，且拥有独立的 phase 与 tags，不影响 task 自身的 tags
 
 ### Requirement: Workflow YAML 声明与加载
-工作流 SHALL 由 YAML 声明，包含 workflow 级 `max_retries` 与 phases 列表，每个 phase 包含 steps；step 必须声明 `id`、`agents`、`transitions`，可选声明 `always_run`、`capability_tags`、`allowed_tools`、`timeout_ms`、`max_retries`。`transitions` 中 on:pass 与 on:fail 各指向目标 step id 或特殊值 done/halt：done 表示 item 进入终态并触发写回，halt 表示 item 置为 suspended=true 并保留当前列等待人工处理。YAML 的每个 phase 是 WorkItem 对应列状态下的步骤容器，正向迁移 phase 要求当前 phase 内全部 step passed。loader SHALL 在加载时全量校验并报告非法配置。
+工作流 SHALL 由 YAML 声明，包含 workflow 级 `max_retries`、可选顶层 `common` 块与 phases 列表，每个 phase 包含 steps；step 必须声明 `id`、`agents`、`transitions`，可选声明 `always_run`、`capability_tags`、`instructions`、`constraints`、`max_retries`。顶层 `common` 块声明跨 step 共享的 `instructions`/`constraints`（step 自动继承，渲染时 common 在前、step 在后合并进对应视图区块），step 级同名可选字段声明 step 专属操作指引与约束。`transitions` 中 on:pass 与 on:fail 各指向目标 step id 或特殊值 done/halt：done 表示 item 进入终态并触发写回，halt 表示 item 置为 suspended=true 并保留当前列等待人工处理。YAML 的每个 phase 是 WorkItem 对应列状态下的步骤容器，正向迁移 phase 要求当前 phase 内全部 step passed。loader SHALL 在加载时全量校验并报告非法配置。
 
 #### Scenario: 合法 YAML 加载
 - **WHEN** loader 加载语法与引用合法的 workflow YAML

@@ -151,3 +151,31 @@ export function renderAgentSummaries(agentSummaries: Record<string, string> | un
   lines.push("")
   return lines
 }
+
+// ─── 占位符插值层 ───
+
+/** 插值白名单：仅这些 key 可被 {{key}} 占位符引用，其余一律保留原文（防配置注入任意动态值）。 */
+const INTERPOLATION_ALLOWED_KEYS = new Set([
+  "worktree_path",
+  "change_id",
+  "step_id",
+  "phase",
+  "agent",
+  "allowed_directories",
+  "allowed_packages",
+  "notes",
+])
+
+/**
+ * 占位符插值：将 text 中的 `{{key}}` 替换为 ctx[key]。
+ * - key 不在白名单：保留原文（原样返回占位符）
+ * - ctx 缺值：保留原文（降级，不抛错、不阻断渲染）
+ */
+export function interpolateText(text: string, ctx: Record<string, string>): string {
+  return text.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (raw, key: string) => {
+    if (!INTERPOLATION_ALLOWED_KEYS.has(key)) return raw
+    const value = ctx[key]
+    return value === undefined ? raw : value
+  })
+}
+

@@ -1,5 +1,5 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
-import type { WorkItem, StepConfig } from "./types.js"
+import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity } from "./engine.js"
@@ -9,7 +9,7 @@ import { taskListOf, issueChildrenOf } from "../task-children.js"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
   renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
-  isWorktreeReady, renderWorktreeNotReady,
+  isWorktreeReady, renderWorktreeNotReady, interpolateText,
 } from "../views.js"
 
 export interface WorkflowStatusViewOptions {
@@ -49,7 +49,7 @@ export function renderWorkflowStatusView(
     if (ctxAgent === ORCHESTRATOR_AGENT) {
       return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
     }
-    return renderBlocked(rec)
+    return renderBlocked(rec, item, workflow, ctxAgent)
   }
   if (rec.status === "terminal") {
     if (ctxAgent === ORCHESTRATOR_AGENT) {
@@ -62,7 +62,7 @@ export function renderWorkflowStatusView(
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-    return renderAgentWorking(item, rec, step, ctxAgent, options.state, options.tg)
+    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg)
   }
   return renderGate(rec, item, ctxAgent)
 }
@@ -120,11 +120,25 @@ function renderTerminalPhase(item: WorkItem): string {
   ].join("\n")
 }
 
-function renderBlocked(rec: EngineRecommendation): string {
+/** blocked 视图：调用者若为当前 step 轮次 agent 用 blocked_agent 文案，否则用通用 blocked 文案。 */
+function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: LoadedWorkflow, ctxAgent: string): string {
+  const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
+  const isCurrentAgent = step?.agents.includes(ctxAgent) ?? false
+  const reason = rec.blockedReason ?? "(未知)"
+  if (isCurrentAgent) {
+    return [
+      "# ⛔ 当前 step 阻塞中，等待编排处理",
+      "",
+      `- **原因**: ${reason}`,
+      "",
+      "你属于当前轮次角色，请勿自行推进，等待编排者解除阻塞后重新查询状态。",
+      "",
+    ].join("\n")
+  }
   return [
     "# ⛔ 当前无法推进（blocked）",
     "",
-    `- **原因**: ${rec.blockedReason ?? "(未知)"}`,
+    `- **原因**: ${reason}`,
     "",
   ].join("\n")
 }
@@ -284,6 +298,7 @@ function renderAgentWorking(
   item: WorkItem,
   rec: EngineRecommendation,
   step: StepConfig | null,
+  common: WorkflowCommon | undefined,
   ctxAgent: string,
   state: OrchestrateState,
   tg: TaskGroupState,
@@ -301,6 +316,20 @@ function renderAgentWorking(
     ].join("\n")
   }
   const caps = step?.capability_tags ?? []
+  // step 语义占位符插值上下文：动态值来源见各 key（缺值保留占位符原文，不阻断渲染）
+  const stepCtx: Record<string, string> = {}
+  if (tg.worktreePath) stepCtx["worktree_path"] = tg.worktreePath
+  stepCtx["change_id"] = state.changeId
+  if (rec.stepId) stepCtx["step_id"] = rec.stepId
+  stepCtx["phase"] = item.phase
+  stepCtx["agent"] = ctxAgent
+  const boundary = readExecutionBoundary(item)
+  if (boundary) {
+    stepCtx["allowed_directories"] = boundary.allowed_directories.join(", ")
+    stepCtx["allowed_packages"] = boundary.allowed_packages.join(", ")
+    // notes 留空（架构师按规范无补充）时渲染为「无额外说明」，避免视图中出现字面 {{notes}}
+    stepCtx["notes"] = boundary.notes && boundary.notes.trim() !== "" ? boundary.notes : "无额外说明"
+  }
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
@@ -315,6 +344,7 @@ function renderAgentWorking(
     `**阶段**: ${item.phase} | **step**: \`${rec.stepId ?? "(无)"}\``,
     "",
   ]
+  lines.push(...renderStepSemantics(step, common, stepCtx))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent))
@@ -330,9 +360,12 @@ function renderAgentWorking(
   }
   lines.push(`${n++}. 执行当前 step（\`${rec.stepId}\`）职责范围内的全部工作——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${n++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
-  // 构建验证只对产出/验证可构建工件的 dev 角色引导；analyze/review 不执行本地构建验证
-  if (ctxAgent === "openspec-developer") {
-    lines.push(`${n++}. 按已加载的质量门类 skill 在本地执行构建验证，并本地核对覆盖率门禁达标后再提交（避免提交后由审核层复核发现不达标来回返工）`)
+  // 通用指引（common.instructions）→ step 专属指引（step.instructions）合并渲染为编号步骤
+  for (const instruction of common?.instructions ?? []) {
+    lines.push(`${n++}. ${interpolateText(instruction, stepCtx)}`)
+  }
+  for (const instruction of step?.instructions ?? []) {
+    lines.push(`${n++}. ${interpolateText(instruction, stepCtx)}`)
   }
   lines.push(`${n++}. 全部完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed" })\``)
   lines.push(`${n++}. 遇阻塞无法继续 → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "failed" })\``)
@@ -340,11 +373,27 @@ function renderAgentWorking(
   return lines.join("\n")
 }
 
-/** 按 step 渲染动态上下文：analyze=blocker、implement=执行边界+待修复 children、verify_*=children/待验证任务清单。 */
+/** step.id → 上下文渲染类型映射：verify_* 与 review_* 语义一一对应，渲染路由由 step.id 推导。 */
+type StepContextKind = "analyze" | "implement" | "review_tool" | "review_task" | "review_quality"
+
+const STEP_ID_TO_CONTEXT_KIND: Record<string, StepContextKind> = {
+  analyze: "analyze",
+  implement: "implement",
+  verify_tool: "review_tool",
+  verify_task: "review_task",
+  verify_quality: "review_quality",
+}
+
+/** step.id 推导上下文渲染类型，未命中返回 undefined（优雅降级不渲染该区块）。 */
+function stepContextKind(stepId: string): StepContextKind | undefined {
+  return STEP_ID_TO_CONTEXT_KIND[stepId]
+}
+
+/** 按 step 渲染动态上下文：由 step.id 推导渲染类型（未命中优雅降级返回空数组）。 */
 function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: string): string[] {
   if (!step) return []
   const lines: string[] = []
-  switch (step.id) {
+  switch (stepContextKind(step.id)) {
     case "analyze":
       lines.push(...renderAnalyzeBlockers(item))
       break
@@ -352,15 +401,28 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       lines.push(...renderExecutionBoundary(item))
       lines.push(...renderDeveloperChildren(item))
       break
-    case "verify_tool":
+    case "review_tool":
       lines.push(...renderToolChildren(item))
       break
-    case "verify_task":
+    case "review_task":
       lines.push(...renderTaskChildren(item))
       break
-    case "verify_quality":
+    case "review_quality":
       lines.push(...renderQualityChildren(item, ctxAgent))
       break
+  }
+  return lines
+}
+
+/** step 语义字段渲染：constraints（common.constraints 与 step.constraints 合并，经占位符插值注入动态值，缺值保留原文）。 */
+function renderStepSemantics(step: StepConfig | null, common: WorkflowCommon | undefined, ctx: Record<string, string>): string[] {
+  if (!step) return []
+  const lines: string[] = []
+  const constraints = [...(common?.constraints ?? []), ...(step.constraints ?? [])]
+  if (constraints.length > 0) {
+    lines.push("## 约束", "")
+    for (const c of constraints) lines.push(`- ${interpolateText(c, ctx)}`)
+    lines.push("")
   }
   return lines
 }
@@ -441,12 +503,12 @@ function renderDeveloperChildren(item: WorkItem): string[] {
   }
   const highRefix = toFix.filter((c) => typeof c.metadata["refix_count"] === "number" && (c.metadata["refix_count"] as number) >= 2)
   if (highRefix.length > 0) {
-    lines.push("## ⚠️ 修复多次未过的 issue（须根因分析）", "")
+    lines.push("## ⚠️ 修复多次未过的 issue", "")
     for (const c of highRefix) {
       const id = c.externalId ?? c.id.replace(/^issue:/, "")
       lines.push(`- Issue #${id}（已 ${c.metadata["refix_count"]} 次修复未过）`)
     }
-    lines.push("", "**必须完成 5-Why 根因分析后再动手修复**，不得跳过分析直接改代码。", "")
+    lines.push("")
   }
   return lines
 }
