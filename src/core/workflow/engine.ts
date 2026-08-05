@@ -177,6 +177,9 @@ export function checkpointTriggered(item: WorkItem, workflow: LoadedWorkflow, st
 export function applyCheckpointContinue(item: WorkItem, step: StepConfig): void {
   clearStepTags(item, step.id)
   item.metadata["_checkpoint"] = false
+  // 重置内部重试计数：checkpointTriggered 按 _retryCount 实时计算，continue 后若不重置，
+  // 残留计数 + 未终态 children 会让检查点视图恒成立，编排无法获得下一步分派指令（死锁）。
+  resetInternalRetryCount(item)
 }
 
 export function applyCheckpointGiveup(item: WorkItem, step: StepConfig): void {
@@ -187,10 +190,17 @@ export function applyCheckpointGiveup(item: WorkItem, step: StepConfig): void {
     applyAgentVerdict(item, step.id, agent, "passed")
   }
   item.metadata["_checkpoint"] = false
+  // 与 continue 对称重置：跨 step 差异化 max_retries 时，防止上一 step 残留计数污染下一 step 检查点判定。
+  resetInternalRetryCount(item)
 }
 
 export function incrementRetry(item: WorkItem): void {
   setInternalCount(item, "_retryCount", readInternalCount(item, "_retryCount") + 1)
+}
+
+/** 归零内部重试计数：checkpoint 决策与 recovery 恢复后须清空残留计数，防止检查点判定死锁或跨 step 污染。 */
+export function resetInternalRetryCount(item: WorkItem): void {
+  setInternalCount(item, "_retryCount", 0)
 }
 
 export function suspendItem(item: WorkItem, reason: string): void {

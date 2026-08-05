@@ -9,7 +9,7 @@ import type { ParsedTask } from "../tasks-md.js"
 import { assertOrchestrator, findTaskGroup } from "../derive.js"
 import { assertPathWithin } from "../paths.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../workflow/loader.js"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem } from "../workflow/engine.js"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount } from "../workflow/engine.js"
 import { renderWorkflowStatusView } from "../workflow/status.js"
 import { taskChildrenOf } from "../task-children.js"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.js"
@@ -123,6 +123,8 @@ function applyRecoveryState(
 ): void {
   // 恢复重建为已知状态后清除残留推进阻塞原因，避免 orchestrator 视图展示过期信息
   delete item.metadata["_advance_block_reason"]
+  // 清除内部重试计数：recovery 恢复后残留 _retryCount 会在下次回退时立即再次触发检查点（死锁）。
+  resetInternalRetryCount(item)
   const phase = recovery?.phase
   if (!phase || phase === "task_analysis") {
     item.phase = "todo"

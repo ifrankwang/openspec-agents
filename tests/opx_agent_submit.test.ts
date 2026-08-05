@@ -13,6 +13,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, agent_submit, set_worktree, complete_task_group } from "../src/adapters/opencode/tools"
 import { loadWorkflow } from "../src/core/workflow"
+import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
 import { FakeGitRunner, makeCtx, setupWorkspace } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
@@ -803,6 +804,52 @@ describe("opx_agent_submit 通用 step 提交", () => {
     }
   })
 
+  test("17b. checkpoint_decision=continue 真实触发路径：_retryCount 达上限+未终态 child → continue 后检查点解除、分派恢复", async () => {
+    const root = `/tmp/opxsub-17b-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await initWorktree(wt)
+      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const state = JSON.parse(readFileSync(statePath, "utf-8"))
+      const item = {
+        id: "task:1", source: "openspec", externalId: "1", type: "task",
+        title: "First Task Group", description: "First Task Group",
+        phase: "review", suspended: false, currentStep: "verify_tool",
+        tags: { "verify_tool:openspec-reviewer-tool": "failed" },
+        // 真实触发：_retryCount=5（max_retries 5 的倍数）、无 _checkpoint 标记、未终态 child
+        metadata: { _retryCount: 5 },
+        children: [{
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "遗留 issue", description: "d", phase: "todo", suspended: false,
+          currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low",
+        }],
+        labels: [],
+      }
+      state.workItems = [item]
+      writeFileSync(statePath, JSON.stringify(state, null, 2))
+
+      const wf = loadWorkflow(readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8"))
+      const step = wf.stepMap.get("verify_tool")!.step
+      expect(checkpointTriggered(taskItemOf(wt), wf, step)).toBe(true)
+      expect(recommendForItem(taskItemOf(wt), wf).status).toBe("checkpoint")
+
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", checkpoint_decision: "continue" },
+        makeCtx("openspec-reviewer-tool", wt)
+      )
+      expect(r).toContain("continue")
+      const saved = taskItemOf(wt)
+      expect(saved.metadata["_retryCount"]).toBe(0)
+      expect(saved.metadata["_checkpoint"]).toBe(false)
+      expect(checkpointTriggered(saved, wf, step)).toBe(false)
+      const rec = recommendForItem(saved, wf)
+      expect(rec.status).not.toBe("checkpoint")
+      expect(rec.agents).toContain("openspec-reviewer-tool")
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+
   test("18. checkpoint_decision=giveup：未解决 children 置 cancelled + step 标记 passed", async () => {
     const root = `/tmp/opxsub-18-${Date.now()}`
     const { wt } = freshSetup(root)
@@ -834,6 +881,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(saved.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
       expect(saved.children.find((c: WorkItem) => c.id === "issue:7").phase).toBe("cancelled")
       expect(saved.metadata["_checkpoint"]).toBe(false)
+      expect(saved.metadata["_retryCount"]).toBe(0)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

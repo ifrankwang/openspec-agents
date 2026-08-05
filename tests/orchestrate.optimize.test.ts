@@ -6,7 +6,7 @@
  * B2   Recovery 阶段恢复（item.phase / currentStep / tags 断言）
  * B3   Recovery review_layer 子阶段参数（tool→task→quality 起始层 + 非法组合报错）
  * B4   boundary（analyze execution_boundary 必传/落盘 + verify_* boundary_expansion 合并/拦截）
- * B5   retryCount 不重置（dev 修复提交 / checkpoint continue 均不清 _retryCount）
+ * B5   retryCount 语义（dev 修复提交不清 _retryCount；checkpoint continue 重置为 0 解除检查点）
  * B6   opx_status 视图（orchestrator 分派 / working / gate 三态）
  * B7/B9 verify_quality 维度 gate（5 维全推荐、提交后不再分派、全提交→done 终态）
  * B8   taskNumber 数字 ID 归一化（normalizeTaskIds）+ init base_branch
@@ -22,6 +22,8 @@ import { writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit } from "../src/adapters/opencode/tools"
+import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
+import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
@@ -192,16 +194,19 @@ describe("B2. Recovery 阶段恢复", () => {
     } finally { teardown(root) }
   })
 
-  test("recovery review → review/verify_tool，analyze+implement passed tag", async () => {
+  test("recovery review → review/verify_tool，analyze+implement passed tag；残留 _retryCount 被清除", async () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
+      // 注入残留重试计数：recovery 须清除，防止恢复后下一次回退立即再次触发检查点
+      rewriteItem(wt, (item) => { item.metadata["_retryCount"] = 5 })
       await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_tool")
       expect(item.tags["analyze:openspec-architect"]).toBe("passed")
       expect(item.tags["implement:openspec-developer"]).toBe("passed")
+      expect(metaOf(item, "_retryCount")).toBe(0)
     } finally { teardown(root) }
   })
 
@@ -321,7 +326,7 @@ describe("B4. boundary 参数", () => {
   })
 })
 
-describe("B5. retryCount 不重置", () => {
+describe("B5. checkpoint continue 重置 retryCount", () => {
   test("quality failed 回 implement（_retryCount=1）→ dev 修复提交后 _retryCount 保持 1", async () => {
     const { wt, root } = fresh()
     try {
@@ -341,24 +346,34 @@ describe("B5. retryCount 不重置", () => {
     } finally { teardown(root) }
   })
 
-  test("checkpoint continue 后 _retryCount 保持且该 step tag 重置", async () => {
+  test("checkpoint continue 后 _retryCount 重置为 0，检查点解除、分派视图恢复", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
+      // 真实触发路径：_retryCount=5（max_retries 5 的倍数）+ 无 _checkpoint 标记 + 未终态 child（task issue 遗留）
       rewriteItem(wt, (item) => {
-        item.metadata["_retryCount"] = 3
-        item.metadata["_checkpoint"] = true
+        item.metadata["_retryCount"] = 5
+        delete item.metadata["_checkpoint"]
         item.tags["verify_tool:openspec-reviewer-tool"] = "failed"
       })
+      const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+      const step = workflow.stepMap.get("verify_tool")!.step
+      const item0 = readItem(wt, CID)
+      expect(checkpointTriggered(item0, workflow, step)).toBe(true)
+      expect(recommendForItem(item0, workflow).status).toBe("checkpoint")
+
       const r = await agent_submit.execute(
         { change_id: CID, step_id: "verify_tool", verdict: "passed", checkpoint_decision: "continue" },
         ctx.toolR
       )
       expect(r).toContain("continue")
       const item = readItem(wt, CID)
-      expect(metaOf(item, "_retryCount")).toBe(3)
+      expect(metaOf(item, "_retryCount")).toBe(0)
       expect(item.metadata["_checkpoint"]).toBe(false)
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      const rec = recommendForItem(item, workflow)
+      expect(rec.status).not.toBe("checkpoint")
+      expect(rec.agents.length).toBeGreaterThan(0)
     } finally { teardown(root) }
   })
 })
