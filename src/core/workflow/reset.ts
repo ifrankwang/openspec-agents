@@ -3,7 +3,7 @@ import { tagKey } from "./types.js"
 import { clearStepTags, isTerminalPhase } from "./engine.js"
 import { DIMENSION_AGENT_MAP } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
-import type { Dimension } from "../types.js"
+import type { Dimension, ReviewLayer } from "../types.js"
 import { issueChildrenOf } from "../task-children.js"
 
 export interface ResetReviewTagsInput {
@@ -14,7 +14,7 @@ export interface ResetReviewTagsInput {
 
 /** 解析 child 的 issue 归因字段（sourcePhase/dimension/file/line），缺省 tool/style/""/0。 */
 export function resolveChildIssueFields(child: WorkItem): {
-  sourcePhase: "tool" | "task" | "quality"
+  sourcePhase: ReviewLayer
   dimension: Dimension
   file: string
   line: number

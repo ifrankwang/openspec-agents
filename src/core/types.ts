@@ -11,7 +11,14 @@ export const ISSUE_STATUSES = ["open", "submitted", "rejected", "verified", "exe
 export type IssueStatus = typeof ISSUE_STATUSES[number]
 
 export type Phase = "task_analysis" | "dev_impl" | "review" | "completed"
-export type BuildPhaseTarget = "task_analysis" | "dev_impl" | "review"
+
+/** 恢复（recovery）可恢复的阶段合法值，与 InitParams.recovery.phase 值域一致。 */
+export const BUILD_PHASE_TARGETS = ["task_analysis", "dev_impl", "review"] as const
+export type BuildPhaseTarget = typeof BUILD_PHASE_TARGETS[number]
+
+/** review 内子层合法值（review_layer / issue 归因 source_phase 共用同一三元组）。 */
+export const REVIEW_LAYERS = ["tool", "task", "quality"] as const
+export type ReviewLayer = typeof REVIEW_LAYERS[number]
 export type OrchestrateStatus = "not_started" | "in_progress" | "completed"
 export type DimensionVerdict = "pending" | "passed" | "failed"
 export type QualityLayerProgress = Record<ReviewDimension, DimensionVerdict>
@@ -34,7 +41,7 @@ export interface TaskItem {
 export interface IssueItem {
   id: string
   dimension: Dimension
-  sourcePhase: "tool" | "task" | "quality"
+  sourcePhase: ReviewLayer
   severity: string
   file: string
   line: number

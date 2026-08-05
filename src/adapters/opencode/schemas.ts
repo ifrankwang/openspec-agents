@@ -1,6 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { SEVERITY_LEVELS } from "../../core/constants.js"
-import { CODE_DIMENSIONS } from "../../core/types.js"
+import { CODE_DIMENSIONS, REVIEW_LAYERS } from "../../core/types.js"
 
 export const executionBoundarySchema = tool.schema.object({
   allowed_directories: tool.schema.array(tool.schema.string().min(1)).min(1).describe("developer 只能修改/创建文件的目录列表（含实施与验证所需的测试代码目录）"),
@@ -49,11 +49,11 @@ export const agentSubmitSchema = tool.schema.object({
   exempt_adjudications: tool.schema.array(exemptAdjudicationItem).optional().describe("裁定的豁免申请列表：dismissed→cancelled，rejected→回 todo"),
   checkpoint_decision: tool.schema.enum(["continue", "giveup"]).optional().describe("重试检查点决策：continue=重置该 step tag 并回退 parent；giveup=未解决 children 强制 cancelled 并将 step 标记 completed"),
   new_children: tool.schema.array(tool.schema.object({
-    id: tool.schema.string(),
-    title: tool.schema.string(),
-    description: tool.schema.string(),
+    id: tool.schema.string().min(1).describe("新 issue 的唯一 id（不可为空）"),
+    title: tool.schema.string().min(1).describe("issue 标题（不可为空）"),
+    description: tool.schema.string().min(1).describe("issue 描述（不可为空，参与去重 key）"),
     severity: tool.schema.enum(SEVERITY_LEVELS).optional(),
-    source_phase: tool.schema.enum(["tool", "task", "quality"]).optional().describe("issue 归因阶段（tool/task/quality）。quality reviewer 提报时缺省归因 quality，其余调用方缺省 tool"),
+    source_phase: tool.schema.enum(REVIEW_LAYERS).optional().describe("issue 归因阶段（tool/task/quality）。quality reviewer 提报时缺省归因 quality，其余调用方缺省 tool"),
     dimension: tool.schema.enum(CODE_DIMENSIONS).optional().describe("issue 归因维度，缺省 style"),
     file: tool.schema.string().optional().describe("问题所在文件路径（相对于 worktree）"),
     line: tool.schema.number().int().min(0).optional().describe("问题所在行号（0=整文件/待新建文件）"),

@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS } from "../../core/types.js"
 import {
   initExecute, setWorktreeExecute, statusExecute,
   completeTaskGroupExecute, setUnattendedExecute,
@@ -14,9 +15,9 @@ export const init = tool({
     task_group_id: tool.schema.string().min(1).describe("要初始化的任务组 ID。无 recovery 重复调用当前组时保留进度；切换任务组时仅初始化目标组。"),
     base_branch: tool.schema.string().optional().describe("基准分支名（如 main、develop），用于计算 merge-base 和 worktree fork 源。未传则自动从当前 git 分支推导。"),
     recovery: tool.schema.object({
-      phase: tool.schema.enum(["task_analysis", "dev_impl", "review"] as const).describe("恢复到哪个阶段"),
+      phase: tool.schema.enum(BUILD_PHASE_TARGETS).describe("恢复到哪个阶段"),
       review_layer: tool.schema
-        .enum(["tool", "task", "quality"] as const)
+        .enum(REVIEW_LAYERS)
         .optional()
         .describe("恢复到 review 内某子层（仅 phase=review 时有效）。tool→从 tool 层开始（默认），task→tool 层标记完成从 task 层开始，quality→tool+task 层完成从 quality 层开始"),
       reopenIssues: tool.schema.boolean().default(false).optional().describe("完成后继续修 issue：将目标任务组全部非 verified issue 置为 rejected，重置 review 进度，回到 dev_impl 阶段。目标组必须为 completed。与 review_layer 互斥。"),
