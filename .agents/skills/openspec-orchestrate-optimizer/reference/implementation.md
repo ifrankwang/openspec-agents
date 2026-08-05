@@ -16,7 +16,7 @@
 三步分别交给独立 general 子代理串行执行，主代理不得合并或并行：
 
 1. **开发+测试子代理**：按确认的实施项修改文件。单次调用可处理多个文件的联动改动。完成后按改动类型分流验证：
-   - 改 `src/tools/orchestrate.ts`、`scripts/*.sh` → 运行 `bun test` + `bun run typecheck`；脚本另做 `bash -n` 语法检查
+   - 改 `src/core/`、`scripts/*.sh` → 运行 `bun test` + `bun run typecheck`；脚本另做 `bash -n` 语法检查
    - 纯文档改动（`assets/agents/*.md`、`assets/skills/*/SKILL.md`、本 skill 文件）→ 跳过自动化测试，由复核子代理验证
    - 识别每个实施项是否创建了新场景——有为新场景增测试；无则说明理由且不留缺口
 2. **复核子代理**：审查变更正确性、设计原则合规（AGENTS.md 治理原则所有要点）、测试覆盖。复核不通过 → 回环到第 1 步重做，迭代上限 3 次。超限则停止并报告。

@@ -20,7 +20,7 @@ capabilities: ["orchestration-analysis"]
 
 1. **明确意图** — 按入口表判定，模糊则追问
 2. **收集证据** —
-   a) 读取当前代码（`src/tools/`）、agent 定义（`assets/agents/`）、skill 定义（`assets/skills/`）、治理原则（`AGENTS.md`），提取约束清单
+   a) 读取当前代码（`src/core/`）、agent 定义（`assets/agents/`）、skill 定义（`assets/skills/`）、治理原则（`AGENTS.md`），提取约束清单
    b) 有 sessionID 时，按 `reference/session-evidence.md` 分派子代理收集 session 证据
 3. **分析** — 按意图执行对应分析方法
 4. **方案复核** — 分派独立子代理交叉验证方案合理性、治理原则遵循、完整性。违规则回退

@@ -574,3 +574,62 @@ describe("角色隔离与已验证 issue 过滤（回归）", () => {
     expect(output).not.toContain("tool 摘要")
   })
 })
+
+describe("视图 Worktree 约束语义", () => {
+  const wtTg = {
+    status: "dev_impl" as const,
+    worktreePath: "/wt",
+    branchName: "tg-1",
+    baseRef: "base",
+  }
+
+  test("约束文本双面化表述：严禁直接修改主仓库/主分支路径", () => {
+    const out = renderDeveloperView(mockState(), baseTg(wtTg), "openspec-developer")
+    expect(out).toContain("严禁直接修改主仓库")
+    expect(out).toContain("主分支路径下的文件")
+  })
+
+  test("推荐阅读文档相对 worktree 路径解析指引", () => {
+    const out = renderArchitectView(mockState(), baseTg(wtTg))
+    expect(out).toContain("以 worktree 路径为基准解析")
+    expect(out).toContain("禁止从主仓库根目录解析")
+  })
+
+  test("worktree 未就绪时仍输出约束语义", () => {
+    const out = renderDeveloperView(mockState(), baseTg({ status: "dev_impl" }), "openspec-developer")
+    expect(out).toContain("worktree 未就绪")
+  })
+})
+
+describe("主仓库 openspec 污染诊断渲染", () => {
+  const wtTg = { status: "review" as const, worktreePath: "/wt", branchName: "tg-1", baseRef: "base" }
+
+  test("传入污染信息时渲染醒目提示与文件清单", () => {
+    const state = mockState()
+    const tg = baseTg(wtTg)
+    const output = renderOrchestratorView(state, tg, undefined, {
+      repoRoot: "/main-repo",
+      files: ["openspec/changes/foo/design.md", "openspec/changes/foo/tasks.md"],
+    })
+    expect(output).toContain("## ⚠️ 主仓库 openspec 污染")
+    expect(output).toContain("/main-repo")
+    expect(output).toContain("openspec/changes/foo/design.md")
+    expect(output).toContain("openspec/changes/foo/tasks.md")
+  })
+
+  test("无污染时不渲染污染段", () => {
+    const state = mockState()
+    const tg = baseTg(wtTg)
+    const output = renderOrchestratorView(state, tg, undefined, null)
+    expect(output).not.toContain("主仓库 openspec 污染")
+    expect(output).not.toContain("污染")
+  })
+
+  test("污染段不重复渲染 worktree 约束文本", () => {
+    const state = mockState()
+    const tg = baseTg(wtTg)
+    const output = renderOrchestratorView(state, tg, undefined, { repoRoot: "/m", files: ["openspec/foo.md"] })
+    expect(output).toContain("主仓库 openspec 污染")
+    expect(output).not.toContain("严禁直接修改主仓库")
+  })
+})

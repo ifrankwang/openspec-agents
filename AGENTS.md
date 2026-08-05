@@ -24,7 +24,7 @@ tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/
 | `assets/agents/` | 子代理定义文件（`openspec-*.md`）。技能加载、权限声明、行为约束在此修改。 |
 | `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`。扫描遵循 OpenCode 标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
 | `.agents/skills/` | 项目内部分析用 skill，如 `openspec-orchestrate-optimizer`。非子代理加载目标。 |
-| `src/tools/` | 编排工具实现（`orchestrate.ts` 等）。行为以源码为准。 |
+| `src/core/` | 编排核心实现（`tools/`、`views.ts`、`state.ts` 等）。行为以源码为准。 |
 | `tests/` | 测试文件。`bun test` 执行。 |
 
 ## 治理原则
@@ -116,7 +116,7 @@ opx_* 工具返回体必须是 markdown 格式（列表、段落），不得使�
 
 ### 全局避免重复（DRY）
 
-此原则适用于整个项目：相同语义的代码段在 3 个及以上位置复用时必须提炼为共享函数，禁止复制粘贴。agent 文档（`assets/agents/*.md`）等非结构化文本除外。视图渲染（`src/tools/orchestrate/views.ts`）中因各 agent 视图高度同构，阈值降至 2 个及以上，worktree 路径展示、issue 列表渲染等已按此原则抽取。
+此原则适用于整个项目：相同语义的代码段在 3 个及以上位置复用时必须提炼为共享函数，禁止复制粘贴。agent 文档（`assets/agents/*.md`）等非结构化文本除外。视图渲染（`src/core/views.ts`）中因各 agent 视图高度同构，阈值降至 2 个及以上，worktree 路径展示、issue 列表渲染等已按此原则抽取。
 
 ### Skill 间不得相互引用
 

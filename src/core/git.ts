@@ -1,6 +1,6 @@
 import path from "path"
 import { execFile } from "node:child_process"
-import { readFile, writeFile } from "node:fs/promises"
+import { readFile, writeFile, stat } from "node:fs/promises"
 
 export interface GitRunner {
   run(worktree: string, args: string[]): Promise<string>
@@ -175,4 +175,122 @@ export async function discoverRepoRoot(worktreePath: string): Promise<string> {
     throw new Error(`无法从 gitdir "${gitdir}" 推导主仓库路径，缺少 "/.git/worktrees/" 标记。`)
   }
   return gitdir.slice(0, idx)
+}
+
+/**
+ * 解析 `git status --porcelain` / `git diff --name-only` 输出为文件路径列表。
+ * 兼容 rename 条目（`R old -> new`）与引号包裹路径。
+ */
+function parsePorcelainPaths(out: string): string[] {
+  const lines = out.split("\n").map((l) => l.trim()).filter(Boolean)
+  return lines.map((l) => {
+    let f = l.replace(/^\S+\s+/, "")
+    if (f.includes(" -> ")) f = f.split(" -> ").pop()!.trim()
+    return f.replace(/^"+|"+$/g, "")
+  })
+}
+
+/**
+ * 检测主仓库下 openspec 文档是否存在未提交变更（修改/新增/改名），用于编排者视图的主分支污染诊断。
+ * 兼容两种形态：`.git` 为目录（入参即主仓库，repoRoot 取自身）与 `.git` 为文件（走 discoverRepoRoot）。
+ * 无法解析主仓库路径或主仓库干净时返回 null。
+ */
+export async function detectMainRepoPollution(worktreePath: string): Promise<{ repoRoot: string; files: string[] } | null> {
+  let repoRoot: string
+  try {
+    const st = await stat(path.join(worktreePath, ".git"))
+    repoRoot = st.isDirectory() ? worktreePath : await discoverRepoRoot(worktreePath)
+  } catch {
+    return null
+  }
+  const out = await runGit(repoRoot, ["status", "--porcelain", "--", "openspec/"])
+  const files = parsePorcelainPaths(out)
+  if (files.length === 0) return null
+  return { repoRoot, files }
+}
+
+/**
+ * 将主仓库 `openspec/changes/<changeId>/` 下的未提交污染文档并入 worktree 分支，并清理主仓库工作树。
+ *
+ * 序列：scoped 检测（仅限本 changeId 目录）→ 预检（主仓库 index 除 change 目录外无其它 staged、
+ * worktree 干净、污染路径在 baseRef 与 worktree tip 间无分叉、主仓库 HEAD 未相对 worktree 前进）→
+ * 主仓库 add → write-tree/commit-tree 创建不可达合并提交（main 分支 ref 不动）→
+ * worktree 真 3-way merge --no-ff <pollSha> → 主仓库 restore --staged --worktree 清理。
+ *
+ * 失败路径：预检失败时未进入 add 流程，绝不执行 --worktree 恢复（污染内容原样保留待人工处理）；
+ * 已进入 merge 流程（add 后）失败时在 finally 中补 restore --staged --worktree，防主仓库 index 残留。
+ *
+ * @param mainRepo 主仓库路径（orchestrator/architect 会话工作目录）
+ * @param worktreePath 任务组 worktree 路径
+ * @param opts.changeId 需兜底的 changeId（scope 限定）
+ * @param opts.baseRef 基准分支 ref；为 null 时降级跳过分叉预检
+ * @returns 已并入的污染文件相对路径列表；无污染返回空数组
+ */
+export async function reconcileMainPollution(
+  mainRepo: string,
+  worktreePath: string,
+  opts: { changeId: string; baseRef: string | null }
+): Promise<string[]> {
+  const changeDir = `openspec/changes/${opts.changeId}`
+  const files = parsePorcelainPaths(await runGit(mainRepo, ["status", "--porcelain", "--", changeDir]))
+  if (files.length === 0) return []
+
+  let staged = false
+  try {
+    const cachedOut = await runGit(mainRepo, ["diff", "--cached", "--name-only"])
+    const stagedOutside = cachedOut.split("\n").map((l) => l.trim()).filter(Boolean)
+      .filter((p) => p !== changeDir && !p.startsWith(`${changeDir}/`))
+    if (stagedOutside.length > 0) {
+      throw new Error(
+        `主仓库 index 除 \`${changeDir}\` 外存在其它已暂存内容，拒绝自动合并污染文档：\n` +
+        stagedOutside.map((p) => `- \`${p}\``).join("\n") +
+        `\n请人工核对处理。`
+      )
+    }
+    if (!(await isWorktreeClean(worktreePath))) {
+      throw new Error(`worktree "${worktreePath}" 存在未 commit 内容，拒绝自动合并主仓库污染文档，请先 commit 再重试。`)
+    }
+    const wtTip = await runGit(worktreePath, ["rev-parse", "HEAD"])
+    if (opts.baseRef) {
+      const diverged = (await runGit(worktreePath, ["diff", "--name-only", opts.baseRef, wtTip, "--", ...files])).trim()
+      if (diverged.length > 0) {
+        throw new Error(
+          `以下污染文件在 worktree 分支中已相对基准分支发生变更（分叉），拒绝自动合并：\n` +
+          diverged.split("\n").filter(Boolean).map((p) => `- \`${p}\``).join("\n") +
+          `\n请人工核对处理。`
+        )
+      }
+    }
+    const aheadCount = parseInt((await runGit(mainRepo, ["rev-list", "--count", `${wtTip}..HEAD`])).trim(), 10)
+    if (!Number.isNaN(aheadCount) && aheadCount > 0) {
+      throw new Error(
+        `主仓库分支已相对 worktree 分支前进 ${aheadCount} 个提交，自动合并将夹带其它变更内容，拒绝自动合并。\n` +
+        `请人工核对处理。`
+      )
+    }
+
+    const addResult = await runGitChecked(mainRepo, ["add", "--", changeDir])
+    if (!addResult.success) throw new Error(`git add 主仓库 ${changeDir} 失败：${addResult.stderr}`)
+    staged = true
+    const tree = (await runGit(mainRepo, ["write-tree"])).trim()
+    if (!tree) throw new Error("git write-tree 失败：主仓库暂存区为空，无法生成合并提交。")
+    const pollCommit = (await runGit(mainRepo, [
+      "commit-tree", tree, "-p", "HEAD", "-m", "docs(openspec): reconcile main-repo edits into worktree branch",
+    ])).trim()
+    if (!pollCommit) throw new Error("git commit-tree 失败：无法创建合并提交。")
+
+    const mergeResult = await runGitChecked(worktreePath, ["merge", "--no-ff", pollCommit])
+    if (!mergeResult.success) {
+      await runGitChecked(worktreePath, ["merge", "--abort"])
+      throw new Error(
+        `worktree 合并主仓库污染文档失败（冲突）：${mergeResult.stderr}\n` +
+        `已中止合并，请人工核对处理。`
+      )
+    }
+    return files
+  } finally {
+    if (staged) {
+      await runGitChecked(mainRepo, ["restore", "--staged", "--worktree", "--", changeDir])
+    }
+  }
 }

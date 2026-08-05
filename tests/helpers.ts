@@ -15,6 +15,15 @@ export class FakeGitRunner implements GitRunner {
   revListCount = 0
   currentBranch = "main"
   callLog: string[] = []
+  pollutionFiles = new Map<string, string[]>()
+  worktreeOpenspecDirty = new Set<string>()
+  cachedDiffOut = ""
+  diffOut = ""
+  treeShas: string[] = []
+  commitShas: string[] = []
+  mainAheadCount = 0
+  private treeCount = 0
+  private commitCount = 0
 
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
@@ -49,16 +58,43 @@ export class FakeGitRunner implements GitRunner {
     }
 
     if (cmd === "merge-base") return this.baseRef
-    if (cmd === "rev-list" && rest[0] === "--count") return String(this.revListCount)
+    if (cmd === "rev-list" && rest[0] === "--count") {
+      if (rest[1] && /^[0-9a-f]{7,}\.\./.test(rest[1])) return String(this.mainAheadCount)
+      return String(this.revListCount)
+    }
     if (cmd === "rev-parse") {
       if (rest[0] === "--abbrev-ref" && rest[1] === "HEAD") return this.currentBranch
       return "abc123def456"
     }
 
+    if (cmd === "write-tree") {
+      const sha = `tree${String(this.treeCount++).padStart(4, "0")}0000000000000000000000000000`
+      this.treeShas.push(sha)
+      return sha
+    }
+    if (cmd === "commit-tree") {
+      const sha = `poll${String(this.commitCount++).padStart(4, "0")}0000000000000000000000000000`
+      this.commitShas.push(sha)
+      return sha
+    }
+    if (cmd === "diff") {
+      if (rest[0] === "--cached") return this.cachedDiffOut
+      return this.diffOut
+    }
+
     if (cmd === "status" && rest[0] === "--porcelain") {
-      if (rest.some((r) => r.startsWith("openspec"))) {
-        return this.dirtyPaths.has(`${worktree}-openspec`) ? "M  openspec/changes/foo/tasks.md" : ""
+      const scopeArg = rest.find((r) => r.startsWith("openspec"))
+      if (scopeArg) {
+        const changeMatch = scopeArg.match(/^openspec\/changes\/([^/]+)/)
+        if (changeMatch) {
+          const key = `${worktree}-${changeMatch[1]}`
+          const files = this.pollutionFiles.get(key)
+          if (files && files.length > 0) return files.map((f) => `M  ${f}`).join("\n")
+        }
+        if (this.dirtyPaths.has(`${worktree}-openspec`)) return "M  openspec/changes/foo/tasks.md"
+        return ""
       }
+      if (this.worktreeOpenspecDirty.has(worktree)) return "M  openspec/changes/cid/tasks.md"
       return this.dirtyPaths.has(worktree) ? "M  some-file.txt" : ""
     }
 
@@ -87,8 +123,17 @@ export class FakeGitRunner implements GitRunner {
       return { success: true, stdout: "", stderr: "" }
     }
 
-    if (cmd === "status") return { success: true, stdout: this.dirtyPaths.has(worktree) ? "M  some-file.txt" : "", stderr: "" }
-    if (cmd === "add" || cmd === "commit" || cmd === "checkout") return { success: true, stdout: "", stderr: "" }
+    if (cmd === "status") {
+      if (args.some((a) => a.startsWith("openspec"))) {
+        return { success: true, stdout: this.worktreeOpenspecDirty.has(worktree) ? "M  openspec/changes/cid/tasks.md" : "", stderr: "" }
+      }
+      return { success: true, stdout: this.dirtyPaths.has(worktree) ? "M  some-file.txt" : "", stderr: "" }
+    }
+    if (cmd === "commit") {
+      this.worktreeOpenspecDirty.delete(worktree)
+      return { success: true, stdout: "", stderr: "" }
+    }
+    if (cmd === "add" || cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "" }
 
     if (cmd === "worktree" && args[1] === "remove") {
       this.worktrees.delete(args[2])

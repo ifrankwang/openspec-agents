@@ -146,7 +146,8 @@ function renderWorktreeSection(
     lines.push(`- **路径**: \`${tg.worktreePath}\``)
     lines.push(`- **分支**: \`${tg.branchName || "(none)"}\``)
     if (tg.baseRef) lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
-    lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行")
+    lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行；严禁直接修改主仓库/主分支路径下的文件（如 `<repo>/openspec/...`）")
+    lines.push("- **路径解析**: 推荐阅读文档均为相对 worktree 路径的引用，一律以 worktree 路径为基准解析，禁止从主仓库根目录解析")
   } else {
     lines.push("- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)")
   }
@@ -288,7 +289,12 @@ function renderAgentSummaries(tg: TaskGroupState, agentName: string): string[] {
   return lines
 }
 
-export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupState, diskWorktrees?: { branch: string; path: string }[]): string {
+export function renderOrchestratorView(
+  state: OrchestrateState,
+  tg: TaskGroupState,
+  diskWorktrees?: { branch: string; path: string }[],
+  mainPollution?: { repoRoot: string; files: string[] } | null,
+): string {
   const lines: string[] = []
   lines.push("# 编排进度", "")
   lines.push(`**变更**: ${state.changeId}`)
@@ -411,6 +417,14 @@ export function renderOrchestratorView(state: OrchestrateState, tg: TaskGroupSta
     }
   } else {
     lines.push("未发现状态异常。")
+  }
+  if (mainPollution && mainPollution.files.length > 0) {
+    lines.push("", "## ⚠️ 主仓库 openspec 污染", "")
+    lines.push(`检测到主仓库 \`${mainPollution.repoRoot}\` 下 openspec 文档存在未提交变更（修改/新增）：`)
+    lines.push("")
+    for (const f of mainPollution.files) lines.push(`- \`${f}\``)
+    lines.push("")
+    lines.push("子代理文件操作应限定在 worktree 内，主仓库路径出现变更通常由误改主分支路径造成，请人工核对处理。")
   }
   lines.push("", "## 下一步", "")
   if (checks.length > 0) {

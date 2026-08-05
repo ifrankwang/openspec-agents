@@ -2,11 +2,12 @@ import path from "path"
 import type { TaskGroupState, TaskItem, IssueItem, TaskStatus, Phase, BuildPhaseTarget, Phases, OrchestrateState } from "../types.js"
 import { ORCHESTRATOR_AGENT, PHASE_ORDER, MAX_RETRIES, BLOCKING_SEVERITIES, DIMENSION_AGENT_MAP, AGENT_TO_SUBMIT_TOOL } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import { createEmptyPhases, assertOrchestrator, findTaskGroup, isReviewCompleted, deriveCurrentAgents } from "../derive.js"
+import { assertPathWithin } from "../paths.js"
 import {
   renderOrchestratorView,
   renderArchitectView,
@@ -273,7 +274,12 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
 
   const repoRoot = ctx.worktree
   const branch = params.branch_name || `task-group/${state.changeId}/${state.taskGroupId}`
-  const wtPath = params.worktree_path || path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
+  let wtPath: string
+  if (params.worktree_path) {
+    wtPath = assertPathWithin(repoRoot, params.worktree_path, "worktree_path")
+  } else {
+    wtPath = path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
+  }
 
   const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
   if (changeStatus.trim().length > 0) {
@@ -384,7 +390,7 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
   let view: string
   if (agent === ORCHESTRATOR_AGENT) {
     const diskWts = await discoverDiskWorktrees(ctx.worktree)
-    view = renderOrchestratorView(state, tg, diskWts)
+    view = renderOrchestratorView(state, tg, diskWts, await detectMainRepoPollution(ctx.worktree))
   } else if (agent === "openspec-architect") {
     view = renderArchitectView(state, tg)
   } else if (agent === "openspec-developer") {
@@ -396,7 +402,7 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
   } else if (Object.values(DIMENSION_AGENT_MAP).includes(agent)) {
     view = renderQualityReviewView(state, tg, agent)
   } else {
-    view = renderOrchestratorView(state, tg)
+    view = renderOrchestratorView(state, tg, undefined, await detectMainRepoPollution(ctx.worktree))
   }
 
   if (agent !== ORCHESTRATOR_AGENT) {

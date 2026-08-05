@@ -25,7 +25,7 @@ OpenCode 编排插件。提供 OpenSpec 任务组编排、阻塞升级、隔离�
 
 Review 依次执行 tool、task、quality 三层门禁；失败回开发修复。不可自主决策的需求、依赖或验收阻塞由架构师在 task_analysis 内就地处理，同环节继续复核至完成。
 
-具体阶段流转、工具参数、状态与门禁规则以 `src/tools/orchestrate/` 实现为准。README 不重复这些细节，避免文档与代码漂移。
+具体阶段流转、工具参数、状态与门禁规则以 `src/core/` 实现为准。README 不重复这些细节，避免文档与代码漂移。
 
 ## 快速开始
 
@@ -57,11 +57,10 @@ bun add @opencode-ai/openspec-orchestrate
 ## 项目结构
 
 ```
-src/index.ts                  — 插件入口与工具注册
-src/tools/orchestrate.ts      — 编排工具导出
-src/tools/orchestrate/        — 状态、门禁、视图、生命周期与 Review 逻辑
+src/index.ts                  — 插件入口（向后兼容导出）
+src/core/                     — 状态、门禁、视图、生命周期与 Review 逻辑（含 tools/ 编排工具）
 src/dashboard/                — 编排进度看板服务
-src/agents/                   — agent 配置注入
+src/adapters/opencode/        — agent 配置注入与工具注册适配
 src/skills/                   — 内置 skill 加载与注入
 assets/agents/                — agent 定义
 assets/skills/                — 内置 skill 定义
@@ -74,7 +73,7 @@ tests/                        — Bun 测试，使用 FakeGitRunner
 - **编排进度看板**：插件加载时启动 HTTP 看板服务，实时展示阶段进度、Review 门禁状态、Task/Issue 明细（2s 轮询、只读）
 - **状态持久化**：状态文件按 changeId 拆分并写入主仓库；会话通过工具显式传入的 change_id 定位状态文件；worktree 内 session 通过 `context.json` 指针辅助解析
 - **阻塞升级**：不可自主决策的问题持久化、暂停、用户恢复、架构复核
-- **Worktree 隔离**：`git worktree` 分支隔离，自动合并清理
+- **Worktree 隔离**：`git worktree` 分支隔离，自动合并清理。`opx_arch_submit` 检测到主仓库本 change 目录下的 openspec 文档污染时自动并入 worktree 分支并清理主仓库工作树
 - **执行边界**：架构师限定 developer 的目录和包范围，reviewer 新报 issue 自动扩展
 - **豁免机制**：issue → developer 申请豁免 → 对应维度 reviewer 通过 `exempt_issue_ids` 裁定
 - **校验守卫**：多维度校验确保流程完整性

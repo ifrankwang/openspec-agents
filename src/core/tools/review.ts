@@ -9,8 +9,9 @@ import {
 } from "../derive.js"
 import { applyReviewGate, deduplicateAndAddIssues, mergeExecutionBoundary, finalizeQualityPhase } from "../review.js"
 import { readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock } from "../state.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete } from "../git.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, reconcileMainPollution } from "../git.js"
 import { parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
+import { assertIssueFilesWithin } from "../paths.js"
 import type {
   ToolContext, ArchSubmitParams, ArchBlockerParams, DevSubmitParams,
   ToolReviewParams, TaskReviewParams, QualityReviewParams, ResolveReviewParams,
@@ -112,9 +113,20 @@ export async function archSubmitExecute(params: ArchSubmitParams, ctx: ToolConte
       throw new Error(`git commit openspec docs 失败：${commitResult.stderr}`)
     }
   }
+  let reconciledFiles: string[] = []
+  if (tg.worktreePath && tg.branchName) {
+    reconciledFiles = await reconcileMainPollution(ctx.worktree, tg.worktreePath, {
+      changeId: state.changeId,
+      baseRef: tg.baseRef,
+    })
+  }
   updateAgentSummary(tg, "openspec-architect", "预检通过，已输出执行边界")
   await writeState(ctx.worktree, state)
-  return "复核通过，职责已完成，请立即结束当前会话。"
+  const reconciledSuffix = reconciledFiles.length > 0
+    ? "\n\n已将主仓库污染文档并入 worktree 分支并清理主仓库工作树：\n" +
+      reconciledFiles.map((f) => `- \`${f}\``).join("\n")
+    : ""
+  return "复核通过，职责已完成，请立即结束当前会话。" + reconciledSuffix
 }
 
 export async function archBlockerExecute(params: ArchBlockerParams, ctx: ToolContext): Promise<string> {
@@ -362,9 +374,9 @@ export async function toolReviewSubmitExecute(params: ToolReviewParams, ctx: Too
       throw new Error(`tool issue 必须包含有效的 dimension 字段（5 维之一），收到：${iss.dimension}。`)
     }
   }
+  assertIssueFilesWithin(issues, tg.worktreePath)
 
   applyReviewGate(tg.issues, tlFixedIds, tlExemptIds, tlRejected, undefined, "tool")
-
   let nextIssueId = tg.issues.reduce((m, i) => Math.max(m, parseInt(i.id, 10) || 0), 0) + 1
   const newIssues: IssueItem[] = []
   let dedupedCount = 0
@@ -494,6 +506,7 @@ export async function taskReviewSubmitExecute(params: TaskReviewParams, ctx: Too
   }
 
   const rawIssues = (params.issues || []) as any[]
+  assertIssueFilesWithin(rawIssues, tg.worktreePath)
   let nextIssueId = tg.issues.reduce((m, i) => Math.max(m, parseInt(i.id, 10) || 0), 0) + 1
   for (const iss of rawIssues) {
     const dedupResult = deduplicateAndAddIssues(
@@ -635,6 +648,7 @@ export async function qualityReviewSubmitExecute(params: QualityReviewParams, ct
     if (tg.phases.review.quality.progress[dimension] !== "pending") {
       throw new Error("该维度审查已提交，不允许重复提交。")
     }
+    assertIssueFilesWithin(issues, tg.worktreePath)
 
     applyReviewGate(tg.issues, qlFixedIds, qlExemptIds, qlRejected, dimension, "quality")
 
