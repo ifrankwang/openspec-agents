@@ -155,6 +155,10 @@ export function buildTaskWorkItemFromTaskGroup(tg: TaskGroupState): WorkItem {
   item.phase = taskGroupStatusToPhase(tg.status)
   item.currentStep = taskGroupStatusToStep(tg.status)
   item.metadata = { source: "openspec", tasks: JSON.parse(JSON.stringify(tg.tasks ?? [])) }
+  // 迁移透传 worktree 引用（worktree_path/branch_name/base_ref）：旧格式升级后 worktree 就绪判定与提交门禁须保持一致
+  if (tg.worktreePath) item.metadata["worktree_path"] = tg.worktreePath
+  if (tg.branchName) item.metadata["branch_name"] = tg.branchName
+  if (tg.baseRef) item.metadata["base_ref"] = tg.baseRef
   item.children = tg.issues.map(buildIssueWorkItem)
   return item
 }

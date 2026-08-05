@@ -378,6 +378,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     __setGitRunner(new FakeGitRunner())
     const o = makeCtx("openspec-orchestrator", wt)
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await set_worktree.execute({ change_id: CID }, o)
 
     const state = readStateSync(wt)
     const item = taskItemOf(state)

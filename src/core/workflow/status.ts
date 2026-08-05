@@ -9,6 +9,7 @@ import { taskListOf, issueChildrenOf } from "../task-children.js"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
   renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
+  isWorktreeReady, renderWorktreeNotReady,
 } from "../views.js"
 
 export interface WorkflowStatusViewOptions {
@@ -46,18 +47,18 @@ export function renderWorkflowStatusView(
   }
   if (rec.status === "blocked") {
     if (ctxAgent === ORCHESTRATOR_AGENT) {
-      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.mainPollution)
+      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
     }
     return renderBlocked(rec)
   }
   if (rec.status === "terminal") {
     if (ctxAgent === ORCHESTRATOR_AGENT) {
-      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.mainPollution)
+      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
     }
     return renderTerminal(rec)
   }
   if (ctxAgent === ORCHESTRATOR_AGENT) {
-    return renderOrchestratorDispatch(options.state, item, workflow, rec, options.mainPollution)
+    return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
@@ -142,6 +143,7 @@ function renderOrchestratorDispatch(
   item: WorkItem,
   workflow: LoadedWorkflow,
   rec: EngineRecommendation,
+  tg: TaskGroupState,
   mainPollution?: { repoRoot: string; files: string[] } | null,
 ): string {
   const lines = [
@@ -171,13 +173,20 @@ function renderOrchestratorDispatch(
     lines.push("子代理文件操作应限定在 worktree 内，主仓库路径出现变更通常由误改主分支路径造成，请人工核对处理。")
     lines.push("")
   }
+  lines.push(...renderWorktreeSection(state, tg))
   lines.push("## 下一步", "")
   const agents = rec.agents
   if (agents.length > 0) {
-    const agentList = agents.map((a) => `\`${a}\``).join("、")
-    lines.push(`分派子代理：${agentList}。`)
-    if (agents.length > 1) {
-      lines.push("（多子代理相互独立，可在单条消息中并排分派，无需串行等待）")
+    if (!isWorktreeReady(tg)) {
+      // 分派前置门禁：worktree 未就绪时不给出分派指令，指引编排者先补齐 worktree 再回来查状态分派
+      lines.push("分派前置条件未满足：当前存在待分派子代理，但 worktree 未就绪，暂不给出分派指令。")
+      lines.push("请先调用 `opx_orch_set_worktree` 确保 worktree 就绪，再回来查 `opx_status` 获取分派指令。")
+    } else {
+      const agentList = agents.map((a) => `\`${a}\``).join("、")
+      lines.push(`分派子代理：${agentList}。`)
+      if (agents.length > 1) {
+        lines.push("（多子代理相互独立，可在单条消息中并排分派，无需串行等待）")
+      }
     }
   } else {
     // 防御出口：当前 step 存在 failed 残留 tag 但无待分派项 → 状态不一致。
@@ -279,6 +288,18 @@ function renderAgentWorking(
   state: OrchestrateState,
   tg: TaskGroupState,
 ): string {
+  // worktree 就绪阻断（置于顶部）：未就绪时拒绝执行，渲染 ⛔ 视图，不输出 ✅ 执行视图内容
+  if (!isWorktreeReady(tg)) {
+    return [
+      "# ⛔ worktree 未就绪，当前拒绝执行",
+      "",
+      ...renderWorktreeNotReady(),
+      "",
+      "请立即结束当前会话，不执行任何操作、不调用 `opx_agent_submit`。",
+      "报告编排者先调用 `opx_orch_set_worktree`，就绪后再回来执行。",
+      "",
+    ].join("\n")
+  }
   const caps = step?.capability_tags ?? []
   const lines = [
     "# ✅ 当前轮到你执行",

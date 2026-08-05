@@ -11,13 +11,13 @@
  * 约定：
  * - 调用前需先 setupWorkspace + __setGitRunner(FakeGitRunner)（或 setupWithFakeGit）
  * - task_group_id 默认 "1"，可通过 opts.groupId 覆盖
- * - worktree 指状态文件所在 repo 根（非 .worktree 子目录）；驱动不自动调 set_worktree，
- *   需要 worktree/branch 元数据的用例自行经 ctx.orch 调用
+ * - worktree 指状态文件所在 repo 根（非 .worktree 子目录）；setupToAnalyze 自动补调 set_worktree
+ *   使 worktree 就绪，需 worktree/branch 元数据的用例无需自行调用
  */
 import type { ToolContext } from "@opencode-ai/plugin"
 import type { WorkItem } from "../src/core/workflow/types"
 import { taskListOf as projectTaskList } from "../src/core/task-children"
-import { init, agent_submit } from "../src/adapters/opencode/tools"
+import { init, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
 import { makeCtx, readState } from "./helpers"
 
 export type Ctx = ReturnType<typeof makeCtx>
@@ -102,12 +102,13 @@ export function makeAgentCtxs(wt: string): AgentCtx {
   }
 }
 
-/** 初始化到 todo/analyze（无 recovery 时 init 构造 task WorkItem 置 todo/analyze）。 */
+/** 初始化到 todo/analyze（无 recovery 时 init 构造 task WorkItem 置 todo/analyze），并补一次 set_worktree 使 worktree 就绪。 */
 export async function setupToAnalyze(wt: string, cid: string, opts: { groupId?: string; recovery?: DriveOpts["recovery"] } = {}): Promise<AgentCtx> {
   const ctx = makeAgentCtxs(wt)
   const params: Record<string, unknown> = { change_id: cid, task_group_id: opts.groupId ?? "1" }
   if (opts.recovery) params.recovery = opts.recovery
   await init.execute(params as any, ctx.orch)
+  await set_worktree.execute({ change_id: cid }, ctx.orch)
   return ctx
 }
 

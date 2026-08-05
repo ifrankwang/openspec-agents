@@ -437,6 +437,15 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       return applyCheckpointDecision(params, item, workflow, ctx, state)
     }
 
+    // worktree 就绪硬门禁：worktree_path 缺失时拒绝提交（checkpoint_decision 不走提交路径，已在上方绕过）。
+    // 所有 step（analyze/implement/verify_tool/verify_task/verify_quality）统一受此门禁约束。
+    const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
+    if (!wtPath) {
+      throw new Error(
+        "worktree 未就绪，当前拒绝提交。\n请编排者先调用 opx_orch_set_worktree 确保 worktree 就绪后再提交。"
+      )
+    }
+
     // 参数归一化：issue id 去 # 前缀（fixed/exempt/adjudication 均接受带 # 的 tg.issue 序号引用）
     if (params.fixed_issue_ids) params.fixed_issue_ids = params.fixed_issue_ids.map(normalizeIssueId)
     if (params.exempt_issue_ids) params.exempt_issue_ids = params.exempt_issue_ids.map(normalizeIssueId)
@@ -462,7 +471,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     }
 
     // worktree 编辑边界强化（56ddfe9 意图）：review 提报的 issue 文件路径必须位于 worktree 内，路径逃逸拒绝。
-    const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
     if (stepPhase === "review" && (params.new_children?.length ?? 0) > 0) {
       assertIssueFilesWithin(params.new_children as Array<{ file?: string }>, wtPath ?? ctx.worktree)
     }

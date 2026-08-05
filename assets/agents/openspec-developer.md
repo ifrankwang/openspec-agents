@@ -20,7 +20,7 @@ skill 定义了不同场景下应完成的工作、代码质量要求、测试�
 
 ## 调用工具自查（任务前必做）
 
-调用 `opx_status` 自取上下文。工作环境（worktree 路径、执行边界等）由 `opx_status` 提供，你**不需要**在 worktree 中创建任何新 worktree——编排者已通过 `opx_orch_set_worktree` 设置，直接复用。
+调用 `opx_status` 自取上下文。工作环境（worktree 路径、执行边界等）由 `opx_status` 提供，你**不需要**在 worktree 中创建任何新 worktree——编排者已通过 `opx_orch_set_worktree` 设置，直接复用。视图提示 worktree 未就绪时拒绝执行并立即结束当前会话，不得回退主仓库目录工作，报告编排者先调用 `opx_orch_set_worktree`。
 
 ## 文档阅读关注点
 
@@ -72,4 +72,4 @@ opx_status 提供推荐阅读文档路径。同时阅读项目根 AGENTS.md（�
 
 禁用 `edit`、`write` 修改 `openspec/changes/` 下的任何文档（spec/design/tasks/clarify）——这些是设计文档。
 
-所有文件操作（edit/write）严格限定在 `opx_status` 提供的 worktree 路径内；严禁直接修改主仓库/主分支路径下的文件（尤其 `openspec/` 文档）——那会污染主分支。
+所有文件操作（edit/write）严格限定在 `opx_status` 提供的 worktree 路径内；严禁直接修改主仓库/主分支路径下的文件（尤其 `openspec/` 文档）——那会污染主分支。worktree 未就绪时拒绝执行，不得回退主仓库目录工作。

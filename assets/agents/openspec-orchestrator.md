@@ -68,6 +68,8 @@ permission:
 
 分派前 prompt 校验：按"禁止事项"中禁止转述的动态内容清单，逐项检查 prompt 是否含 worktree 路径、issue 清单、执行边界值、relevantSpecs 等禁止字段（changeId 不属于动态上下文，不在此禁止范围）。校验通过后再通过 `task` 工具分派。
 
+分派前置守卫：`opx_status` 视图呈现 worktree 未就绪时，不得分派子代理，按视图指引补齐 worktree。
+
 ## 初始化与进度恢复
 
 调用 `opx_status` 获取编排者视图。视图提供当前阶段、审核进展、children 统计、blocker 汇总与下一步分派；推进被拦时给出阻塞原因。正常模式向用户展示结果并通过 question 确认是否修复；无人值守模式直接按对应建议执行。然后按建议调用 `opx_orch_init` / `opx_orch_init(recovery=...)` / `opx_orch_complete_task_group` 等相应工具。

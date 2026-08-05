@@ -18,6 +18,8 @@ permission:
 
 调用 `opx_status` 自取上下文。
 
+`opx_status` 视图提示 worktree 未就绪时，拒绝执行并立即结束当前会话——不执行任何操作、不调用 `opx_agent_submit`，报告编排者先调用 `opx_orch_set_worktree` 补齐 worktree。
+
 ## 严重级别
 
 使用统一严重级别体系（Critical / High / Medium / Low / Info）。

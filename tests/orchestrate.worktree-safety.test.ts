@@ -739,7 +739,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("worktree 未就绪（无 worktree_path）→ 不触发任何 plumbing", async () => {
+  test("worktree 未就绪（无 worktree_path）→ 提交被 worktree 就绪硬门禁拒绝，不触发任何 plumbing", async () => {
     const root = `/tmp/wts-w9g-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -748,9 +748,10 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    const result = await archSubmit(wt)
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/worktree 未就绪[\s\S]*opx_orch_set_worktree/)
 
-    expect(result).not.toContain("已将主仓库污染文档")
     expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
     expect(fakeGit.callLog.some((l) => l.includes("commit-tree"))).toBe(false)
     expect(fakeGit.commitShas.length).toBe(0)

@@ -114,6 +114,13 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
   return { wt, fakeGit }
 }
 
+/** init + set_worktree 一次到位：worktree 就绪硬门禁要求提交前 worktree 就绪（opx_orch_set_worktree 后提交）。 */
+async function initWorktree(wt: string): Promise<void> {
+  const orch = makeCtx("openspec-orchestrator", wt)
+  await init.execute({ change_id: CID, task_group_id: "1" }, orch)
+  await set_worktree.execute({ change_id: CID }, orch)
+}
+
 function makeIssue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "1",
@@ -138,7 +145,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-1-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
 
       // analyze：architect
       await agent_submit.execute(
@@ -196,7 +203,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-2-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -229,7 +236,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-3-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -252,7 +259,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-4-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -277,7 +284,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-5-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -311,7 +318,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-6-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -349,8 +356,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-7-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const orch = makeCtx("openspec-orchestrator", wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, orch)
+      await initWorktree(wt)
 
       const before = taskItemOf(wt).phase
       const err = await agent_submit.execute(
@@ -376,7 +382,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
         baseBranch: "main",
         taskGroups: [{
           id: "1", name: "First Task Group", taskCount: 3,
-          worktreePath: null, branchName: null, baseRef: null, executionBoundary: null,
+          worktreePath: join(wt, ".worktree", CID, "task-group-1"), branchName: `task-group/${CID}/1`, baseRef: "base000000000000000000000000000000000001", executionBoundary: null,
           relevantSpecs: [], status: "task_analysis",
           phases: {
             architect_review: { completed: false },
@@ -423,7 +429,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(wf.stepMap.get("verify_quality")!.step.agents).toContain("openspec-reviewer-style")
 
       // 推进到 review 阶段后，tool reviewer 按 verify_tool step 提交
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -450,8 +456,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-10-${Date.now()}`
     const { wt, fakeGit } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
-      await set_worktree.execute({ change_id: CID }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       for (const [step, agent] of [
         ["analyze", "openspec-architect"],
         ["implement", "openspec-developer"],
@@ -493,7 +498,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-11-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -519,7 +524,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-12-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -570,7 +575,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-13-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -608,7 +613,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-14-${Date.now()}`
     const { wt, fakeGit } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       // 直接构造「done 终态、待收尾」状态（等价于 opx_agent_submit 推进到 done 后的落盘）
       const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
@@ -649,7 +654,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-15-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       // 推进到 review/verify_quality
         await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
@@ -713,7 +718,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-16-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       // 构造前置：task 在 verify_quality，child 带 exempt_request + source=style reviewer
       const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
@@ -721,7 +726,11 @@ describe("opx_agent_submit 通用 step 提交", () => {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
         title: "First Task Group", description: "First Task Group",
         phase: "review", suspended: false, currentStep: "verify_quality",
-        tags: {}, metadata: {},
+        tags: {}, metadata: {
+          worktree_path: join(wt, ".worktree", CID, "task-group-1"),
+          branch_name: `task-group/${CID}/1`,
+          base_ref: "base000000000000000000000000000000000001",
+        },
         children: [{
           id: "issue:9", source: "openspec", externalId: "9", type: "issue",
           title: "不可修", description: "d", phase: "todo", suspended: false,
@@ -760,7 +769,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-17-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
@@ -798,7 +807,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-18-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
@@ -834,7 +843,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-19-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -858,7 +867,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-20-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       const err = await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed" },
         makeCtx("openspec-architect", wt)
@@ -874,7 +883,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-21-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
 
       // 先以 failed 上报 blocker 落盘（awaiting_user），EB 校验仅在 passed 生效
       const r0 = await agent_submit.execute(
@@ -917,7 +926,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-22-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       const err = await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB, blocker_updates: [{ blocker_id: "b99", user_response: "x" }] },
         makeCtx("openspec-architect", wt)
@@ -932,7 +941,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-23-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       // 只覆盖部分 task → 抛错
@@ -958,7 +967,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-24-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       const r = await agent_submit.execute(
@@ -982,7 +991,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-25-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       // 先提交部分完成，制造 submitted 态
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
@@ -1025,7 +1034,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-26-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1070,7 +1079,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-27-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1108,7 +1117,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-28-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
@@ -1145,7 +1154,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-29-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1171,7 +1180,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-30-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
@@ -1203,7 +1212,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-31-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
@@ -1232,7 +1241,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-32-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1262,7 +1271,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-33-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
         makeCtx("openspec-architect", wt)
@@ -1300,7 +1309,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-34-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
@@ -1363,7 +1372,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-35-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1430,7 +1439,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-36-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1493,7 +1502,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-37-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1545,7 +1554,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-38-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
@@ -1585,7 +1594,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-39-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       // 注入既存非终态 Info child（与待报 Low issue 同 key，dedupe key 不含 severity）
@@ -1616,7 +1625,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const root = `/tmp/opxsub-40-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await initWorktree(wt)
       // init 后 children 为 task child "1"/"2"/"3"（tasks.md 1.1/1.2/1.3）
       expect(taskItemOf(wt).children.filter((c: WorkItem) => c.type === "task").map((c: WorkItem) => c.id)).toEqual(["1", "2", "3"])
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))

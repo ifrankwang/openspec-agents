@@ -75,6 +75,16 @@ export function renderEfficiencySteps(startNum: number): { lines: string[], next
   return { lines, nextNum: n }
 }
 
+/** worktree 就绪判定：taskGroup 投影的 worktreePath 非空即就绪（与 submit 硬门禁的 metadata.worktree_path 同源）。 */
+export function isWorktreeReady(tg: TaskGroupState): boolean {
+  return Boolean(tg.worktreePath)
+}
+
+/** 统一 worktree 未就绪提示文案（renderWorktreeSection / orchestrator 分派视图 / 子代理拒绝执行视图共用）。 */
+export function renderWorktreeNotReady(): string[] {
+  return ["- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)"]
+}
+
 export function renderWorktreeSection(
   state: OrchestrateState,
   tg: TaskGroupState,
@@ -89,7 +99,7 @@ export function renderWorktreeSection(
     lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行；严禁直接修改主仓库/主分支路径下的文件（如 `<repo>/openspec/...`）")
     lines.push("- **路径解析**: 推荐阅读文档均为相对 worktree 路径的引用，一律以 worktree 路径为基准解析，禁止从主仓库根目录解析")
   } else {
-    lines.push("- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)")
+    lines.push(...renderWorktreeNotReady())
   }
   if (opts?.showNamespace) {
     lines.push(`- **隔离标识**: \`${state.isolationNamespace}\``)
