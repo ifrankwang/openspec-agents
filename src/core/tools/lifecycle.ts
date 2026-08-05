@@ -1,5 +1,6 @@
 import path from "path"
 import type { TaskItem, TaskStatus } from "../types.js"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS } from "../types.js"
 import { ORCHESTRATOR_AGENT } from "../constants.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
@@ -157,19 +158,44 @@ function applyRecoveryState(
   syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
 }
 
+/**
+ * recovery 参数值域校验（入口显式拒绝，早于任何状态变更）：
+ * - phase 必须为合法恢复阶段（task_analysis/dev_impl/review），缺失/非法即抛错并列出合法值；
+ * - review_layer 必须为合法子层（tool/task/quality），非法即抛错；
+ * - review_layer 仅当 phase=review 时允许存在，其余 phase 组合复用既有组合错误消息。
+ */
+function assertValidRecovery(recovery: InitParams["recovery"]): void {
+  if (recovery === undefined) return
+  if (!(BUILD_PHASE_TARGETS as readonly string[]).includes(recovery.phase)) {
+    throw new Error(
+      `recovery.phase 不合法，合法值：${BUILD_PHASE_TARGETS.join("、")}。传入值："${String(recovery.phase)}"。`
+    )
+  }
+  if (recovery.review_layer !== undefined && !(REVIEW_LAYERS as readonly string[]).includes(recovery.review_layer)) {
+    throw new Error(
+      `recovery.review_layer 不合法，合法值：${REVIEW_LAYERS.join("、")}。传入值："${String(recovery.review_layer)}"。`
+    )
+  }
+  if (recovery.review_layer && recovery.phase !== "review") {
+    throw new Error(`review_layer 参数仅当 recovery.phase 为 review 时有效，当前 phase 为 "${recovery.phase}"。`)
+  }
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx.agent, "opx_orch_init")
 
   const args = { ...params }
   if (typeof (args as any).recovery === "string") {
-    try { (args as any).recovery = JSON.parse((args as any).recovery) as any } catch {
+    let parsed: unknown
+    try { parsed = JSON.parse((args as any).recovery) } catch {
       throw new Error(`recovery 参数解析失败：传入的字符串无法解析为对象。传入值：${(args as any).recovery}`)
     }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`recovery 参数解析失败：传入的字符串解析结果不是对象。传入值：${(args as any).recovery}`)
+    }
+    (args as any).recovery = parsed
   }
-
-  if (args.recovery?.review_layer && args.recovery.phase !== "review") {
-    throw new Error("review_layer 参数仅当 recovery.phase 为 review 时有效，当前 phase 为 \"" + args.recovery.phase + "\"。")
-  }
+  assertValidRecovery(args.recovery)
 
   const parsedGroups = await parseAllTaskGroupsFromMd(ctx.worktree, args.change_id)
   if (parsedGroups.length === 0) {
@@ -189,6 +215,12 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     tasksByGroup.set(g.id, await parseTasksMdForGroup(ctx.worktree, args.change_id, g.id))
   }
 
+  // base_branch 是 ref 而非严格 branch：只做非空 + 无空白字符等基本检查（完整分支名校验由 git check-ref-format 承担）
+  if (args.base_branch) {
+    if (!args.base_branch.trim() || /\s/.test(args.base_branch)) {
+      throw new Error(`base_branch 不合法："${args.base_branch}"。基准分支名不能为空或包含空白字符。`)
+    }
+  }
   const baseBranch = args.base_branch || await getCurrentBranch(ctx.worktree)
   let state = await readStateByChangeId(ctx.worktree, args.change_id)
   const wasCurrentGroup = state?.taskGroupId === args.task_group_id
@@ -331,7 +363,17 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   if (!item) throw new Error(`工作项 "task:${state.taskGroupId}" 缺失，请重新调用 opx_orch_init。`)
 
   const repoRoot = ctx.worktree
-  const branch = params.branch_name || `task-group/${state.changeId}/${state.taskGroupId}`
+  // branch_name 可为空（缺省自动生成分支名），仅显式传入时用 git check-ref-format 严格校验。
+  // 用 --branch 形态（而非 refs/heads/<name>）：前者拒绝前导 `-` 等 git branch 创建亦拒绝的非法分支名，
+  // 后者仅检查 refname 合法性，会放行前导 dash 的 plain ref。
+  const rawBranch = params.branch_name ?? ""
+  if (rawBranch !== "") {
+    const check = await runGitChecked(repoRoot, ["check-ref-format", "--branch", rawBranch])
+    if (!check.success) {
+      throw new Error(`分支名 "${rawBranch}" 不合法，请修正后重试。`)
+    }
+  }
+  const branch = rawBranch || `task-group/${state.changeId}/${state.taskGroupId}`
   let wtPath: string
   if (params.worktree_path) {
     wtPath = assertPathWithin(repoRoot, params.worktree_path, "worktree_path")

@@ -1,3 +1,5 @@
+import type { BuildPhaseTarget, ReviewLayer } from "../types.js"
+
 export interface ToolContext {
   worktree: string
   agent: string
@@ -14,8 +16,8 @@ export interface InitParams {
   task_group_id: string
   base_branch?: string
   recovery?: {
-    phase: string
-    review_layer?: "tool" | "task" | "quality"
+    phase: BuildPhaseTarget
+    review_layer?: ReviewLayer
     reopenIssues?: boolean
   }
 }
@@ -47,7 +49,7 @@ export interface AgentSubmitParams {
     title: string
     description: string
     severity?: string
-    source_phase?: "tool" | "task" | "quality"
+    source_phase?: ReviewLayer
     dimension?: string
     file?: string
     line?: number

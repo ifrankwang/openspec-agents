@@ -453,6 +453,25 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       for (const adj of params.exempt_adjudications) adj.issue_id = normalizeIssueId(adj.issue_id)
     }
 
+    // 无效 fixed/exempt id 入口显式拒绝（不静默吞掉修复/豁免声明）：未命中的 id 抛错并列出可用 id 清单。
+    // 以 resolveChildByIssueId 做权威判定，与 submitForStep 的 childById 及 collectFixedExemptLayers 消费端解析语义一致。
+    const knownChildIds = new Set<string>()
+    for (const c of item.children) {
+      knownChildIds.add(c.id)
+      if (c.externalId) knownChildIds.add(c.externalId)
+    }
+    const availableIssueIds = (): string => [...knownChildIds].sort().join(", ")
+    for (const id of params.fixed_issue_ids ?? []) {
+      if (!resolveChildByIssueId(item, id)) {
+        throw new Error(`fixed_issue_ids 中包含无效 issue id: "${id}"。\n可用 issue ID: ${availableIssueIds()}`)
+      }
+    }
+    for (const id of params.exempt_issue_ids ?? []) {
+      if (!resolveChildByIssueId(item, id)) {
+        throw new Error(`exempt_issue_ids 中包含无效 issue id: "${id}"。\n可用 issue ID: ${availableIssueIds()}`)
+      }
+    }
+
     // 先裁定豁免申请（越权/不可路由/跨维抛错）：submitForStep 尚未执行，保证越权裁定零副作用。
     for (const adj of params.exempt_adjudications ?? []) {
       const child = resolveChildByIssueId(item, adj.issue_id)
@@ -473,6 +492,19 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     // worktree 编辑边界强化（56ddfe9 意图）：review 提报的 issue 文件路径必须位于 worktree 内，路径逃逸拒绝。
     if (stepPhase === "review" && (params.new_children?.length ?? 0) > 0) {
       assertIssueFilesWithin(params.new_children as Array<{ file?: string }>, wtPath ?? ctx.worktree)
+    }
+
+    // new_children 空字段入口显式拒绝：空 id/title/description 会污染后续引用与去重 key，禁止入库。
+    for (const nc of params.new_children ?? []) {
+      if (!nc.id || !nc.id.trim()) {
+        throw new Error("new_children 中的 issue id 不能为空，请为每个新 issue 指定唯一 id。")
+      }
+      if (!nc.title || !nc.title.trim()) {
+        throw new Error(`new_children 中 issue "${nc.id}" 的 title 不能为空。`)
+      }
+      if (!nc.description || !nc.description.trim()) {
+        throw new Error(`new_children 中 issue "${nc.id}" 的 description 不能为空。`)
+      }
     }
 
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))

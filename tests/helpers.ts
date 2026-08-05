@@ -111,6 +111,28 @@ export class FakeGitRunner implements GitRunner {
     this.callLog.push(`checked:${args.join(" ")}`)
     const cmd = args[0]
 
+    if (cmd === "check-ref-format") {
+      // 支持两种形态：`check-ref-format refs/heads/<name>` 与 `check-ref-format --branch <name>`。
+      // --branch 形态拒绝前导 `-`（git branch 创建亦拒绝），plain ref 形态放行（贴近真实 git）。
+      const useBranchFlag = args.includes("--branch")
+      const ref = args[args.length - 1]
+      const branch = useBranchFlag ? ref : ref.replace(/^refs\/heads\//, "")
+      const invalid =
+        branch.length === 0 ||
+        /\s/.test(branch) ||
+        /[~^:?*[\\]/.test(branch) ||
+        /[\u0000-\u001f\u007f]/.test(branch) ||
+        /\.\./.test(branch) ||
+        branch.startsWith(".") || branch.endsWith(".") ||
+        branch.startsWith("/") || branch.endsWith("/") || branch.includes("//") ||
+        branch.split("/").some((c) => c.endsWith(".lock")) ||
+        (useBranchFlag && branch.startsWith("-")) ||
+        /@{/.test(branch)
+      return invalid
+        ? { success: false, stdout: "", stderr: `fatal: '${ref}' is not a valid branch name` }
+        : { success: true, stdout: "", stderr: "" }
+    }
+
     if (cmd === "merge") {
       if (this.forceMergeFailure) {
         return { success: false, stdout: "", stderr: "merge failed" }
