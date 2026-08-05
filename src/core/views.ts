@@ -86,7 +86,8 @@ export function renderWorktreeSection(
     lines.push(`- **路径**: \`${tg.worktreePath}\``)
     lines.push(`- **分支**: \`${tg.branchName || "(none)"}\``)
     if (tg.baseRef) lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
-    lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行")
+    lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行；严禁直接修改主仓库/主分支路径下的文件（如 `<repo>/openspec/...`）")
+    lines.push("- **路径解析**: 推荐阅读文档均为相对 worktree 路径的引用，一律以 worktree 路径为基准解析，禁止从主仓库根目录解析")
   } else {
     lines.push("- (worktree 未就绪 — 请编排者先调用 opx_orch_set_worktree)")
   }
@@ -131,13 +132,12 @@ export function formatSeverity(severity: string): string {
   }
 }
 
-/** 上轮会话摘要渲染。参数为 agentSummaries 记录（workItems 单轨下直接读 item.metadata["agent_summaries"]）。 */
-export function renderAgentSummaries(agentSummaries: Record<string, string> | undefined): string[] {
-  if (!agentSummaries || Object.keys(agentSummaries).length === 0) return []
+/** 上轮会话摘要渲染。参数为 agentSummaries 记录（workItems 单轨下直接读 item.metadata["agent_summaries"]）。
+ *  按调用者角色隔离（409c411 意图）：只渲染当前 agent 自己的摘要，不跨 agent 传递。 */
+export function renderAgentSummaries(agentSummaries: Record<string, string> | undefined, agentName: string): string[] {
+  if (!agentSummaries || !agentSummaries[agentName]) return []
   const lines: string[] = ["## 上轮会话摘要", ""]
-  for (const [agent, summary] of Object.entries(agentSummaries)) {
-    lines.push(`- **${agent}**：${summary}`)
-  }
+  lines.push(`- **${agentName}**：${agentSummaries[agentName]}`)
   lines.push("")
   return lines
 }

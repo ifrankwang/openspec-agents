@@ -14,6 +14,8 @@ import {
 export interface WorkflowStatusViewOptions {
   state: OrchestrateState
   tg: TaskGroupState
+  /** 主仓库 openspec 污染诊断结果（56ddfe9 意图），orchestrator 分派视图渲染。 */
+  mainPollution?: { repoRoot: string; files: string[] } | null
 }
 
 /**
@@ -44,18 +46,18 @@ export function renderWorkflowStatusView(
   }
   if (rec.status === "blocked") {
     if (ctxAgent === ORCHESTRATOR_AGENT) {
-      return renderOrchestratorDispatch(options.state, item, workflow, rec)
+      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.mainPollution)
     }
     return renderBlocked(rec)
   }
   if (rec.status === "terminal") {
     if (ctxAgent === ORCHESTRATOR_AGENT) {
-      return renderOrchestratorDispatch(options.state, item, workflow, rec)
+      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.mainPollution)
     }
     return renderTerminal(rec)
   }
   if (ctxAgent === ORCHESTRATOR_AGENT) {
-    return renderOrchestratorDispatch(options.state, item, workflow, rec)
+    return renderOrchestratorDispatch(options.state, item, workflow, rec, options.mainPollution)
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
@@ -140,6 +142,7 @@ function renderOrchestratorDispatch(
   item: WorkItem,
   workflow: LoadedWorkflow,
   rec: EngineRecommendation,
+  mainPollution?: { repoRoot: string; files: string[] } | null,
 ): string {
   const lines = [
     "# 编排进度",
@@ -159,6 +162,15 @@ function renderOrchestratorDispatch(
   }
   lines.push(...renderProgressSection(item, workflow))
   lines.push(...renderOrchestratorBlockers(item))
+  if (mainPollution && mainPollution.files.length > 0) {
+    lines.push("## ⚠️ 主仓库 openspec 污染", "")
+    lines.push(`检测到主仓库 \`${mainPollution.repoRoot}\` 下 openspec 文档存在未提交变更（修改/新增）：`)
+    lines.push("")
+    for (const f of mainPollution.files) lines.push(`- \`${f}\``)
+    lines.push("")
+    lines.push("子代理文件操作应限定在 worktree 内，主仓库路径出现变更通常由误改主分支路径造成，请人工核对处理。")
+    lines.push("")
+  }
   lines.push("## 下一步", "")
   const agents = rec.agents
   if (agents.length > 0) {
@@ -283,7 +295,7 @@ function renderAgentWorking(
     "",
   ]
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
-  lines.push(...renderAgentSummaries(readAgentSummaries(item)))
+  lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent))
   lines.push(...renderSkillSuggestions(ctxAgent, caps))
   lines.push("## 操作指引", "")

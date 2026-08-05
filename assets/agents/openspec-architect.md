@@ -49,6 +49,7 @@ permission:
 - **逐维审查**：opx_status 操作指引中列出的各评估维度必须逐项审查并给出结论（无问题也需简要确认）。
 - **blocker 处理**：需用户确认时：正常模式先 question 工具向用户确认；无人值守模式自行推断决策后标记 resolved（详见 opx_status 视图指引）。通过 `opx_agent_submit` 的 `blockers` 参数记录 blocker（不结束本环节），`blocker_updates` 参数按 blocker_id 置 resolved 并记录用户答复。所有 blocker 处理完毕后再用 `opx_agent_submit({ step_id: "analyze", verdict: "passed", execution_boundary })` 结案。
 - **工具调用边界**：仅可调用 `opx_status` 与 `opx_agent_submit`。
+- **编辑边界**：所有 edit/write 操作限定在 `opx_status` 提供的 worktree 路径内；严禁修改主仓库/主分支路径下的文件（尤其 `openspec/` 文档）——那会污染主分支。
 - **只审当前任务组范围**：除"任务排列合理性"需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节。
 
 ## 文档阅读关注点

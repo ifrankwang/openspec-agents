@@ -1,12 +1,13 @@
 import path from "path"
 import type { TaskItem, TaskStatus } from "../types.js"
 import { ORCHESTRATOR_AGENT } from "../constants.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees } from "../git.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import type { ParsedTask } from "../tasks-md.js"
 import { assertOrchestrator, findTaskGroup } from "../derive.js"
+import { assertPathWithin } from "../paths.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../workflow/loader.js"
 import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem } from "../workflow/engine.js"
 import { renderWorkflowStatusView } from "../workflow/status.js"
@@ -329,7 +330,12 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
 
   const repoRoot = ctx.worktree
   const branch = params.branch_name || `task-group/${state.changeId}/${state.taskGroupId}`
-  const wtPath = params.worktree_path || path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
+  let wtPath: string
+  if (params.worktree_path) {
+    wtPath = assertPathWithin(repoRoot, params.worktree_path, "worktree_path")
+  } else {
+    wtPath = path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
+  }
 
   const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
   if (changeStatus.trim().length > 0) {
@@ -431,7 +437,9 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
   const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
   const rec = recommendForItem(item, workflow)
   const tg = findTaskGroup(state, state.taskGroupId)
-  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg })
+  // 主仓库 openspec 污染诊断（56ddfe9 意图）：orchestrator 分派视图展示主仓库污染，供编排者人工核对
+  const mainPollution = agent === ORCHESTRATOR_AGENT ? await detectMainRepoPollution(ctx.worktree) : null
+  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution })
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {

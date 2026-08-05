@@ -71,3 +71,5 @@ opx_status 提供推荐阅读文档路径。同时阅读项目根 AGENTS.md（�
 禁止调用任何 `opx_orch_*` 工具——这些是编排者专属。
 
 禁用 `edit`、`write` 修改 `openspec/changes/` 下的任何文档（spec/design/tasks/clarify）——这些是设计文档。
+
+所有文件操作（edit/write）严格限定在 `opx_status` 提供的 worktree 路径内；严禁直接修改主仓库/主分支路径下的文件（尤其 `openspec/` 文档）——那会污染主分支。

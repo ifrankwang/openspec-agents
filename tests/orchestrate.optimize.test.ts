@@ -660,16 +660,20 @@ describe("B11. agentSummaries 会话摘要", () => {
     } finally { teardown(root) }
   })
 
-  test("developer 视图包含「上轮会话摘要」区块", async () => {
+  test("developer 视图会话摘要按角色隔离：只渲染 dev 自己的摘要，不跨 agent 传递", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToImplement(wt, CID)
       rewriteItem(wt, (item) => {
-        item.metadata["agent_summaries"] = { "openspec-architect": "预检通过，已输出执行边界" }
+        item.metadata["agent_summaries"] = {
+          "openspec-architect": "预检通过，已输出执行边界",
+          "openspec-developer": "完成 task 2 个",
+        }
       })
       const view = await status.execute({ change_id: CID }, ctx.dev)
       expect(view).toContain("## 上轮会话摘要")
-      expect(view).toContain("**openspec-architect**：预检通过，已输出执行边界")
+      expect(view).toContain("**openspec-developer**：完成 task 2 个")
+      expect(view).not.toContain("预检通过，已输出执行边界")
     } finally { teardown(root) }
   })
 

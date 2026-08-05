@@ -14,7 +14,8 @@ import {
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
 import { agentToReviewDimension } from "../constants.js"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.js"
-import { markTaskGroupCheckboxesComplete } from "../git.js"
+import { markTaskGroupCheckboxesComplete, reconcileMainPollution } from "../git.js"
+import { assertIssueFilesWithin } from "../paths.js"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
 } from "../state.js"
@@ -460,6 +461,12 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       throw new Error(`仅 review 阶段的 step 允许提报新 issue（new_children），当前 step "${params.step_id}" 属于 "${stepPhase}" 阶段，拒绝提报。`)
     }
 
+    // worktree 编辑边界强化（56ddfe9 意图）：review 提报的 issue 文件路径必须位于 worktree 内，路径逃逸拒绝。
+    const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
+    if (stepPhase === "review" && (params.new_children?.length ?? 0) > 0) {
+      assertIssueFilesWithin(params.new_children as Array<{ file?: string }>, wtPath ?? ctx.worktree)
+    }
+
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
     if (stepPhase === "review") {
@@ -500,6 +507,23 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       newChildren: accepted,
     })
 
+    // arch_submit 主仓库污染文档自动合并兜底（56ddfe9 意图）：analyze step（架构师）以 passed 提交后，
+    // 若主仓库本 change 目录下存在未提交 openspec 文档污染，并入 worktree 分支并清理主仓库工作树。
+    let reconciledFiles: string[] = []
+    if (
+      stepPhase === "todo" &&
+      params.step_id === "analyze" &&
+      params.verdict === "passed" &&
+      wtPath &&
+      typeof item.metadata["branch_name"] === "string"
+    ) {
+      const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : null
+      reconciledFiles = await reconcileMainPollution(ctx.worktree, wtPath, {
+        changeId: state.changeId,
+        baseRef,
+      })
+    }
+
     // G19：verify_task passed 且全部 task child 达终态（done）→ 同步 tasks.md 复选框 [ ] → [x]
     if (
       params.step_id === "verify_task" &&
@@ -513,7 +537,11 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     await writeState(ctx.worktree, state)
     const dedupNote = dedupedCount > 0 ? `\n${dedupedCount} 个重复 issue 已自动跳过。` : ""
-    return renderSubmitResult(item, result) + dedupNote
+    const reconciledSuffix = reconciledFiles.length > 0
+      ? "\n\n已将主仓库污染文档并入 worktree 分支并清理主仓库工作树：\n" +
+        reconciledFiles.map((f) => `- \`${f}\``).join("\n")
+      : ""
+    return renderSubmitResult(item, result) + dedupNote + reconciledSuffix
   } finally {
     releaseLock(lockPath)
   }

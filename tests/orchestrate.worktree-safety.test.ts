@@ -11,11 +11,11 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
-import { __setGitRunner } from "../src/core/git"
+import { __setGitRunner, detectMainRepoPollution, type GitRunner } from "../src/core/git"
 import { acquireLock, releaseLock, getLockPath, writeState } from "../src/core/state"
 import type { OrchestrateState } from "../src/core/types"
 import {
-  init, set_worktree, agent_submit,
+  init, set_worktree, agent_submit, status,
 } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
 import { setupToAnalyze, driveToQuality, DIMENSION_AGENTS } from "./helpers-workflow"
@@ -39,6 +39,13 @@ function freshWt(root: string): string {
 function taskItemOf(wt: string): any {
   const state = readState(wt, CID)
   return state?.workItems?.find((w: any) => w.id === "task:1")
+}
+
+/** 同步读状态文件原始 JSON。 */
+function readStateSync(wt: string): any {
+  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  if (!existsSync(p)) return null
+  return JSON.parse(readFileSync(p, "utf-8"))
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -306,5 +313,527 @@ describe("W5. 锁路径 worktree 归一化", () => {
     expect(existsSync(join(worktreeDir, ".opencode", ".orchestrate_state", `${CID}.json`))).toBe(false)
 
     try { rmSync(base, { recursive: true, force: true }) } catch {}
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+//  Behavior 6: 工具层 worktree 路径校验
+// ════════════════════════════════════════════════════════════════
+
+/** init → set_worktree → analyze → implement，停在 review 阶段且 tool 层未提交（workflow-engine agent_submit 语义）。 */
+async function setupToToolReview(wt: string, fakeGit: FakeGitRunner): Promise<void> {
+  const o = makeCtx("openspec-orchestrator", wt)
+  const a = makeCtx("openspec-architect", wt)
+  const d = makeCtx("openspec-developer", wt)
+  await init.execute({ change_id: CID, task_group_id: "1" }, o)
+  await set_worktree.execute({ change_id: CID }, o)
+  await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed",
+    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } }, a)
+  await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] }, d)
+}
+
+describe("W6. 工具层 worktree 路径校验", () => {
+
+  test("verify_tool：issue 文件绝对路径逃逸到 worktree 外 → 拒绝", async () => {
+    const root = `/tmp/wts-w6a-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToToolReview(wt, fakeGit)
+    expect(taskItemOf(wt).metadata["worktree_path"]).not.toBeNull()
+
+    await expect(
+      agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed",
+        new_children: [{ id: "7", title: "越界", description: "越界", severity: "Low", dimension: "style", file: "/etc/passwd", line: 1 }] },
+        makeCtx("openspec-reviewer-tool", wt))
+    ).rejects.toThrow(/超出/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_tool：issue 文件用 .. 逃逸到 worktree 外 → 拒绝", async () => {
+    const root = `/tmp/wts-w6b-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToToolReview(wt, fakeGit)
+
+    await expect(
+      agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed",
+        new_children: [{ id: "7", title: "越界", description: "越界", severity: "Low", dimension: "style", file: "../../main.java", line: 1 }] },
+        makeCtx("openspec-reviewer-tool", wt))
+    ).rejects.toThrow(/超出/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_tool：issue 文件在 worktree 内 → 正常接受", async () => {
+    const root = `/tmp/wts-w6c-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToToolReview(wt, fakeGit)
+    const wtPath = taskItemOf(wt).metadata["worktree_path"]
+    const result = await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed",
+      new_children: [{ id: "7", title: "界内", description: "界内", severity: "Low", dimension: "style", file: "src/ok.java", line: 1 }] },
+      makeCtx("openspec-reviewer-tool", wt))
+    expect(result).not.toContain("超出")
+    expect(taskItemOf(wt).metadata["worktree_path"]).toBe(wtPath)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_task：issue 文件路径在 worktree 外 → 拒绝", async () => {
+    const root = `/tmp/wts-w6d-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToToolReview(wt, fakeGit)
+    await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" },
+      makeCtx("openspec-reviewer-tool", wt))
+
+    await expect(
+      agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "failed",
+        new_children: [{ id: "7", title: "越界", description: "越界", severity: "Low", file: "/opt/evil.java", line: 1 }] },
+        makeCtx("openspec-reviewer-task", wt))
+    ).rejects.toThrow(/超出/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_quality：issue 文件路径在 worktree 外 → 拒绝", async () => {
+    const root = `/tmp/wts-w6e-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToToolReview(wt, fakeGit)
+    await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" },
+      makeCtx("openspec-reviewer-tool", wt))
+    await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2"] },
+      makeCtx("openspec-reviewer-task", wt))
+
+    await expect(
+      agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "failed",
+        new_children: [{ id: "7", title: "越界", description: "越界", severity: "Low", file: "/etc/evil.java", line: 1, dimension: "style" }] },
+        makeCtx("openspec-reviewer-style", wt))
+    ).rejects.toThrow(/超出/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+//  Behavior 7: set_worktree 自定义路径准入
+// ════════════════════════════════════════════════════════════════
+
+describe("W7. set_worktree 自定义路径准入", () => {
+
+  test("worktree_path 在 ctx.worktree 之外 → 拒绝", async () => {
+    const root = `/tmp/wts-w7a-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await expect(
+      set_worktree.execute({ change_id: CID, worktree_path: "/tmp/outside-worktree" }, o)
+    ).rejects.toThrow(/超出/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("worktree_path 用 .. 逃逸到 ctx.worktree 之外 → 拒绝", async () => {
+    const root = `/tmp/wts-w7b-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await expect(
+      set_worktree.execute({ change_id: CID, worktree_path: join(wt, "..", "evil") }, o)
+    ).rejects.toThrow(/超出/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("worktree_path 在 ctx.worktree 内 → 正常创建", async () => {
+    const root = `/tmp/wts-w7c-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    const custom = join(wt, ".worktree", "custom")
+    const result = await set_worktree.execute({ change_id: CID, worktree_path: custom }, o)
+    expect(result).toContain("已创建 worktree")
+    expect(taskItemOf(wt).metadata["worktree_path"]).toBe(custom)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+//  Behavior 8: 主仓库 openspec 污染诊断
+// ════════════════════════════════════════════════════════════════
+
+function fakeWorktreePointingToMain(base: string): { mainRepo: string; wt: string } {
+  const mainRepo = join(base, "main")
+  const wt = join(base, "wt")
+  mkdirSync(join(mainRepo, ".git", "worktrees", "wt"), { recursive: true })
+  mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
+  writeFileSync(join(wt, ".git"), `gitdir: ${join(mainRepo, ".git", "worktrees", "wt")}`)
+  return { mainRepo, wt }
+}
+
+describe("W8. 主仓库 openspec 污染诊断", () => {
+
+  test("主仓库 openspec 有未提交变更 → 返回 repoRoot 与文件清单", async () => {
+    const base = join("/tmp", `wts-w8a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+    const { mainRepo, wt } = fakeWorktreePointingToMain(base)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    fakeGit.dirtyPaths.add(`${mainRepo}-openspec`)
+
+    const result = await detectMainRepoPollution(wt)
+    expect(result).not.toBeNull()
+    expect(result!.repoRoot).toBe(mainRepo)
+    expect(result!.files).toContain("openspec/changes/foo/tasks.md")
+
+    try { rmSync(base, { recursive: true, force: true }) } catch {}
+  })
+
+  test("主仓库 openspec 干净 → null", async () => {
+    const base = join("/tmp", `wts-w8b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+    const { wt } = fakeWorktreePointingToMain(base)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+
+    const result = await detectMainRepoPollution(wt)
+    expect(result).toBeNull()
+
+    try { rmSync(base, { recursive: true, force: true }) } catch {}
+  })
+
+  test("主仓库干净（.git 为目录）→ null", async () => {
+    const base = join("/tmp", `wts-w8c-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+    const mainRepo = join(base, "main")
+    mkdirSync(join(mainRepo, ".git"), { recursive: true })
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+
+    const result = await detectMainRepoPollution(mainRepo)
+    expect(result).toBeNull()
+
+    try { rmSync(base, { recursive: true, force: true }) } catch {}
+  })
+
+  test("主仓库（.git 为目录）污染检测：repoRoot 取自身", async () => {
+    const base = join("/tmp", `wts-w8d-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+    const mainRepo = join(base, "main")
+    mkdirSync(join(mainRepo, ".git"), { recursive: true })
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    fakeGit.dirtyPaths.add(`${mainRepo}-openspec`)
+
+    const result = await detectMainRepoPollution(mainRepo)
+    expect(result).not.toBeNull()
+    expect(result!.repoRoot).toBe(mainRepo)
+    expect(result!.files).toContain("openspec/changes/foo/tasks.md")
+
+    try { rmSync(base, { recursive: true, force: true }) } catch {}
+  })
+
+  test("rename 条目渲染为完整新文件名", async () => {
+    const base = join("/tmp", `wts-w8e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+    const { wt } = fakeWorktreePointingToMain(base)
+    const runner: GitRunner = {
+      async run(_w, args) {
+        if (args[0] === "status") return "R  openspec/changes/foo/old.md -> openspec/changes/foo/new.md"
+        return ""
+      },
+      async runChecked() { return { success: true, stdout: "", stderr: "" } },
+    }
+    __setGitRunner(runner)
+
+    const result = await detectMainRepoPollution(wt)
+    expect(result).not.toBeNull()
+    expect(result!.files).toEqual(["openspec/changes/foo/new.md"])
+
+    try { rmSync(base, { recursive: true, force: true }) } catch {}
+  })
+
+  test("statusExecute（主仓库 orchestrator 视角）渲染主仓库 openspec 污染", async () => {
+    const root = `/tmp/wts-w8f-${Date.now()}`
+    const mainRepo = join(root, "main")
+    mkdirSync(join(mainRepo, ".git"), { recursive: true })
+    mkdirSync(join(mainRepo, "openspec", "changes", CID), { recursive: true })
+    writeFileSync(
+      join(mainRepo, "openspec", "changes", CID, "tasks.md"),
+      `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2 [spec:s2]\n\n## 2. G2\n\n- [ ] 2.1 T3\n`,
+      "utf-8"
+    )
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    fakeGit.dirtyPaths.add(`${mainRepo}-openspec`)
+
+    const o = makeCtx("openspec-orchestrator", mainRepo)
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    const out = await status.execute({ change_id: CID }, o)
+
+    expect(out).toContain("## ⚠️ 主仓库 openspec 污染")
+    expect(out).toContain("openspec/changes/foo/tasks.md")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+//  Behavior 9: analyze step（架构师提交）主仓库污染自动合并兜底
+// ════════════════════════════════════════════════════════════════
+
+const BOUNDARY = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
+
+/** init → set_worktree，agent_submit(analyze) 前 worktree 已就绪 */
+async function setupToWorktreeReady(wt: string, fakeGit: FakeGitRunner): Promise<void> {
+  const o = makeCtx("openspec-orchestrator", wt)
+  await init.execute({ change_id: CID, task_group_id: "1" }, o)
+  await set_worktree.execute({ change_id: CID }, o)
+}
+
+function archCtx(wt: string) {
+  return makeCtx("openspec-architect", wt)
+}
+
+/** analyze step（架构师）passed 提交，触发主仓库污染自动合并兜底。 */
+async function archSubmit(wt: string): Promise<string> {
+  return agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: BOUNDARY }, archCtx(wt))
+}
+
+describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () => {
+
+  test("main 污染文件 a → merge 目标是 commit sha，a 并入 worktree 分支", async () => {
+    const root = `/tmp/wts-w9a-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    const wtPath = taskItemOf(wt).metadata["worktree_path"]
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+
+    const result = await archSubmit(wt)
+
+    expect(result).toContain("已将主仓库污染文档并入 worktree 分支")
+    expect(result).toContain("- `openspec/changes/cid/design.md`")
+    expect(fakeGit.commitShas.length).toBe(1)
+    const pollSha = fakeGit.commitShas[0]
+    expect(fakeGit.callLog.some((l) => l.includes(`merge --no-ff ${pollSha}`))).toBe(true)
+    expect(fakeGit.mergedBranches).toContain(pollSha)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("worktree 侧存在未提交变更 → 拒绝合并", async () => {
+    const root = `/tmp/wts-w9b-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    const wtPath = taskItemOf(wt).metadata["worktree_path"]
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    fakeGit.dirtyPaths.add(wtPath)
+
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/存在未 commit 内容/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("污染路径在 worktree 分支中相对基准已分叉 → 拒绝且不覆盖", async () => {
+    const root = `/tmp/wts-w9b2-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    fakeGit.diffOut = "openspec/changes/cid/design.md\n"
+
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/分叉/)
+    expect(fakeGit.commitShas.length).toBe(0)
+    expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("未跟踪新文件污染 → 并入分支且 main restore 清理", async () => {
+    const root = `/tmp/wts-w9c-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/new.md"])
+
+    const result = await archSubmit(wt)
+
+    expect(result).toContain("- `openspec/changes/cid/new.md`")
+    expect(fakeGit.commitShas.length).toBe(1)
+    expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
+    expect(fakeGit.callLog.some((l) => l.includes("restore --staged --worktree"))).toBe(true)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("多 change 隔离：其它 changeId 目录污染不触发兜底", async () => {
+    const root = `/tmp/wts-w9d-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-othercid`, ["openspec/changes/othercid/x.md"])
+
+    const result = await archSubmit(wt)
+
+    expect(result).not.toContain("已将主仓库污染文档")
+    expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
+    expect(fakeGit.commitShas.length).toBe(0)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("main index 含其它 staged 内容 → abort", async () => {
+    const root = `/tmp/wts-w9e-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    fakeGit.cachedDiffOut = "src/foo.java"
+
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/其它已暂存内容/)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("成功路径：worktree HEAD 前进、main 分支 ref 不变、main 工作树恢复、返回体含 markdown 列表", async () => {
+    const root = `/tmp/wts-w9f-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+
+    const result = await archSubmit(wt)
+
+    expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
+    expect(fakeGit.callLog.some((l) => l.startsWith("checked:update-ref") || l.startsWith("checked:branch -f"))).toBe(false)
+    expect(fakeGit.callLog.some((l) => l.includes(`restore --staged --worktree -- openspec/changes/${CID}`))).toBe(true)
+    expect(result).toContain("- `openspec/changes/cid/design.md`")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("worktree 未就绪（无 worktree_path）→ 不触发任何 plumbing", async () => {
+    const root = `/tmp/wts-w9g-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    const o = makeCtx("openspec-orchestrator", wt)
+    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+
+    const result = await archSubmit(wt)
+
+    expect(result).not.toContain("已将主仓库污染文档")
+    expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
+    expect(fakeGit.callLog.some((l) => l.includes("commit-tree"))).toBe(false)
+    expect(fakeGit.commitShas.length).toBe(0)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("merge 失败 → 抛错、state 未写盘（仍为 todo）", async () => {
+    const root = `/tmp/wts-w9h-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    fakeGit.mergeConflictOnNext = true
+
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/合并主仓库污染文档失败/)
+    expect(taskItemOf(wt).phase).toBe("todo")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("baseRef=null 降级路径：跳过分叉预检仍完成合并", async () => {
+    const root = `/tmp/wts-w9i-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    const state = readStateSync(wt)
+    const item = state.workItems.find((w: any) => w.id === "task:1")
+    item.metadata["base_ref"] = null
+    writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state))
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+
+    const result = await archSubmit(wt)
+
+    expect(result).toContain("已将主仓库污染文档并入 worktree 分支")
+    expect(fakeGit.commitShas.length).toBe(1)
+    expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("预检失败（stagedOutside）→ 主仓库工作树污染内容保留，不执行任何 restore", async () => {
+    const root = `/tmp/wts-w9j-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    fakeGit.cachedDiffOut = "src/foo.java"
+
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/其它已暂存内容/)
+    // 未进入 add 流程 → 绝不执行 restore（尤其 --worktree），主仓库工作树污染内容原样保留
+    expect(fakeGit.callLog.some((l) => l.includes("restore"))).toBe(false)
+    expect(fakeGit.callLog.some((l) => l.includes("add -- openspec/changes"))).toBe(false)
+    expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("main 相对 worktree 前进（含其它 change 提交）→ 拒绝合并，worktree 分支不被夹带", async () => {
+    const root = `/tmp/wts-w9k-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await setupToWorktreeReady(wt, fakeGit)
+    fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    fakeGit.mainAheadCount = 2
+
+    await expect(
+      archSubmit(wt)
+    ).rejects.toThrow(/主仓库分支已相对 worktree 分支前进/)
+    // 未进入 merge 流程 → 无 write-tree/commit-tree/merge，worktree 分支不含其它 change 内容
+    expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
+    expect(fakeGit.commitShas.length).toBe(0)
+    expect(fakeGit.mergedBranches.length).toBe(0)
+    expect(fakeGit.callLog.some((l) => l.includes("restore"))).toBe(false)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 })

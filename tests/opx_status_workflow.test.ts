@@ -486,7 +486,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("会话摘要：metadata.agent_summaries 渲染", async () => {
+  test("会话摘要：metadata.agent_summaries 按角色隔离渲染（409c411）", async () => {
     const root = `/tmp/wf-m1d-g-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -495,12 +495,15 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const state = readStateSync(wt)
     taskItemOf(state).metadata["agent_summaries"] = {
       "openspec-architect": "预检通过，已输出执行边界",
+      "openspec-developer": "完成 task 2 个",
     }
     writeStateSync(wt, state)
 
+    // dev 视角：只渲染 dev 自己的摘要，不跨 agent 传递 architect 摘要
     const output = await status.execute({ change_id: CID }, d)
     expect(output).toContain("## 上轮会话摘要")
-    expect(output).toContain("**openspec-architect**：预检通过，已输出执行边界")
+    expect(output).toContain("**openspec-developer**：完成 task 2 个")
+    expect(output).not.toContain("预检通过，已输出执行边界")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
