@@ -14,6 +14,8 @@ permission:
 
 审查范围、非本轮问题处置、既有 issue 去重与工具调用边界以 opx_status 操作指引与约束区块为准，此处不重复描述。
 
+复核自己报的已修复（待复核）issue 属本职职责，通过与否由复核结论裁定。
+
 ## 严重级别
 
 使用统一严重级别体系（Critical / High / Medium / Low / Info）。

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  loadWorkflow, submitForStep, routeExempt, adjudicateExempt,
+  loadWorkflow, submitForStep, routeExempt, adjudicateExempt, adjudicateRecheck,
   recommendForItem,
   enqueueWriteback, flushWritebacks, retryPendingWritebacks, setWritebackHandler,
 } from "../src/core/workflow"
@@ -106,11 +106,11 @@ describe("1. submitForStep 路由与归属校验", () => {
 describe("2. children 联动更新", () => {
   const WF = loadWorkflow(SUBMIT_YAML)
 
-  test("fixed child 置为 done", () => {
+  test("fixed child（issue）置为 review（待复核），不再直接 done", () => {
     const item = makeItem({ phase: "in_progress", currentStep: "implement" })
     item.children.push(child({ id: "c1", phase: "in_progress" }))
     const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", fixedIds: ["c1"] })
-    expect(item.children[0].phase).toBe("done")
+    expect(item.children[0].phase).toBe("review")
     expect(r.childrenUpdated).toContain("c1")
   })
 
@@ -142,7 +142,7 @@ describe("2. children 联动更新", () => {
     const taskC = makeItem({ id: "1", type: "task", phase: "in_progress" })
     item.children.push(issueC, taskC)
     const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", fixedIds: ["1"] })
-    expect(issueC.phase).toBe("done")
+    expect(issueC.phase).toBe("review")
     expect(taskC.phase).toBe("in_progress")
     expect(r.childrenUpdated).toContain("issue:1")
   })
@@ -153,7 +153,7 @@ describe("2. children 联动更新", () => {
     const issueC = child({ id: "issue:1", externalId: "1", phase: "in_progress" })
     item.children.push(taskC, issueC)
     const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", fixedIds: ["1"] })
-    expect(issueC.phase).toBe("done")
+    expect(issueC.phase).toBe("review")
     expect(taskC.phase).toBe("in_progress")
     expect(r.childrenUpdated).toContain("issue:1")
   })
@@ -547,6 +547,64 @@ describe("5. adjudicateExempt 裁定", () => {
     expect(item.children[0].phase).toBe("todo")
     expect(item.children[0].metadata["exempt_request"]).toBeUndefined()
     expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "rejected" })).toThrow(/未申请豁免/)
+  })
+})
+
+describe("7. adjudicateRecheck 复核已修复 issue", () => {
+  const WF = loadWorkflow(SUBMIT_YAML)
+
+  test("passed → review 态 issue 置 done", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer" } }))
+    const r = adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "passed" })
+    expect(r.childPhase).toBe("done")
+    expect(item.children[0].phase).toBe("done")
+  })
+
+  test("rejected → todo + refix_count 递增 + reject_reason 写入", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer", refix_count: 1 } }))
+    const r = adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "rejected", rejectReason: "未修复到位" })
+    expect(r.childPhase).toBe("todo")
+    expect(item.children[0].phase).toBe("todo")
+    expect(item.children[0].metadata["refix_count"]).toBe(2)
+    expect(item.children[0].metadata["reject_reason"]).toBe("未修复到位")
+  })
+
+  test("passed 复核清除历史 reject_reason", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer", reject_reason: "上次未修好" } }))
+    adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "passed" })
+    expect(item.children[0].metadata["reject_reason"]).toBeUndefined()
+  })
+
+  test("非 review 态 issue 复核 → 抛错且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "todo", metadata: { source: "reviewer" } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "passed" })).toThrow(/仅 review 态/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("白名单外 agent 复核 → 抛错且 state 零变更（越权）", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer" } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "manager", verdict: "passed" })).toThrow(/白名单/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("rejected 缺 reject_reason → 抛错且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer" } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "rejected" })).toThrow(/reject_reason/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("issue 不存在 → 抛错", () => {
+    const item = makeItem()
+    expect(() => adjudicateRecheck(item, WF, { issueId: "nope", agentKey: "reviewer", verdict: "passed" })).toThrow(/不存在/)
   })
 })
 

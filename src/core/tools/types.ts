@@ -43,6 +43,11 @@ export interface AgentSubmitParams {
     issue_id: string
     action: "dismissed" | "rejected"
   }>
+  recheck_adjudications?: Array<{
+    issue_id: string
+    verdict: "passed" | "rejected"
+    reject_reason?: string
+  }>
   checkpoint_decision?: "continue" | "giveup"
   new_children?: Array<{
     id: string

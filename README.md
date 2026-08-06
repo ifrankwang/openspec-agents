@@ -26,6 +26,8 @@ OpenCode 编排插件。提供 OpenSpec change 编排、workflow 引擎驱动的
 
 Review 阶段依次执行 tool、task、quality 三层门禁；任一 step 裁决 failed 回退 implement 修复（analyze 失败回退 analyze 重查）。不可自主决策的需求、依赖或验收阻塞由架构师在 analyze step 上报 blocker，同环节继续复核至完成。
 
+issue 与任务共享 phase 体系：reviewer 提报 → todo → developer 修复并经 `fixed_issue_ids` 上报 → review（待复核）→ 报 issue 的 reviewer 复核裁定（谁提谁裁定）：通过置 done，驳回回 todo 并累计修复未过次数（≥2 须先 5-Why 根因分析）。done/cancelled 终态仅由复核（verify_* 各层）或豁免裁定置入；developer 提交修复只进入 review 待复核，不直接置终态。
+
 具体阶段流转、工具参数、状态与门禁规则以 `src/core/` 与 `assets/workflows/` 实现为准。README 不重复这些细节，避免文档与代码漂移。
 
 ## Workflow 引擎

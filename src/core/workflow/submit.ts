@@ -60,6 +60,47 @@ function resolveReviewStepForSource(workflow: LoadedWorkflow, source: string): S
 }
 
 /**
+ * 解析 issue 报源对应的 review step 并校验裁定者权限（谁提谁裁定），供豁免裁定（adjudicateExempt）
+ * 与复核（adjudicateRecheck）复用：
+ * - 报源无对应 review step → 抛错；
+ * - quality 层 issue 带维度 → 仅报 issue 的该维度 reviewer 可裁定；
+ * - 其余（含缺维度的 quality issue）→ 按该 review step 的 agents 白名单。
+ * 越权抛错且不产生状态变更。返回裁定 step 供调用方使用。
+ */
+function resolveAdjudicatorStepForIssue(
+  workflow: LoadedWorkflow,
+  child: WorkItem,
+  agentKey: string,
+  role: "裁定" | "复核",
+): StepConfig {
+  const prefix = role === "裁定" ? "豁免裁定失败" : "复核失败"
+  const source = readIssueSource(child)
+  const step = source ? resolveReviewStepForSource(workflow, source) : null
+  if (!step) {
+    throw new Error(`${prefix}：issue "${child.id}" 无对应 review step（来源 agent "${source ?? "缺失"}" 不属于任何 review step 的 agents）。`)
+  }
+  // quality 层 issue 带维度 → 限定报源维度 reviewer（避免 verify_quality 多 agent 共享 step
+  // 导致白名单放行全部 5 个 quality reviewer）；缺维度回落 review step agents 白名单。
+  const dimension = (REVIEW_DIMENSIONS as readonly string[]).includes(child.metadata["dimension"] as string)
+    ? (child.metadata["dimension"] as Dimension)
+    : undefined
+  if (child.metadata["source_phase"] === "quality" && dimension) {
+    const requiredAgent = DIMENSION_AGENT_MAP[dimension]
+    if (agentKey !== requiredAgent) {
+      throw new Error(
+        `${prefix}：issue "${child.id}" 属于质量维度 "${dimension}"，${role}者必须为报 issue 的 "${requiredAgent}"（谁提谁裁定），拒绝 "${agentKey}" ${role}。`
+      )
+    }
+  } else {
+    const whitelist = new Set<string>(stepAgentIds(step))
+    if (!whitelist.has(agentKey)) {
+      throw new Error(`${prefix}：agent "${agentKey}" 不在 review step "${step.id}" 的${role}白名单（agents）内。`)
+    }
+  }
+  return step
+}
+
+/**
  * 提交路由与归属校验（submitForStep 与 agentSubmitExecute 共用）：
  * step 声明存在、agent 属于 step.agents、提交 step 与当前 step 一致、step 归属 phase 与 item.phase 一致，
  * 任一不满足即抛错且零状态变更。
@@ -137,7 +178,9 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
   for (const id of input.fixedIds ?? []) {
     const child = childById.get(id)
     if (child) {
-      child.phase = "done"
+      // issue child 修复后进入 review（待对应 reviewer 复核），终态由复核裁定；
+      // task child 维持 done 语义（子任务完成态由 verify_task 验证路径处理，不进入复核）。
+      child.phase = child.type === "task" ? "done" : "review"
       // 记录 canonical child.id（task child 短数字 id 可能与 issue externalId 撞车，
       // 原始引用 id 渲染时歧义，统一用 child.id 回指）
       updated.add(child.id)
@@ -246,29 +289,8 @@ export function adjudicateExempt(
       `豁免裁定失败：issue "${input.issueId}" 未申请豁免（无 exempt_request 标记），仅可裁定带豁免申请标记的 issue。`
     )
   }
-  const source = readIssueSource(child)
-  const step = source ? resolveReviewStepForSource(workflow, source) : null
-  if (!step) {
-    throw new Error(`豁免裁定失败：issue "${input.issueId}" 无对应 review step（来源 agent "${source ?? "缺失"}" 不属于任何 review step 的 agents）。`)
-  }
-  // verify_quality 维度限定裁定：quality 层 issue 须由报 issue 的维度 reviewer 裁定（谁提谁裁定），
-  // 避免 verify_quality 多 agent 共享 step 导致白名单放行全部 5 个 quality reviewer。
-  const dimension = (REVIEW_DIMENSIONS as readonly string[]).includes(child.metadata["dimension"] as string)
-    ? (child.metadata["dimension"] as Dimension)
-    : undefined
-  if (child.metadata["source_phase"] === "quality" && dimension) {
-    const requiredAgent = DIMENSION_AGENT_MAP[dimension]
-    if (input.agentKey !== requiredAgent) {
-      throw new Error(
-        `豁免裁定失败：issue "${input.issueId}" 属于质量维度 "${dimension}"，裁定者必须为报 issue 的 "${requiredAgent}"（谁提谁裁定），拒绝 "${input.agentKey}" 裁定。`
-      )
-    }
-  } else {
-    const whitelist = new Set<string>(stepAgentIds(step))
-    if (!whitelist.has(input.agentKey)) {
-      throw new Error(`豁免裁定失败：agent "${input.agentKey}" 不在 review step "${step.id}" 的裁定白名单（agents）内。`)
-    }
-  }
+  // 谁提谁裁定：解析报源 review step 并校验裁定者权限（与复核同源，复用公共裁定权校验）。
+  resolveAdjudicatorStepForIssue(workflow, child, input.agentKey, "裁定")
 
   if (input.action === "dismissed") {
     child.phase = "cancelled"
@@ -277,4 +299,47 @@ export function adjudicateExempt(
   }
   delete child.metadata[EXEMPT_REQUEST_KEY]
   return { issueId: input.issueId, action: input.action, childPhase: child.phase }
+}
+
+export interface RecheckAdjudicationResult {
+  issueId: string
+  verdict: "passed" | "rejected"
+  childPhase: WorkItemPhase
+}
+
+/**
+ * 复核已修复（review 态）issue：verdict=passed → done；verdict=rejected → 回 todo 并
+ * 递增 metadata.refix_count、写入 metadata.reject_reason（给 dev 驳回原因）。
+ * 仅 review 态 issue 可复核；裁定者必须为报 issue 的对应 review step（谁提谁裁定，与豁免裁定同源归因）。
+ * 越权/非法状态抛错，不产生任何状态变更。
+ */
+export function adjudicateRecheck(
+  item: WorkItem,
+  workflow: LoadedWorkflow,
+  input: { issueId: string; agentKey: string; verdict: "passed" | "rejected"; rejectReason?: string },
+): RecheckAdjudicationResult {
+  const child = issueChildrenOf(item).find((c) => c.id === input.issueId)
+  if (!child) {
+    throw new Error(`复核失败：issue "${input.issueId}" 不存在于 item "${item.id}" 的 issue children 中。`)
+  }
+  if (child.phase !== "review") {
+    throw new Error(
+      `复核失败：issue "${input.issueId}" 当前 phase 为 "${child.phase}"，仅 review 态（已修复待复核）issue 可复核。`
+    )
+  }
+  // 谁提谁裁定：解析报源 review step 并校验复核者权限（与豁免裁定同源，复用公共裁定权校验）。
+  resolveAdjudicatorStepForIssue(workflow, child, input.agentKey, "复核")
+
+  if (input.verdict === "passed") {
+    child.phase = "done"
+    delete child.metadata["reject_reason"]
+  } else {
+    if (!input.rejectReason) {
+      throw new Error(`复核失败：issue "${input.issueId}" 驳回（verdict=rejected）必须提供 reject_reason。`)
+    }
+    child.phase = "todo"
+    child.metadata["refix_count"] = (typeof child.metadata["refix_count"] === "number" ? child.metadata["refix_count"] : 0) + 1
+    child.metadata["reject_reason"] = input.rejectReason
+  }
+  return { issueId: input.issueId, verdict: input.verdict, childPhase: child.phase }
 }

@@ -63,7 +63,7 @@ phases:
           - "全部实现完成后先 git commit 再提交"
           - "提交前按已加载的质量门类 skill 完成本地构建验证并核对覆盖率门禁达标后再提交"
           - "提交前完成自检并经 self_check_results 汇总"
-          - "修复完成的 issue 经 fixed_issue_ids 上报，全部 blocking issue 达终态（done/豁免）后才可 passed 提交"
+          - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由对应 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
           - "提交 opx_agent_submit：passed 必带 completed_task_ids；不可修 issue 申请豁免（exempt_issue_ids）"
         constraints:
@@ -86,6 +86,7 @@ phases:
           - "加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构并跨维提交"
           - "跨维报 issue 时在 new_children 的 dimension 字段自行指定归因维度（style/architecture/performance/security/maintainability）"
           - "工具检查覆盖全量代码；非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃"
+          - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
           - "提交 opx_agent_submit，必带 verdict 参数（passed / failed）"
         constraints:
@@ -103,6 +104,7 @@ phases:
           - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行 API 测试并审查质量 ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）"
           - "design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（用于准备测试数据、对照 API 合约）"
           - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"
+          - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定」区块中的豁免申请经 exempt_adjudications 裁定"
           - "按 opx_status 操作指引完成全部验证，提交前将各步骤执行结果填入 validation_steps 参数，不可跳过标注不可跳过的步骤"
           - "提交 opx_agent_submit，必带 verdict 与 verified_tasks（覆盖全部待验证 task）"
@@ -127,6 +129,7 @@ phases:
         instructions:
           - "加载匹配维度 skill，以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）；顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃"
           - "审查新 issue 前先查看视图「本维度 Issue」区块中的既有 issue（含 tool review 阶段工具产生的本维度 issue），避免语义重复"
+          - "复核自己报的本维度已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "提交 opx_agent_submit，必带 verdict 与 validation_steps（验证步骤执行摘要）"
         constraints:
           - "禁止运行确定性工具检查（包括但不限于 linter/formatter/静态分析/编译/测试/架构约束检查等）"
