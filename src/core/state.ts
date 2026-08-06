@@ -106,7 +106,7 @@ function issueStatusToChildPhase(status: IssueItem["status"]): WorkItemPhase {
   }
 }
 
-/** 报出该 issue 的审查 agent 兜底（exemption_requested 迁移为 exempt_request.requestedBy 用）。 */
+/** 由旧 issue 归因（sourcePhase+dimension）反推真实报源审查 agent（迁移 metadata.source 用，兼 exempt_request.requestedBy 兜底）。 */
 function issueReporterAgent(issue: IssueItem): string {
   if (issue.sourcePhase === "quality") return DIMENSION_AGENT_MAP[issue.dimension] ?? "openspec-reviewer-tool"
   if (issue.sourcePhase === "task") return "openspec-reviewer-task"
@@ -115,9 +115,10 @@ function issueReporterAgent(issue: IssueItem): string {
 
 /** 由 issue 构造 issue 类型 WorkItem child。 */
 export function buildIssueWorkItem(issue: IssueItem): WorkItem {
+  const reporterAgent = issueReporterAgent(issue)
   const child = createInitialWorkItem({
     id: `issue:${issue.id}`,
-    source: "openspec",
+    source: reporterAgent,
     externalId: issue.id,
     type: "issue",
     title: issue.description,
@@ -125,7 +126,10 @@ export function buildIssueWorkItem(issue: IssueItem): WorkItem {
     severity: issue.severity as Severity,
   })
   child.phase = issueStatusToChildPhase(issue.status)
-  // 迁移时透传 issue 归因字段到 child.metadata，供新流分层重置/去重/落盘读取（缺省与 createIssueFromChild 一致）
+  // 迁移时写入真实报源 agent 到 metadata.source：新流报源层（tool/task/quality）由 source 反推，
+  // 无 source 的迁移 issue 无法归层/裁定（原 workflow/submit.ts 报错路径）。source_phase 保留透传作
+  // 历史兼容兜底（消费端仅认 source 反推，见 reviewLayerFromMetadata）。
+  child.metadata["source"] = reporterAgent
   child.metadata["source_phase"] = issue.sourcePhase
   child.metadata["dimension"] = issue.dimension
   child.metadata["file"] = issue.file
@@ -134,7 +138,7 @@ export function buildIssueWorkItem(issue: IssueItem): WorkItem {
     // 迁移时保留豁免申请语义：exempt_request 标记使 sync 回写保持 exemption_requested，
     // 避免 child 落 todo 后被覆写回 open 丢失豁免申请。
     child.metadata[EXEMPT_REQUEST_KEY] = {
-      requestedBy: issueReporterAgent(issue),
+      requestedBy: reporterAgent,
       reason: issue.exemptReason,
     }
   }

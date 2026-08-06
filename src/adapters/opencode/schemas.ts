@@ -1,6 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { SEVERITY_LEVELS } from "../../core/constants.js"
-import { CODE_DIMENSIONS, REVIEW_LAYERS } from "../../core/types.js"
+import { CODE_DIMENSIONS } from "../../core/types.js"
 
 export const executionBoundarySchema = tool.schema.object({
   allowed_directories: tool.schema.array(tool.schema.string().min(1)).min(1).describe("developer 只能修改/创建文件的目录列表（含实施与验证所需的测试代码目录）"),
@@ -60,8 +60,7 @@ export const agentSubmitSchema = tool.schema.object({
     title: tool.schema.string().min(1).describe("issue 标题（不可为空）"),
     description: tool.schema.string().min(1).describe("issue 描述（不可为空，参与去重 key）"),
     severity: tool.schema.enum(SEVERITY_LEVELS).optional(),
-    source_phase: tool.schema.enum(REVIEW_LAYERS).optional().describe("issue 归因阶段（tool/task/quality）。quality reviewer 提报时缺省归因 quality，其余调用方缺省 tool"),
-    dimension: tool.schema.enum(CODE_DIMENSIONS).optional().describe("issue 归因维度，缺省 style"),
+    dimension: tool.schema.enum(CODE_DIMENSIONS).optional().describe("issue 归因维度：quality reviewer 报 issue 时由报源自动推断、无需填写（显式填写须与报源维度一致）；tool/task reviewer 报 issue 时必须显式填写"),
     file: tool.schema.string().optional().describe("问题所在文件路径（相对于 worktree）"),
     line: tool.schema.number().int().min(0).optional().describe("问题所在行号（0=整文件/待新建文件）"),
     suggestion: tool.schema.string().optional().describe("修复建议"),

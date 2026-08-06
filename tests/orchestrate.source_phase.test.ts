@@ -1,16 +1,17 @@
 /**
- * source_phase 归因分层重置测试（新流）
+ * issue 报源层归因分层重置测试（新流）
  *
- * 原语义：sourcePhase 分层（tool/task/quality 各层 issue 只影响本层重置）。
- * 新流承载于 child.metadata.source_phase + workflow/reset.ts 的 resetReviewTagsOnFix：
- * dev 在 implement 提交 fixed/exempt 后按 issue 归因分层重置 review 验证标记。
+ * 报源层由 child.metadata.source 经 agentToReviewLayer 反推（source_phase 仅作历史 state 兜底），
+ * 由 workflow/reset.ts 的 resetReviewTagsOnFix 按层重置：dev 在 implement 提交 fixed/exempt 后
+ * 按 issue 报源层重置 review 验证标记；dimension 为归因标签（跨维 issue 修复后目标维 tag 一并清）。
  *
  * 覆盖场景：
- * A. tool 层 issue fixed → 清 verify_tool tag
- * B. task 层 issue fixed → 清 verify_tool + verify_task
- * C. quality 层 issue fixed（维度 dim）→ 清 verify_tool + 仅该 dim 的 verify_quality tag
- * D. quality 层 exempt（不改代码）→ 仅清该 dim 的 verify_quality tag（不动 verify_tool/verify_task）
- * E. task 层 exempt → 清 verify_tool + verify_task
+ * A. tool 报源层 issue fixed → 清 verify_tool tag（无 dimension 不影响 quality 层）
+ * B. task 报源层 issue fixed → 清 verify_tool + verify_task
+ * C. quality 报源层 issue fixed（维度 dim）→ 清 verify_tool + 仅该 dim 的 verify_quality tag
+ * D. quality 报源层 exempt（不改代码）→ 仅清该 dim 的 verify_quality tag（不动 verify_tool/verify_task）
+ * E. task 报源层 exempt → 清 verify_tool + verify_task
+ * I. 跨维归因：tool 报源层 issue 带 dimension → 修复后目标维 verify_quality tag 一并清（无论报源是谁）
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync, writeFileSync, rmSync } from "node:fs"
@@ -23,6 +24,7 @@ import {
   setupToAnalyze, driveToVerifyTool, driveToVerifyTask, driveToQuality,
   taskListOf, readItem,
 } from "./helpers-workflow"
+import { resolveChildIssueFields } from "../src/core/workflow/reset"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "test-sourcePhase"
@@ -37,7 +39,7 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
   return { wt, fakeGit }
 }
 
-/** 注入带归因字段的 issue child（metadata.source_phase/dimension/file/line/suggestion）。 */
+/** 注入带归因字段的 issue child（metadata.source/source_phase/dimension/file/line/suggestion）。 */
 function injectChild(wt: string, child: any): void {
   const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
   const state = JSON.parse(readFileSync(p, "utf-8"))
@@ -103,23 +105,23 @@ async function fixIssue(wt: string, fixedIds: string[]): Promise<string> {
   )
 }
 
-// ── Scene A: tool 层 issue fixed → 清 verify_tool ──
+// ── Scene A: tool 报源层 issue fixed → 清 verify_tool ──
 
-describe("sourcePhase A: tool 层 issue fixed 只清 verify_tool", () => {
-  test("tool source_phase fixed → verify_tool tag 清，verify_task/quality 保留", async () => {
+describe("sourcePhase A: tool 报源层 issue fixed 只清 verify_tool", () => {
+  test("tool 报源层 fixed → verify_tool tag 清，verify_task/quality 保留（无 dimension 的 tool issue 不影响 quality 层）", async () => {
     const root = `/tmp/sourcePhase-A-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
-      injectChild(wt, makeChild("t1", { metadata: { source_phase: "tool", dimension: "style", file: "src/a.java", line: 1 } }))
+      injectChild(wt, makeChild("t1", { metadata: { source_phase: "tool", file: "src/a.java", line: 1 } }))
       seedReviewTags(wt)
 
       await fixIssue(wt, ["t1"])
       const item = readItem(wt, CID)
-      // tool 层 fixed → verify_tool 清
+      // tool 报源层 fixed → verify_tool 清
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      // verify_task 与 verify_quality 保留
+      // verify_task 与 verify_quality 保留（tool 层 issue 无 dimension 不触发跨维清 tag）
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
       // child 终态
@@ -128,16 +130,16 @@ describe("sourcePhase A: tool 层 issue fixed 只清 verify_tool", () => {
   })
 })
 
-// ── Scene B: task 层 issue fixed → 清 verify_tool + verify_task ──
+// ── Scene B: task 报源层 issue fixed → 清 verify_tool + verify_task ──
 
-describe("sourcePhase B: task 层 issue fixed 清 verify_tool + verify_task", () => {
-  test("task source_phase fixed → verify_tool + verify_task 清，verify_quality 保留", async () => {
+describe("sourcePhase B: task 报源层 issue fixed 清 verify_tool + verify_task", () => {
+  test("task 报源层 fixed → verify_tool + verify_task 清，verify_quality 保留", async () => {
     const root = `/tmp/sourcePhase-B-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
-      injectChild(wt, makeChild("tk1", { metadata: { source_phase: "task", dimension: "style", file: "src/b.java", line: 2 } }))
+      injectChild(wt, makeChild("tk1", { metadata: { source_phase: "task", file: "src/b.java", line: 2 } }))
       seedReviewTags(wt)
 
       await fixIssue(wt, ["tk1"])
@@ -212,7 +214,7 @@ describe("sourcePhase E: task 层 exempt 清 verify_tool + verify_task", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
-      injectChild(wt, makeChild("te1", { metadata: { source_phase: "task", dimension: "style", file: "src/e.java", line: 5 } }))
+      injectChild(wt, makeChild("te1", { metadata: { source_phase: "task", file: "src/e.java", line: 5 } }))
       seedReviewTags(wt)
 
       const item0 = readItem(wt, CID)
@@ -235,11 +237,11 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
     const { wt } = freshSetup(root)
     try {
       const { ctx } = await driveToQuality(wt, CID)
-      // style reviewer 报 style 层 issue 并 failed → verify_quality 多 agent step 聚合等待，不立即回退
+      // style reviewer 报 style 报源层 issue 并 failed → verify_quality 多 agent step 聚合等待，不立即回退
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "q7", title: "Style residual", description: "风格遗留", severity: "Low", source_phase: "quality", dimension: "style", file: "src/f.java", line: 7, suggestion: "改命名" }],
+          new_children: [{ id: "q7", title: "Style residual", description: "风格遗留", severity: "Low", dimension: "style", file: "src/f.java", line: 7, suggestion: "改命名" }],
         },
         ctx.dims["style"]
       )
@@ -275,11 +277,11 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
     const { wt } = freshSetup(root)
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
-      // tool reviewer 报 tool 层 issue 并 failed → 回 implement
+      // tool reviewer 报 tool 报源层 issue 并 failed → 回 implement
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
-          new_children: [{ id: "t7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style", file: "src/g.java", line: 8, suggestion: "修复" }],
+          new_children: [{ id: "t7", title: "Tool issue", description: "工具层问题", severity: "Low", dimension: "style", file: "src/g.java", line: 8, suggestion: "修复" }],
         },
         ctx.toolR
       )
@@ -298,15 +300,15 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
   })
 })
 
-// ── Scene G: 源头强制归因——quality reviewer 提报缺 source_phase 也归因 quality（死锁根因场景）──
+// ── Scene G: 报源反推归因——quality reviewer 提报缺 source_phase 也归因 quality（死锁根因场景）──
 
-describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归因 quality → 回退重审期按维重置", () => {
-  test("architecture reviewer 缺 source_phase 报 issue → child 归因 quality → dev 修复后 verify_quality:architecture tag 被重置", async () => {
+describe("sourcePhase G: quality reviewer 提报 → 由 source 反推归因 quality → 回退重审期按维重置", () => {
+  test("architecture reviewer 提报 issue → source 反推归因 quality → dev 修复后 verify_quality:architecture tag 被重置", async () => {
     const root = `/tmp/sourcePhase-G-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       const { ctx } = await driveToQuality(wt, CID)
-      // architecture reviewer 报 issue 但不传 source_phase（死锁根因场景：归因 tool → 维 tag 永不清）
+      // architecture reviewer 报 issue 只写 dimension，不写（已删除的）source_phase（死锁根因场景：归因 tool → 维 tag 永不清）
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
@@ -316,8 +318,9 @@ describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归�
       )
       let item = readItem(wt, CID)
       const child = item.children.find((c: WorkItem) => c.externalId === "g1")
-      // 源头强制归因：quality reviewer 提报缺 source_phase → 补写 quality
-      expect(child.metadata["source_phase"]).toBe("quality")
+      // 报源反推归因：architecture reviewer 提报 → 报源层 quality（source 反查命中维度）
+      expect(child.metadata["source"]).toBe("openspec-reviewer-architecture")
+      expect(resolveChildIssueFields(child).sourcePhase).toBe("quality")
 
       // 其余 4 维 passed → 聚合回退 implement；architecture failed tag 残留
       for (const d of ["style", "performance", "security", "maintainability"]) {
@@ -328,7 +331,7 @@ describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归�
       expect(item.currentStep).toBe("implement")
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("failed")
 
-      // dev 修复 → resetReviewTagsOnFix 按 quality 归因清 architecture 维 tag（死锁打破）
+      // dev 修复 → resetReviewTagsOnFix 按报源层 quality 归因清 architecture 维 tag（死锁打破）
       await fixIssue(wt, ["g1"])
       item = readItem(wt, CID)
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
@@ -339,22 +342,22 @@ describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归�
   })
 })
 
-// ── Scene H: 兜底归因——历史 state（source_phase 缺失但报源是 quality reviewer）也按维重置 ──
+// ── Scene H: 报源兜底归因——历史 state（source 为 quality reviewer、无 source_phase）也按维重置 ──
 
-describe("sourcePhase H: 缺 source_phase 但报源为 quality reviewer 的历史 child → 兜底按维重置", () => {
+describe("sourcePhase H: source 为 quality reviewer 的历史 child → 报源反推按维重置", () => {
   test("legacy child（metadata.source=architecture reviewer、无 source_phase）fixed → verify_quality:architecture tag 被重置", async () => {
     const root = `/tmp/sourcePhase-H-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
-      // 模拟修复前遗留 state：报源为 quality reviewer（metadata.source）但 source_phase 缺失
+      // 模拟修复前遗留 state：报源为 quality reviewer（metadata.source）但 source_phase 缺失（历史格式）
       injectChild(wt, makeChild("h1", { metadata: { source: "openspec-reviewer-architecture", dimension: "architecture", file: "src/h.java", line: 10 } }))
       seedReviewTags(wt)
 
       await fixIssue(wt, ["h1"])
       const item = readItem(wt, CID)
-      // 兜底归因：即使 source_phase 缺省解析为 tool，报源反查命中 architecture 维 → 该维 tag 清
+      // 报源反推：source=architecture reviewer → quality 层 + 维度 architecture → 该维 tag 清
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
       // 其余维度 tag 保留
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
@@ -362,6 +365,33 @@ describe("sourcePhase H: 缺 source_phase 但报源为 quality reviewer 的历�
       // 报源是 quality reviewer 而非 tool/task 层 → 不清 verify_tool 维度逻辑之外的层级（fixed 属代码变更仍清 verify_tool）
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
       expect(item.children.find((c: WorkItem) => c.externalId === "h1").phase).toBe("review")
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+// ── Scene I: 跨维归因——tool 报源层 issue 带 dimension → 修复后目标维 tag 一并清（无论报源是谁）──
+
+describe("sourcePhase I: tool 跨维报 issue（带 dimension）→ dev 修复后目标维 verify_quality tag 清", () => {
+  test("tool reviewer 报 dimension=security 的 issue → fixed 后 verify_tool 与 verify_quality:security 都清（防跨维死锁）", async () => {
+    const root = `/tmp/sourcePhase-I-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      // tool 报源层 issue 带 dimension（跨维归因标签）
+      injectChild(wt, makeChild("i1", { metadata: { source_phase: "tool", dimension: "security", file: "src/i.java", line: 11 } }))
+      seedReviewTags(wt)
+
+      await fixIssue(wt, ["i1"])
+      const item = readItem(wt, CID)
+      // 报源层 tag 必清：tool 跨维 issue 修复后 verify_tool 重跑
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      // 归因维 tag 清：目标维 security 的 verify_quality tag 一并清（谁提谁裁定 + 跨维防御）
+      expect(item.tags["verify_quality:openspec-reviewer-security"]).toBeUndefined()
+      // 非目标维保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+      expect(item.children.find((c: WorkItem) => c.externalId === "i1").phase).toBe("review")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

@@ -16,7 +16,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   createInitialWorkItem, applyAgentVerdict, getStepVerdict,
-  resetReviewTagsOnFix, dedupeNewChildren,
+  resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields,
 } from "../src/core/workflow"
 import type { WorkItem } from "../src/core/workflow/types"
 
@@ -65,6 +65,7 @@ function issueChild(overrides: Partial<WorkItem> = {}): WorkItem {
     description: "d",
     severity: "Low",
   })
+  if (overrides.metadata?.source !== undefined) child.metadata["source"] = overrides.metadata.source as string
   child.metadata["source_phase"] = overrides.metadata?.source_phase ?? "tool"
   child.metadata["dimension"] = overrides.metadata?.dimension ?? "style"
   child.metadata["file"] = overrides.metadata?.file ?? ""
@@ -193,5 +194,32 @@ describe("2. dedupeNewChildren 去重", () => {
     const { accepted, dedupedCount } = dedupeNewChildren(item, [reReported])
     expect(accepted.length).toBe(1)
     expect(dedupedCount).toBe(0)
+  })
+})
+
+describe("3. resolveChildIssueFields 报源层反推（source → source_phase 兜底 → tool）", () => {
+  test("source 为 quality reviewer → 反推 quality，source_phase 值被忽略（source 优先）", () => {
+    const child = issueChild({ metadata: { source: "openspec-reviewer-architecture", source_phase: "tool", dimension: "architecture" } })
+    expect(resolveChildIssueFields(child).sourcePhase).toBe("quality")
+  })
+
+  test("source 为 tool/task reviewer → 反推 tool/task", () => {
+    const tool = issueChild({ metadata: { source: "openspec-reviewer-tool", source_phase: "quality" } })
+    expect(resolveChildIssueFields(tool).sourcePhase).toBe("tool")
+    const task = issueChild({ metadata: { source: "openspec-reviewer-task" } })
+    expect(resolveChildIssueFields(task).sourcePhase).toBe("task")
+  })
+
+  test("source 缺失/不可反推 → 回退 source_phase（历史 state 兼容）", () => {
+    const legacy = issueChild({ metadata: { source_phase: "quality", dimension: "security" } })
+    expect(resolveChildIssueFields(legacy).sourcePhase).toBe("quality")
+  })
+
+  test("source 与 source_phase 均不可用 → 缺省 tool", () => {
+    const child = createInitialWorkItem({
+      id: "issue:x", source: "openspec", type: "issue", title: "t", description: "d", severity: "Low",
+    })
+    expect(resolveChildIssueFields(child).sourcePhase).toBe("tool")
+    expect(resolveChildIssueFields(child).dimension).toBe("style")
   })
 })

@@ -8,6 +8,7 @@ import type {
 import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import { tagKey } from "./types.js"
+import { reviewLayerFromMetadata } from "../constants.js"
 
 const TERMINAL_PHASES: WorkItemPhase[] = ["done", "cancelled"]
 
@@ -18,10 +19,9 @@ export const REVIEW_STEP_TO_LAYER: Record<string, "tool" | "task" | "quality"> =
   verify_quality: "quality",
 }
 
-/** 读取 issue child 的报源层（缺省 tool）。内联解析避免 engine↔reset 循环依赖。 */
+/** 读取 issue child 的报源层（source 反推，source_phase 仅作历史兜底，缺省 tool）。 */
 function childSourcePhase(child: WorkItem): "tool" | "task" | "quality" {
-  const raw = child.metadata["source_phase"]
-  return raw === "tool" || raw === "task" || raw === "quality" ? raw : "tool"
+  return reviewLayerFromMetadata(child)
 }
 
 export function isTerminalPhase(phase: WorkItemPhase): boolean {
@@ -122,8 +122,8 @@ export function recommendAgents(item: WorkItem, step: StepConfig): string[] {
   if (step.always_run) return stepAgentIds(step)
   // 多 agent step（verify_quality 5 维并行）：
   // - 存在 pending → 聚合等待期仅重派 pending（已 failed 维度不重复分派，避免单维失败过早重派）
-  // - 无任何 pending → 引擎级自愈：回退返回 failed 维度（failed tag 残留如归因缺 source_phase
-  //   导致的历史 state，静默死锁转为可见循环并被既有机制收敛；语义与 main 分支非 passed 全重派收敛）
+  // - 无任何 pending → 引擎级自愈：回退返回 failed 维度（failed tag 残留如历史 state
+  //   归因无法反推到对应维导致的重派，静默死锁转为可见循环并被既有机制收敛；语义与 main 分支非 passed 全重派收敛）
   if (step.agents.length > 1) {
     const pending = step.agents.filter((agent) => getStepVerdict(item, step.id, agent.id) === "pending")
     if (pending.length > 0) return pending.map((a) => a.id)

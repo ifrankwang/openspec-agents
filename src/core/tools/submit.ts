@@ -12,7 +12,9 @@ import {
   getStepVerdict, clearStepTags, isBlockingSeverity, isTerminalPhase,
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
-import { agentToReviewDimension } from "../constants.js"
+import { agentToReviewDimension, readIssueSource } from "../constants.js"
+import { REVIEW_DIMENSIONS } from "../types.js"
+import type { Dimension } from "../types.js"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.js"
 import { markTaskGroupCheckboxesComplete, reconcileMainPollution } from "../git.js"
 import { assertIssueFilesWithin } from "../paths.js"
@@ -147,7 +149,7 @@ function addItemBlockers(item: WorkItem, raw: NonNullable<AgentSubmitParams["blo
   item.metadata["blockers"] = list
 }
 
-/** 汇总 fixed/exempt issue 的归因分层（sourcePhase + quality 维度），供 resetReviewTagsOnFix 使用。 */
+/** 汇总 fixed/exempt issue 的归因分层（报源层 + quality 维度），供 resetReviewTagsOnFix 使用。 */
 function collectFixedExemptLayers(
   item: WorkItem,
   fixedIds: string[],
@@ -156,26 +158,34 @@ function collectFixedExemptLayers(
   const fixedSourcePhases = new Set<string>()
   const exemptSourcePhases = new Set<string>()
   const touchedQualityDims = new Set<string>()
+  /** 归因维 tag 纳入：报源层为 quality（本维 issue，含缺省维度）或显式声明了维度（tool/task 跨维归因标签）
+   *  都计入——跨维 issue 修复后目标维 verify_quality tag 须清，否则回退重审期该维恒 failed 永不分派（死锁）。 */
+  const touchQualityDim = (child: WorkItem): void => {
+    const f = resolveChildIssueFields(child)
+    const declaredDim = (REVIEW_DIMENSIONS as readonly string[]).includes(child.metadata["dimension"] as string)
+      ? (child.metadata["dimension"] as Dimension)
+      : undefined
+    if (f.sourcePhase === "quality" || declaredDim) touchedQualityDims.add(declaredDim ?? f.dimension)
+    // 报源维度兜底：quality 报源未显式声明 dimension（缺省回落 style）时，补报源 reviewer 自身维度 tag——
+    // 否则仅清 style 而报源维残留，回退重审期该维恒 failed 多一轮不必要重审。
+    if (!declaredDim && f.sourcePhase === "quality") {
+      const source = readIssueSource(child) ?? ""
+      const sourceDim = agentToReviewDimension(source)
+      if (sourceDim) touchedQualityDims.add(sourceDim)
+    }
+  }
   for (const id of fixedIds) {
     const child = resolveChildByIssueId(item, id)
     if (!child) continue
-    const f = resolveChildIssueFields(child)
-    fixedSourcePhases.add(f.sourcePhase)
-    if (f.sourcePhase === "quality") touchedQualityDims.add(f.dimension)
-    // 兜底归因：报源 agent 属 quality reviewer（按 agent 反查维度）即视为 quality 层，
-    // 即使 source_phase 缺省/解析非 quality 也把该维度纳入重置集合（防历史 state 死锁）。
-    // 只改维度集合，不修改 child.metadata（避免影响 routeExempt/adjudicateExempt/dedupe/assertFailedHasReason）。
-    const sourceDim = agentToReviewDimension(child.metadata["source"] as string)
-    if (sourceDim) touchedQualityDims.add(sourceDim)
+    // 报源层 tag 必清（谁提谁裁定：tool 报的跨维 issue 修复后 verify_tool 必重跑）
+    fixedSourcePhases.add(resolveChildIssueFields(child).sourcePhase)
+    touchQualityDim(child)
   }
   for (const id of exemptIds) {
     const child = resolveChildByIssueId(item, id)
     if (!child) continue
-    const f = resolveChildIssueFields(child)
-    exemptSourcePhases.add(f.sourcePhase)
-    if (f.sourcePhase === "quality") touchedQualityDims.add(f.dimension)
-    const sourceDim = agentToReviewDimension(child.metadata["source"] as string)
-    if (sourceDim) touchedQualityDims.add(sourceDim)
+    exemptSourcePhases.add(resolveChildIssueFields(child).sourcePhase)
+    touchQualityDim(child)
   }
   return {
     fixedSourcePhases: [...fixedSourcePhases],
@@ -184,7 +194,10 @@ function collectFixedExemptLayers(
   }
 }
 
-/** 由 new_children 参数构造 issue child，透传全部分子段到 metadata（source/source_phase/dimension/file/line/suggestion/rule/root_cause_guess）。 */
+/** 由 new_children 参数构造 issue child，透传全部分子段到 metadata（source/dimension/file/line/suggestion/rule/root_cause_guess）。
+ *  报源层由 metadata.source 反推（见 agentToReviewLayer），不再写入 source_phase。
+ *  dimension 提交语义：quality reviewer（agentToReviewDimension 命中）由报源维度推断写入；
+ *  tool/task reviewer 透传显式声明的归因维度（校验循环已保证必填且合法）。 */
 function buildIssueChild(nc: NonNullable<AgentSubmitParams["new_children"]>[number], sourceAgent: string): WorkItem {
   const child = createInitialWorkItem({
     id: nc.id,
@@ -196,14 +209,8 @@ function buildIssueChild(nc: NonNullable<AgentSubmitParams["new_children"]>[numb
     severity: nc.severity as Severity | undefined,
   })
   child.metadata["source"] = sourceAgent
-  // quality reviewer 提报的 issue 缺省归因 quality：DIMENSION_AGENT_MAP 反查命中即证明是 quality 层，
-  // 缺 source_phase 时补写，避免归因回落 tool 层导致回退重审期该维 tag 永不清、恒 failed、永不分派（状态机死锁）。
-  if (nc.source_phase) {
-    child.metadata["source_phase"] = nc.source_phase
-  } else if (agentToReviewDimension(sourceAgent)) {
-    child.metadata["source_phase"] = "quality"
-  }
-  if (nc.dimension) child.metadata["dimension"] = nc.dimension
+  const sourceDim = agentToReviewDimension(sourceAgent)
+  child.metadata["dimension"] = sourceDim ?? nc.dimension
   if (nc.file) child.metadata["file"] = nc.file
   if (nc.line !== undefined) child.metadata["line"] = nc.line
   if (nc.suggestion) child.metadata["suggestion"] = nc.suggestion
@@ -319,10 +326,10 @@ function mergeBoundaryInto(item: WorkItem, expansion: NonNullable<AgentSubmitPar
 /**
  * verdict=failed 必须有具体不通过理由（对齐 main assertPassedConsistency）。
  * 理由判定（认遗留 issue 或实际接受的 new_children）：
- * - verify_task：本次 failed_tasks 非空，或 new_children 含 Low+，或存在未终态的 Low+ task 层阻塞 child
- * - verify_tool：本次 new_children 含 Low+，或存在未终态的 Low+ tool 层阻塞 child
- * - verify_quality：本次 new_children 含 Low+ 且维度属于当前提交 agent，或存在未终态的 Low+ quality 层
- *   阻塞 child 且 dimension 属于当前提交 agent 维度（新报与遗留理由均按维度过滤，F3）
+ * - verify_task：本次 failed_tasks 非空，或 new_children 含 Low+，或存在未终态的 Low+ task 报源层阻塞 child
+ * - verify_tool：本次 new_children 含 Low+，或存在未终态的 Low+ tool 报源层阻塞 child
+ * - verify_quality：本次 new_children 含 Low+ 且维度属于当前提交 agent，或存在未终态的 Low+ quality 报源层
+ *   阻塞 child 且 dimension 属于当前提交 agent 维度（新报与遗留理由均按维度过滤，F3；报源层由 source 反推）
  * 理由判定在 dedupeNewChildren 之后调用（F4）：传入的 newChildren 为已去重的 accepted，重复新报不构成理由。
  * 不满足即抛错，handleReviewParams 在 submitForStep 之前调用，零状态变更。
  */
@@ -558,6 +565,11 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     }
 
     // new_children 空字段入口显式拒绝：空 id/title/description 会污染后续引用与去重 key，禁止入库。
+    // dimension 提交语义按报源身份分类（校验在一切状态写入之前，抛错零副作用）：
+    // - quality reviewer（agentToReviewDimension 命中）：维度由报源推断；显式填写须与报源维度一致，
+    //   不一致抛错（等价推断不抛错）；未填写由 buildIssueChild 推断写入。
+    // - tool/task reviewer：dimension 必填（归因维度），缺失或非法值抛错。
+    const sourceDim = agentToReviewDimension(ctx.agent)
     for (const nc of params.new_children ?? []) {
       if (!nc.id || !nc.id.trim()) {
         throw new Error("new_children 中的 issue id 不能为空，请为每个新 issue 指定唯一 id。")
@@ -567,6 +579,31 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       }
       if (!nc.description || !nc.description.trim()) {
         throw new Error(`new_children 中 issue "${nc.id}" 的 description 不能为空。`)
+      }
+      if (sourceDim) {
+        if (nc.dimension !== undefined) {
+          if (!(REVIEW_DIMENSIONS as readonly string[]).includes(nc.dimension)) {
+            throw new Error(
+              `new_children 中 issue "${nc.id}" 的 dimension 非法："${nc.dimension}"。合法维度：${REVIEW_DIMENSIONS.join(", ")}。`
+            )
+          }
+          if (nc.dimension !== sourceDim) {
+            throw new Error(
+              `new_children 中 issue "${nc.id}" 显式声明的 dimension "${nc.dimension}" 与报源维度 "${sourceDim}" 不一致。quality reviewer 报 issue 的维度由报源推断，显式填写时必须与报源维度一致。`
+            )
+          }
+        }
+      } else {
+        if (nc.dimension === undefined) {
+          throw new Error(
+            `new_children 中 issue "${nc.id}" 未声明归因维度 dimension。tool/task reviewer 报 issue 必须显式声明 dimension（归因维度），合法值：${REVIEW_DIMENSIONS.join(", ")}。`
+          )
+        }
+        if (!(REVIEW_DIMENSIONS as readonly string[]).includes(nc.dimension)) {
+          throw new Error(
+            `new_children 中 issue "${nc.id}" 的 dimension 非法："${nc.dimension}"。合法维度：${REVIEW_DIMENSIONS.join(", ")}。`
+          )
+        }
       }
     }
 

@@ -156,22 +156,27 @@ describe("renderStepContext step.id 路由", () => {
     const item = makeItem({
       phase: "review",
       currentStep: "verify_tool",
-      children: [makeIssue("1", { metadata: { source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "developer" } } })],
+      children: [makeIssue("1", { metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "developer" } } })],
     })
     const out = renderWorking(item, "verify_tool", "openspec-reviewer-tool")
-    expect(out).toContain("全部 Issue（tool 层可见）")
-    expect(out).toContain("待裁定 (豁免申请中)")
+    expect(out).toContain("Issue (待处理/待复核)")
+    expect(out).toContain("Issue (待裁定是否可豁免)")
   })
 
-  test("verify_task（step.id=verify_task → review_task）：渲染待验证 Task 清单", () => {
+  test("verify_task（step.id=verify_task → review_task）：渲染待验证 Task 清单 + task 层 Issue 主区块", () => {
     const item = makeItem({
       phase: "review",
       currentStep: "verify_task",
-      children: [makeTask("1", "Task one")],
+      children: [
+        makeTask("1", "Task one"),
+        makeIssue("2", { metadata: { source: "openspec-reviewer-task", source_phase: "task", dimension: "style" } }),
+      ],
     })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("Task (待验证)")
     expect(out).toContain("Task one")
+    expect(out).toContain("## Issue (待处理/待复核)")
+    expect(out).toContain("issue 2 描述")
   })
 
   test("verify_quality（step.id=verify_quality → review_quality）：按 ctxAgent 维度过滤渲染本维 children", () => {
@@ -184,7 +189,7 @@ describe("renderStepContext step.id 路由", () => {
       ],
     })
     const out = renderWorking(item, "verify_quality", "openspec-reviewer-style")
-    expect(out).toContain("## 本维度 Issue（style）")
+    expect(out).toContain("## Issue (待处理/待复核)")
     expect(out).toContain("issue 1 描述")
     // architecture 维度 child 不可见
     expect(out).not.toContain("issue 2 描述")
@@ -322,9 +327,9 @@ describe("step 操作层指引补全", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_tool" })
     const out = renderWorking(item, "verify_tool", "openspec-reviewer-tool")
     expect(out).toContain("顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描）")
-    expect(out).toContain("new_children 的 dimension 字段自行指定归因维度（style/architecture/performance/security/maintainability）")
+    expect(out).toContain("报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）")
     expect(out).toContain("非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃")
-    expect(out).toContain("对视图「待裁定」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
+    expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（自愈失效时提请用户）")
     expect(out).not.toContain("；禁止 opx_orch_*")
     expect(out).toContain("即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）")
@@ -336,7 +341,7 @@ describe("step 操作层指引补全", () => {
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行 API 测试并审查质量 ④审查测试代码质量")
     expect(out).toContain("有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks")
-    expect(out).toContain("对视图「待裁定」区块中的豁免申请经 exempt_adjudications 裁定")
+    expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定")
     expect(out).toContain("design.md 的 API 定义（请求/响应结构、数据模型）")
     expect(out).toContain("specs/ 下相关 spec.md（用于准备测试数据、对照 API 合约）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查，但不得 edit/write 业务代码")
@@ -357,7 +362,9 @@ describe("step 操作层指引补全", () => {
     const out = renderWorking(item, "verify_quality", "openspec-reviewer-style")
     expect(out).toContain("以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）")
     expect(out).toContain("顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃")
-    expect(out).toContain("审查新 issue 前先查看视图「本维度 Issue」区块中的既有 issue（含 tool review 阶段工具产生的本维度 issue），避免语义重复")
+    expect(out).toContain("审查新 issue 前先查看视图「待处理/待复核」区块中的既有 issue（含 tool review 阶段工具产生的本维度 issue），避免语义重复")
+    // 豁免裁定指引：verify_quality 新增与 tool/task 同口径
+    expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     // 工具化反思步骤：报 issue 前先判断能否经确定性扫描工具配置收敛
     expect(out).toContain("报本维度新 issue 前先判断该问题能否通过调整确定性质量扫描工具配置")
     expect(out).toContain("可工具化")

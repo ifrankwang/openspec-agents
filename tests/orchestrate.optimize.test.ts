@@ -69,7 +69,7 @@ function injectIssue(wt: string, overrides: Record<string, unknown>): string {
       tags: {},
       metadata: {
         source_phase: (overrides.sourcePhase as string) ?? "tool",
-        dimension: (overrides.dimension as string) ?? "style",
+        ...(overrides.dimension !== undefined && overrides.dimension !== null ? { dimension: overrides.dimension as string } : {}),
         file: overrides.file ?? "",
         line: overrides.line ?? 0,
         suggestion: overrides.suggestion ?? "",
@@ -507,7 +507,7 @@ describe("B4. boundary 参数", () => {
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
           boundary_expansion: { allowed_directories: ["src/extra"] },
-          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style" }],
+          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )
@@ -539,7 +539,7 @@ describe("B5. checkpoint continue 重置 retryCount", () => {
       const { ctx } = await driveToQuality(wt, CID)
       await rollbackQuality(ctx, CID, {
         failedDim: "style",
-        newChildren: [{ id: "7", title: "命名问题", description: "命名不规范", severity: "Low", source_phase: "quality", dimension: "style" }],
+        newChildren: [{ id: "7", title: "命名问题", description: "命名不规范", severity: "Low", dimension: "style" }],
       })
       expect(metaOf(readItem(wt, CID), "_retryCount")).toBe(1)
 
@@ -670,7 +670,7 @@ describe("B7.5. verify_quality 聚合判定", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.dims["style"]
       )
@@ -713,7 +713,7 @@ describe("B7.5. verify_quality 聚合判定", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.dims["style"]
       )
@@ -787,13 +787,13 @@ describe("B8. taskNumber 数字 ID 归一化 + init base_branch", () => {
   })
 })
 
-describe("B10. dev 提交后 review 层按 sourcePhase 精化重置", () => {
-  test("dev 仅修 tool 层 issue → 清 verify_tool；verify_task/verify_quality 保留", async () => {
+describe("B10. dev 提交后 review 层按报源层精化重置", () => {
+  test("dev 仅修 tool 报源层 issue（无 dimension）→ 清 verify_tool；verify_task/verify_quality 保留", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
       setReviewAllPassed(wt)
-      const id = injectIssue(wt, { sourcePhase: "tool", dimension: "style", severity: "Low" })
+      const id = injectIssue(wt, { sourcePhase: "tool", severity: "Low" })
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: [id], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
         ctx.dev
@@ -823,12 +823,12 @@ describe("B10. dev 提交后 review 层按 sourcePhase 精化重置", () => {
     } finally { teardown(root) }
   })
 
-  test("dev 修 task 层 issue → 清 verify_tool + verify_task", async () => {
+  test("dev 修 task 报源层 issue → 清 verify_tool + verify_task", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
       setReviewAllPassed(wt)
-      const id = injectIssue(wt, { sourcePhase: "task", dimension: "style", severity: "Low" })
+      const id = injectIssue(wt, { sourcePhase: "task", severity: "Low" })
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: [id], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
         ctx.dev
@@ -919,7 +919,7 @@ describe("B12. new_children rule 透传", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
-          new_children: [{ id: "7", title: "Magic number", description: "魔法数字", severity: "Low", rule: "PMD.AvoidLiteralsInIfCondition" }],
+          new_children: [{ id: "7", title: "Magic number", description: "魔法数字", severity: "Low", dimension: "style", rule: "PMD.AvoidLiteralsInIfCondition" }],
         },
         ctx.toolR
       )

@@ -186,11 +186,11 @@ describe("W3. agent_submit(verify_quality) 并发写锁", () => {
       const [r1, r2] = await Promise.all([
         agent_submit.execute({
           change_id: CID, step_id: "verify_quality", verdict: "passed",
-          new_children: [{ id: "7", title: "style", description: "Style 并发 issue", severity: "Info", source_phase: "quality", dimension: "style" }],
+          new_children: [{ id: "7", title: "style", description: "Style 并发 issue", severity: "Info", dimension: "style" }],
         }, ctx.dims["style"]),
         agent_submit.execute({
           change_id: CID, step_id: "verify_quality", verdict: "passed",
-          new_children: [{ id: "8", title: "arch", description: "Arch 并发 issue", severity: "Info", source_phase: "quality", dimension: "architecture" }],
+          new_children: [{ id: "8", title: "arch", description: "Arch 并发 issue", severity: "Info", dimension: "architecture" }],
         }, ctx.dims["architecture"]),
       ])
 

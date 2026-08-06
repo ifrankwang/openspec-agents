@@ -1,7 +1,7 @@
 import type { WorkItem } from "./types.js"
 import { tagKey } from "./types.js"
 import { clearStepTags, isTerminalPhase } from "./engine.js"
-import { DIMENSION_AGENT_MAP } from "../constants.js"
+import { DIMENSION_AGENT_MAP, reviewLayerFromMetadata } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import type { Dimension, ReviewLayer } from "../types.js"
 import { issueChildrenOf } from "../task-children.js"
@@ -12,15 +12,15 @@ export interface ResetReviewTagsInput {
   touchedQualityDims: string[]
 }
 
-/** 解析 child 的 issue 归因字段（sourcePhase/dimension/file/line），缺省 tool/style/""/0。 */
+/** 解析 child 的 issue 归因字段（报源层/dimension/file/line），缺省 tool/style/""/0。
+ *  报源层由 metadata.source 经 agentToReviewLayer 反推，source_phase 仅作历史 state 兜底。 */
 export function resolveChildIssueFields(child: WorkItem): {
   sourcePhase: ReviewLayer
   dimension: Dimension
   file: string
   line: number
 } {
-  const rawPhase = child.metadata["source_phase"]
-  const sourcePhase = rawPhase === "tool" || rawPhase === "task" || rawPhase === "quality" ? rawPhase : "tool"
+  const sourcePhase = reviewLayerFromMetadata(child)
   const dimension = (REVIEW_DIMENSIONS as readonly string[]).includes(child.metadata["dimension"] as string)
     ? (child.metadata["dimension"] as Dimension)
     : "style"
@@ -67,7 +67,7 @@ export function resetReviewTagsOnFix(item: WorkItem, input: ResetReviewTagsInput
 
 /**
  * new_children 入库前去重（旧 deduplicateAndAddIssues 语义）：
- * 与「未终结态（非 done/cancelled）」的既有 issue child 按 (sourcePhase/dimension/file/line/description) 比对，
+ * 与「未终结态（非 done/cancelled）」的既有 issue child 按 (报源层/dimension/file/line/description) 比对，
  * 命中即丢弃并计数；已终态 child 不参与判重（允许 reviewer 重报已关闭问题）。
  * 比对集仅限 issue child——task child 的 description 可能与新 issue 恰好相同，混入会误吞新报。
  */

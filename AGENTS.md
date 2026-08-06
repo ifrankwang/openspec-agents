@@ -88,13 +88,9 @@ agent 专属语义（角色定位、严重级别判例、审查内容、工具�
 - orchestrator agent mode=primary，其余 mode=subagent
 - orchestrator 权限：`edit/write=deny`，仅允许 `opx_*` 工具和 `git`/`ls`/`find`/`grep` 命令
 
-### review 维度由调用者身份自动推导
+### 谁提谁裁定
 
-quality review 的维度通过 `DIMENSION_AGENT_MAP` 从 `context.agent` 反查（视图按维度过滤 children、豁免裁定按维度归位），调用者无需声明自身维度。tool review 跨维报 issue 时由工具 reviewer 在 `new_children` 的 `dimension` 字段自行指定归因维度。
-
-### 豁免按"谁提谁裁定"原则
-
-提出 issue 的角色负责裁定该 issue 的豁免申请。tool review 由 openspec-reviewer-tool 裁定，task review 由 openspec-reviewer-task 裁定，quality review 由对应维度 quality reviewer 裁定。架构师仅以 architecture reviewer 身份通过 `opx_agent_submit` 的 `exempt_adjudications` 裁定自己报的 issue。
+issue 的豁免与复核裁定权归报 source 的层/维度，维度标签不改变裁定归属。tool review 由 openspec-reviewer-tool 裁定，task review 由 openspec-reviewer-task 裁定，quality review 由对应维度 quality reviewer 裁定。架构师仅以 architecture reviewer 身份通过 `opx_agent_submit` 的 `exempt_adjudications` 裁定自己报的 issue。
 
 ### 编排层不涉及被编排 agent 的内部逻辑
 

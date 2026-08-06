@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  loadWorkflow, submitForStep, routeExempt, adjudicateExempt, adjudicateRecheck,
+  loadWorkflow, submitForStep, adjudicateExempt, adjudicateRecheck,
   recommendForItem,
   enqueueWriteback, flushWritebacks, retryPendingWritebacks, setWritebackHandler,
 } from "../src/core/workflow"
@@ -122,6 +122,22 @@ describe("2. children 联动更新", () => {
     expect(item.children[0].phase).toBe("in_progress")
     expect(item.children[0].tags).toEqual({})
     expect(r.advanced).toBe(false)
+  })
+
+  test("exempt 终态（cancelled）issue → 抛错且 state 零变更（守卫）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "cancelled" }))
+    const snapshot = JSON.stringify(item)
+    expect(() => submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", exemptIds: ["c1"] })).toThrow(/终态/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("exempt 终态（done）issue → 抛错且 state 零变更（守卫）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "done" }))
+    const snapshot = JSON.stringify(item)
+    expect(() => submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", exemptIds: ["c1"] })).toThrow(/终态/)
+    expect(JSON.stringify(item)).toBe(snapshot)
   })
 
   test("newChildren 写入且同 id 去重", () => {
@@ -454,33 +470,6 @@ phases:
   })
 })
 
-describe("4. routeExempt 路由", () => {
-  const WF = loadWorkflow(SUBMIT_YAML)
-
-  test("metadata.source 命中 review step 的 agents → routed + targetStepId", () => {
-    const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
-    const r = routeExempt(item, WF, "i1")
-    expect(r.routed).toBe(true)
-    expect(r.targetStepId).toBe("approve")
-  })
-
-  test("无匹配 → routed=false + 提示 orchestrator 手动处理", () => {
-    const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "manager" } }))
-    const r = routeExempt(item, WF, "i1")
-    expect(r.routed).toBe(false)
-    expect(r.reason).toContain("手动")
-  })
-
-  test("issue 不存在或缺少 metadata.source → routed=false", () => {
-    const item = makeItem()
-    expect(routeExempt(item, WF, "nope").routed).toBe(false)
-    item.children.push(child({ id: "i1", metadata: {} }))
-    expect(routeExempt(item, WF, "i1").routed).toBe(false)
-  })
-})
-
 describe("5. adjudicateExempt 裁定", () => {
   const WF = loadWorkflow(SUBMIT_YAML)
 
@@ -501,18 +490,36 @@ describe("5. adjudicateExempt 裁定", () => {
     expect(item.children[0].metadata["exempt_request"]).toBeUndefined()
   })
 
-  test("属于该 step agents 的裁定者也可裁定", () => {
+  test("非报源 agent（同 step 其他 agent）裁定 → 抛错且 state 零变更（谁提谁裁定）", () => {
     const item = makeItem()
     item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
-    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "designer", action: "dismissed" })
-    expect(r.childPhase).toBe("cancelled")
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "designer", action: "dismissed" })).toThrow(/裁定者必须为 "reviewer"/)
+    expect(JSON.stringify(item)).toBe(snapshot)
   })
 
-  test("白名单外裁定者抛错且不产生状态变更", () => {
+  test("非报源裁定者抛错且不产生状态变更（manager 非报源）", () => {
     const item = makeItem()
     item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
-    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "manager", action: "dismissed" })).toThrow(/白名单/)
-    expect(item.children[0].phase).toBe("todo")
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "manager", action: "dismissed" })).toThrow(/裁定者必须为 "reviewer"/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("报源缺失的 issue 裁定 → 抛错（无法确定裁定者）且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", metadata: { exempt_request: { requestedBy: "developer" } } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "dismissed" })).toThrow(/报源 "缺失"/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("报源非合法 review agent 的 issue 裁定 → 抛错且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", metadata: { source: "manager", exempt_request: { requestedBy: "developer" } } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "manager", action: "dismissed" })).toThrow(/不是合法 review agent/)
+    expect(JSON.stringify(item)).toBe(snapshot)
   })
 
   test("无 exempt_request 标记的 issue dismissed → 抛错且 state 零变更", () => {
@@ -586,11 +593,19 @@ describe("7. adjudicateRecheck 复核已修复 issue", () => {
     expect(JSON.stringify(item)).toBe(snapshot)
   })
 
-  test("白名单外 agent 复核 → 抛错且 state 零变更（越权）", () => {
+  test("非报源 agent 复核 → 抛错且 state 零变更（越权）", () => {
     const item = makeItem()
     item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer" } }))
     const snapshot = JSON.stringify(item)
-    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "manager", verdict: "passed" })).toThrow(/白名单/)
+    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "manager", verdict: "passed" })).toThrow(/复核者必须为 "reviewer"/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("报源缺失的 issue 复核 → 抛错（无法确定裁定者）且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: {} }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "passed" })).toThrow(/报源 "缺失"/)
     expect(JSON.stringify(item)).toBe(snapshot)
   })
 

@@ -10,8 +10,9 @@ import { writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
+import { agentSubmitSchema } from "../src/adapters/opencode/schemas"
 import { FakeGitRunner, setupWithFakeGit, teardown } from "./helpers"
-import { setupToAnalyze, driveToImplement, driveToVerifyTool, taskIdsOf, readItem } from "./helpers-workflow"
+import { setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, taskIdsOf, readItem } from "./helpers-workflow"
 
 const CID = "param-validation"
 
@@ -191,6 +192,14 @@ describe("B. git 分支名校验", () => {
 })
 
 describe("C. agent_submit 无效 id / 空字段校验", () => {
+  test("schema 层：new_children 不再暴露 source_phase 参数（归因层由报源 agent 自动推导）", () => {
+    const arr = agentSubmitSchema.shape["new_children"]
+    const elem = arr.unwrap ? arr.unwrap().element : arr.element
+    const keys = Object.keys(elem.shape ?? {})
+    expect(keys).toContain("dimension")
+    expect(keys).not.toContain("source_phase")
+  })
+
   test("dev fixed_issue_ids 未命中 child → 抛错并列出可用 id", async () => {
     const { wt, root } = fresh()
     try {
@@ -264,6 +273,105 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
         ),
         /description 不能为空/
       )
+    } finally { teardown(root) }
+  })
+
+  test("new_children dimension 非法值 → 抛错并列出合法维度", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_tool", verdict: "failed", new_children: [{ id: "7", title: "t", description: "d", severity: "Low", dimension: "bogus" }] },
+          ctx.toolR
+        ),
+        /dimension 非法[\s\S]*合法维度.*style.*architecture.*performance.*security.*maintainability/
+      )
+      // state 零变更：非法 dimension 校验在入库前，不产生任何 child
+      expect(readItem(wt, CID).children.filter((c: any) => c.externalId === "7")).toHaveLength(0)
+    } finally { teardown(root) }
+  })
+
+  test("new_children dimension 合法值正常入库（tool reviewer 显式声明）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [
+            { id: "7", title: "安全", description: "d", severity: "Low", dimension: "security" },
+            { id: "8", title: "风格", description: "d", severity: "Info", dimension: "style" },
+          ],
+        },
+        ctx.toolR
+      )
+      const children = readItem(wt, CID).children
+      expect(children.find((c: any) => c.externalId === "7").metadata["dimension"]).toBe("security")
+      expect(children.find((c: any) => c.externalId === "8").metadata["dimension"]).toBe("style")
+    } finally { teardown(root) }
+  })
+
+  test("tool reviewer 报 issue 缺 dimension → 抛错且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_tool", verdict: "failed", new_children: [{ id: "7", title: "t", description: "d", severity: "Low" }] },
+          ctx.toolR
+        ),
+        /未声明归因维度 dimension/
+      )
+      // state 零变更：dimension 校验在入库前，不产生任何 child
+      expect(readItem(wt, CID).children.filter((c: any) => c.externalId === "7")).toHaveLength(0)
+    } finally { teardown(root) }
+  })
+
+  test("task reviewer 报 issue 缺 dimension → 抛错且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTask(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_task", verdict: "failed", new_children: [{ id: "7", title: "t", description: "d", severity: "Low" }] },
+          ctx.taskR
+        ),
+        /未声明归因维度 dimension/
+      )
+      expect(readItem(wt, CID).children.filter((c: any) => c.externalId === "7")).toHaveLength(0)
+    } finally { teardown(root) }
+  })
+
+  test("quality reviewer 报 issue 显式 dimension 与报源不一致 → 抛错且零状态变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_quality", verdict: "failed", new_children: [{ id: "7", title: "安全洞", description: "d", severity: "High", dimension: "security" }] },
+          ctx.dims["style"]
+        ),
+        /与报源维度 "style" 不一致/
+      )
+      // state 零变更：维度校验在写入 tag / child 之前，不产生任何 child，style 维未写 tag
+      expect(readItem(wt, CID).children.filter((c: any) => c.externalId === "7")).toHaveLength(0)
+      expect(readItem(wt, CID).tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+
+  test("quality reviewer 报 issue 不传 dimension → 由报源推断写入", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "failed", new_children: [{ id: "7", title: "风格遗留", description: "d", severity: "Low" }] },
+        ctx.dims["style"]
+      )
+      expect(r).toContain("推进")
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child.metadata["dimension"]).toBe("style")
+      expect(child.metadata["source"]).toBe("openspec-reviewer-style")
     } finally { teardown(root) }
   })
 

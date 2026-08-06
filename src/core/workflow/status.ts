@@ -1,11 +1,10 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
-import { REVIEW_DIMENSIONS } from "../types.js"
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import { stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER } from "./engine.js"
-import { ORCHESTRATOR_AGENT, agentToReviewDimension } from "../constants.js"
+import { ORCHESTRATOR_AGENT, agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
 import { taskListOf, issueChildrenOf } from "../task-children.js"
 import {
@@ -144,12 +143,13 @@ function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: Load
             return false
           }
           // verify_quality 为多 agent step：按调用者维度过滤，只展示调用者复核不会越权的待复核 issue。
-          // 合法声明的维度须与调用者维度一致；缺维度/非法维度走 review step 白名单 fallback（任何 quality reviewer 可复核）。
+          // 谁提谁裁定：报源为 quality reviewer 的 issue 收敛到报源自己维度；tool/task 跨维报 issue 的
+          // 待复核项由报源层裁定，不在本维复核权内（不展示，避免自助恢复指引误导）。
           if (layer === "quality") {
             const dim = agentToReviewDimension(ctxAgent)
             if (!dim) return false
-            const declared = c.metadata["dimension"]
-            return (REVIEW_DIMENSIONS as readonly string[]).includes(declared as string) ? declared === dim : true
+            const source = readIssueSource(c) ?? ""
+            return agentToReviewDimension(source) === dim
           }
           return true
         })
@@ -256,7 +256,7 @@ function renderOrchestratorDispatch(
   } else {
     // 防御出口：当前 step 存在 failed 残留 tag 但无待分派项 → 状态不一致。
     // 引擎已按「全部非 pending 时回退 failed 维度」自愈重派，此处兜底提示编排者走 recovery
-    // 而非盲目回退，避免 failed tag 残留（如 quality 维度归因缺 source_phase 的历史 state）静默死锁。
+    // 而非盲目回退，避免 failed tag 残留（如历史 state 报源缺失导致归因无法反推到对应维）静默死锁。
     const failed = failedAgentsOnStep(item, workflow, rec.stepId)
     if (failed.length > 0) {
       lines.push("⚠️ 状态不一致：存在 failed 裁决残留但无待分派项，下一步无法正常推进。")
@@ -580,22 +580,34 @@ function renderDeveloperChildren(item: WorkItem): string[] {
   return lines
 }
 
-/** verify_tool step：reviewer-tool 视角全部 issue children + 待裁定（豁免申请中）。 */
+/** 调用者可裁定的豁免申请（谁提谁裁定）：tool 层由报源反推层命中 tool。 */
+function isToolAdjudicable(child: WorkItem): boolean {
+  return child.metadata["exempt_request"] !== undefined && agentToReviewLayer(readIssueSource(child)) === "tool"
+}
+
+/** 调用者可裁定的豁免申请（谁提谁裁定）：task 层由报源反推层命中 task。 */
+function isTaskAdjudicable(child: WorkItem): boolean {
+  return child.metadata["exempt_request"] !== undefined && agentToReviewLayer(readIssueSource(child)) === "task"
+}
+
+/** 调用者可裁定的豁免申请（谁提谁裁定）：quality 层报源维度等于调用者维度。 */
+function isQualityAdjudicable(child: WorkItem, dimension: Dimension | undefined): boolean {
+  if (child.metadata["exempt_request"] === undefined || !dimension) return false
+  return agentToReviewDimension(readIssueSource(child) ?? "") === dimension
+}
+
+/** verify_tool step：reviewer-tool 视角全部非终态 issue + 调用者可裁定的豁免申请（待裁定）。 */
 function renderToolChildren(item: WorkItem): string[] {
   const lines: string[] = []
   const issues = issueChildrenOf(item)
   const active = issues.filter((c) => !isTerminalPhase(c.phase))
-  if (active.length > 0) {
-    lines.push(...renderChildrenSection("全部 Issue（tool 层可见）", active))
-  }
-  const pending = issues.filter((c) => c.metadata["exempt_request"] !== undefined)
-  if (pending.length > 0) {
-    lines.push(...renderChildrenSection("待裁定 (豁免申请中)", pending))
-  }
+  lines.push(...renderChildrenSection("Issue (待处理/待复核)", active))
+  const pending = issues.filter((c) => isToolAdjudicable(c))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines
 }
 
-/** verify_task step：task children 待验证列表 + 待裁定 children。 */
+/** verify_task step：task children 待验证列表 + task 层 issue 主区块 + 调用者可裁定的豁免申请（待裁定）。 */
 function renderTaskChildren(item: WorkItem): string[] {
   const lines: string[] = []
   const pendingTasks = readTasks(item).filter((t) => t.status === "submitted")
@@ -604,25 +616,27 @@ function renderTaskChildren(item: WorkItem): string[] {
     for (const t of pendingTasks) lines.push(renderTaskItem(t))
     lines.push("")
   }
-  const pending = issueChildrenOf(item).filter((c) => c.metadata["exempt_request"] !== undefined)
-  if (pending.length > 0) {
-    lines.push(...renderChildrenSection("Issue (待裁定)", pending))
-  }
+  const issues = issueChildrenOf(item)
+  const own = issues.filter((c) => !isTerminalPhase(c.phase) && resolveChildIssueFields(c).sourcePhase === "task")
+  lines.push(...renderChildrenSection("Issue (待处理/待复核)", own))
+  const pending = issues.filter((c) => isTaskAdjudicable(c))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines
 }
 
-/** verify_quality step：各维度 reviewer 仅渲染本维度 issue children（metadata.dimension === 当前 agent 对应维度）。 */
+/** verify_quality step：各维度 reviewer 渲染本维度非终态 issue + 本维度豁免申请（待裁定）。 */
 function renderQualityChildren(item: WorkItem, ctxAgent: string): string[] {
   const dimension = agentToDimension(ctxAgent)
   if (!dimension) return []
   // task child 无 dimension 归因（resolveChildIssueFields 缺省 style），必须按 type 排除
-  const own = issueChildrenOf(item)
+  const issues = issueChildrenOf(item)
+  const own = issues
     .filter((c) => resolveChildIssueFields(c).dimension === dimension)
     .filter((c) => !isTerminalPhase(c.phase))
-  if (own.length === 0) return []
-  const lines = [`## 本维度 Issue（${dimension}）`, ""]
-  for (const c of own) lines.push(renderChildIssue(c))
-  lines.push("")
+  const lines: string[] = []
+  lines.push(...renderChildrenSection("Issue (待处理/待复核)", own))
+  const pending = issues.filter((c) => isQualityAdjudicable(c, dimension))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines
 }
 
@@ -640,7 +654,8 @@ function renderChildrenSection(title: string, children: WorkItem[]): string[] {
   return lines
 }
 
-/** 单个 issue child 渲染（参考 views.renderIssueItem 风格，字段来自 WorkItem.metadata）。 */
+/** 单个 issue child 渲染（参考 views.renderIssueItem 风格，字段来自 WorkItem.metadata）。
+ *  [报源层] 标签为 source 反推的 issue 报源层（tool/task/quality），非显式归因参数。 */
 function renderChildIssue(child: WorkItem): string {
   const f = resolveChildIssueFields(child)
   const id = child.externalId ?? child.id.replace(/^issue:/, "")

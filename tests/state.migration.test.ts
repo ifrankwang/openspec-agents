@@ -106,6 +106,11 @@ describe("state.workItems 迁移", () => {
     expect(byId("4").severity).toBe("Info")
     expect(byId("1").title).toBe("Issue 1")
     expect(byId("1").description).toBe("Issue 1")
+    // 迁移反推报源 agent 写入 metadata.source（新流报源层依据，source_phase 仅作历史兜底）
+    expect(byId("1").metadata["source"]).toBe("openspec-reviewer-style") // sourcePhase=quality + dimension=style
+    expect(byId("4").metadata["source"]).toBe("openspec-reviewer-architecture") // dimension=architecture
+    expect(byId("1").metadata["source_phase"]).toBe("quality") // 透传保留兼容
+    expect(byId("4").metadata["source_phase"]).toBe("quality")
   })
 
   test("各 taskGroup 状态映射为对应 phase/currentStep", async () => {
@@ -189,6 +194,29 @@ describe("state.workItems 迁移", () => {
       requestedBy: "openspec-reviewer-style", // sourcePhase=quality → DIMENSION_AGENT_MAP[style]
       reason: "第三方库限制",
     })
+  })
+
+  test("迁移反推报源兜底：tool/task/quality 各层 sourcePhase → metadata.source 反推为对应 review agent", async () => {
+    const root = `/tmp/state-migration-test/reporter-${Date.now()}`
+    const issues = [
+      makeIssue("1", "open", { sourcePhase: "tool", dimension: "security" }),
+      makeIssue("2", "open", { sourcePhase: "task" }),
+      makeIssue("3", "open", { sourcePhase: "quality", dimension: "architecture" }),
+      // quality + 无合法维度 → 按 issueReporterAgent 兜底回落 tool reviewer
+      makeIssue("4", "open", { sourcePhase: "quality", dimension: "bogus" as string }),
+    ]
+    writeFileSync(statePath(root), JSON.stringify(makeLegacyState({
+      taskGroups: [makeGroup("1", "review", issues)],
+    })))
+
+    const state = await readStateByChangeId(root, CID)
+    const children = state!.workItems![0].children
+    const byId = (id: string): WorkItem => children.find((c) => c.id === `issue:${id}`)!
+    expect(byId("1").metadata["source"]).toBe("openspec-reviewer-tool")
+    expect(byId("2").metadata["source"]).toBe("openspec-reviewer-task")
+    expect(byId("3").metadata["source"]).toBe("openspec-reviewer-architecture")
+    expect(byId("4").metadata["source"]).toBe("openspec-reviewer-tool")
+    expect(byId("4").metadata["source_phase"]).toBe("quality")
   })
 
   test("旧 state（metadata.tasks 无 task child）→ init 迁移为 task children 并删除 metadata.tasks", async () => {

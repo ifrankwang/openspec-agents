@@ -310,7 +310,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("verify_tool 视角：全部 children + 待裁定（豁免申请中）", async () => {
+  test("verify_tool 视角：全部非终态 issue + 待裁定（豁免申请中）", async () => {
     const root = `/tmp/wf-m1d-b-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -319,21 +319,21 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const state = readStateSync(wt)
     const item = taskItemOf(state)
     item.children = [
-      makeIssueChild("1", { phase: "todo", metadata: { source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9, exempt_request: { requestedBy: "openspec-developer" } } }),
-      makeIssueChild("2", { metadata: { source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "openspec-developer" }, exempt_reason: "设计如此" } }),
+      makeIssueChild("1", { phase: "todo", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9, exempt_request: { requestedBy: "openspec-developer" } } }),
+      makeIssueChild("2", { metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "openspec-developer" }, exempt_reason: "设计如此" } }),
     ]
     writeStateSync(wt, state)
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     const output = await status.execute({ change_id: CID }, toolR)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("全部 Issue（tool 层可见）")
+    expect(output).toContain("Issue (待处理/待复核)")
     // 带 exempt_request 标记的 child → 待裁定区块
-    expect(output).toContain("待裁定 (豁免申请中)")
+    expect(output).toContain("Issue (待裁定是否可豁免)")
     expect(output).toContain("issue 1 描述")
     expect(output).toContain("豁免申请中")
-    // 无标记 review 态 child 不再进入待裁定（新语义仅豁免申请可裁定）
-    expect(output).not.toContain("待裁定 (review / 豁免申请中)")
+    // 无标记 review 态 child 不再进入待裁定（新语义仅豁免申请可裁定）——防回归：上一版本旧标题「待裁定 (豁免申请中)」不应出现
+    expect(output).not.toContain("待裁定 (豁免申请中)")
     // exempt_request child → 豁免申请中
     expect(output).toContain("issue 2 描述")
     expect(output).toContain("豁免申请中")
@@ -357,11 +357,72 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
 
     const output = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-tool", wt))
     // 无豁免申请 → 不渲染待裁定区块（cancelled/todo 无标记均不进入）
-    expect(output).not.toContain("待裁定 (豁免申请中)")
+    expect(output).not.toContain("Issue (待裁定是否可豁免)")
     // 全量区块仅渲染非终态 issue：todo child 2 仍在，cancelled child 1 不再出现
-    expect(output).toContain("全部 Issue（tool 层可见）")
+    expect(output).toContain("Issue (待处理/待复核)")
     expect(output).toContain("issue 2 描述")
     expect(output).not.toContain("issue 1 描述")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_tool 待裁定区块：仅含调用者可裁（tool 报源）的豁免申请，不含 quality 报源豁免", async () => {
+    const root = `/tmp/wf-tool-pending-filter-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.children = [
+      makeIssueChild("1", { metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "openspec-developer" } } }),
+      makeIssueChild("2", { metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", exempt_request: { requestedBy: "openspec-developer" } } }),
+    ]
+    writeStateSync(wt, state)
+
+    const toolR = makeCtx("openspec-reviewer-tool", wt)
+    const output = await status.execute({ change_id: CID }, toolR)
+    // tool 报源豁免 → 待裁定区块
+    expect(output).toContain("## Issue (待裁定是否可豁免)")
+    expect(output).toContain("issue 1 描述")
+    // quality 报源豁免 → 调用者（tool）无权裁定，不进入待裁定区块（仅出现在主区块）
+    const pendingIdx = output.indexOf("待裁定是否可豁免")
+    expect(pendingIdx).toBeGreaterThan(-1)
+    expect(output.slice(pendingIdx)).not.toContain("issue 2 描述")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_quality style 视角：本维度豁免申请进入待裁定区块，非本维度豁免不可见", async () => {
+    const root = `/tmp/wf-quality-pending-filter-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.currentStep = "verify_quality"
+    item.tags = {
+      "analyze:openspec-architect": "passed",
+      "implement:openspec-developer": "passed",
+      "verify_tool:openspec-reviewer-tool": "passed",
+      "verify_task:openspec-reviewer-task": "passed",
+    }
+    item.children = [
+      makeIssueChild("1", { metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", exempt_request: { requestedBy: "openspec-developer" } } }),
+      makeIssueChild("2", { metadata: { source: "openspec-reviewer-architecture", source_phase: "quality", dimension: "architecture", exempt_request: { requestedBy: "openspec-developer" } } }),
+    ]
+    writeStateSync(wt, state)
+
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    const output = await status.execute({ change_id: CID }, styleR)
+    // 本维度（style 报源）豁免 → 待裁定区块
+    expect(output).toContain("## Issue (待裁定是否可豁免)")
+    expect(output).toContain("issue 1 描述")
+    // 非本维度（architecture 报源）豁免 → style reviewer 无权裁定，不进入待裁定区块
+    const pendingIdx = output.indexOf("待裁定是否可豁免")
+    expect(pendingIdx).toBeGreaterThan(-1)
+    expect(output.slice(pendingIdx)).not.toContain("issue 2 描述")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -390,7 +451,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const styleR = makeCtx("openspec-reviewer-style", wt)
     const output = await status.execute({ change_id: CID }, styleR)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("## 本维度 Issue（style）")
+    expect(output).toContain("## Issue (待处理/待复核)")
     expect(output).toContain("issue 1 描述")
     // architecture 维度 child 不可见（描述与 child id 均不出现）
     expect(output).not.toContain("issue 2 描述")
@@ -399,7 +460,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("verify_quality 视角：终态（done/cancelled）维度 child 不再出现在本维度 Issue 区块", async () => {
+  test("verify_quality 视角：终态（done/cancelled）维度 child 不再出现在 Issue (待处理/待复核) 区块", async () => {
     const root = `/tmp/wf-m1d-c-terminal-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -424,7 +485,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const styleR = makeCtx("openspec-reviewer-style", wt)
     const output = await status.execute({ change_id: CID }, styleR)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("## 本维度 Issue（style）")
+    expect(output).toContain("## Issue (待处理/待复核)")
     // 非终态维度 child 仍渲染
     expect(output).toContain("issue 1 描述")
     // 终态维度 child 不再出现在本维度区块
@@ -630,7 +691,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("verify_quality blocked 视图按调用者维度过滤：非报源维度 reviewer 不展示其他维度待复核 issue", async () => {
+  test("verify_quality blocked 视图按报源维度过滤：非报源维度 reviewer 不展示其他维度待复核 issue", async () => {
     const root = `/tmp/wf-status-rcheck-dim-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -641,16 +702,16 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2"] }, taskR)
     expect(taskItemOf(readStateSync(wt)).currentStep).toBe("verify_quality")
 
-    // verify_quality 5 维全 passed + style 维度 review 态 blocking issue → blocked
+    // verify_quality 5 维全 passed + style 报源维度 review 态 blocking issue → blocked
     const state = readStateSync(wt)
     const item = taskItemOf(state)
     for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
       item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
     }
-    item.children.push(makeIssueChild("9", { phase: "review", metadata: { source_phase: "quality", dimension: "style" } }))
+    item.children.push(makeIssueChild("9", { phase: "review", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style" } }))
     writeStateSync(wt, state)
 
-    // 非报源维度 reviewer（architecture）→ 不展示 style 维度待复核 issue（避免照指引补交后被谁提谁裁定拒绝）
+    // 非报源维度 reviewer（architecture）→ 不展示 style 报源维度待复核 issue（避免照指引补交后被谁提谁裁定拒绝）
     const archView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-architecture", wt))
     expect(archView).toContain("# ⛔ 当前 step 阻塞中，等待编排处理")
     expect(archView).not.toContain("Issue #9")

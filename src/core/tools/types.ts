@@ -54,7 +54,6 @@ export interface AgentSubmitParams {
     title: string
     description: string
     severity?: string
-    source_phase?: ReviewLayer
     dimension?: string
     file?: string
     line?: number

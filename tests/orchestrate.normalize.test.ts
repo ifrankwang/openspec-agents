@@ -52,7 +52,7 @@ describe("N1. issue id # 前缀归一化", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
-          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", source_phase: "tool", dimension: "style" }],
+          new_children: [{ id: "7", title: "Tool issue", description: "工具层问题", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )
@@ -89,7 +89,7 @@ describe("N1. issue id # 前缀归一化", () => {
       // style 维度报 Low issue → 其余维度通过后聚合回退 implement
       await rollbackQuality(ctx, CID, {
         failedDim: "style",
-        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方库限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方库限制", severity: "Low", dimension: "style" }],
       })
       expect(taskItemOf(readState(wt, CID)!).currentStep).toBe("implement")
 
@@ -138,7 +138,7 @@ describe("N1. issue id # 前缀归一化", () => {
       // style 维度报 Low issue → 其余维度通过后聚合回退 implement
       await rollbackQuality(ctx, CID, {
         failedDim: "style",
-        newChildren: [{ id: "7", title: "Style issue", description: "质量层问题", severity: "Low", source_phase: "quality", dimension: "style" }],
+        newChildren: [{ id: "7", title: "Style issue", description: "质量层问题", severity: "Low", dimension: "style" }],
       })
 
       // dev 用 # 修复 quality 层 issue

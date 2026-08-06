@@ -209,7 +209,7 @@ describe("gap7 verify_quality 聚合等待期分派", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
-          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", source_phase: "quality", dimension: "style" }],
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.dims["style"]
       )
@@ -237,7 +237,7 @@ describe("gap8 回退 implement 后分派 developer", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
-          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", source_phase: "tool", dimension: "style" }],
+          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )

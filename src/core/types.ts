@@ -16,7 +16,7 @@ export type Phase = "task_analysis" | "dev_impl" | "review" | "completed"
 export const BUILD_PHASE_TARGETS = ["task_analysis", "dev_impl", "review"] as const
 export type BuildPhaseTarget = typeof BUILD_PHASE_TARGETS[number]
 
-/** review 内子层合法值（review_layer / issue 归因 source_phase 共用同一三元组）。 */
+/** review 内子层合法值（review_layer / issue 报源层共用同一三元组）。 */
 export const REVIEW_LAYERS = ["tool", "task", "quality"] as const
 export type ReviewLayer = typeof REVIEW_LAYERS[number]
 export type OrchestrateStatus = "not_started" | "in_progress" | "completed"

@@ -93,7 +93,7 @@ async function setupExemptRequest(wt: string): Promise<void> {
   const { ctx } = await driveToQuality(wt, CID)
   await rollbackQuality(ctx, CID, {
     failedDim: "style",
-    newChildren: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+    newChildren: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", dimension: "style" }],
   })
   const item0 = readItem(wt, CID)
   await agent_submit.execute(
@@ -428,7 +428,7 @@ describe("G10. 谁提谁裁定守卫", () => {
       const { ctx } = await driveToQuality(wt, CID)
       await rollbackQuality(ctx, CID, {
         failedDim: "style",
-        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", dimension: "style" }],
       })
       // 不经过 dev exempt_issue_ids 申请豁免 → child 无 exempt_request 标记
       const child0 = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
@@ -455,7 +455,7 @@ describe("G11. review 参数守卫", () => {
       await driveToVerifyTool(wt, CID)
       await expectError(
         agent_submit.execute(
-          { change_id: CID, step_id: "verify_tool", verdict: "passed", new_children: [{ id: "7", title: "阻塞问题", description: "d", severity: "Low" }] },
+          { change_id: CID, step_id: "verify_tool", verdict: "passed", new_children: [{ id: "7", title: "阻塞问题", description: "d", severity: "Low", dimension: "style" }] },
           makeCtx("openspec-reviewer-tool", wt)
         ),
         /passed=true 只能带 Info 新报/
@@ -564,7 +564,7 @@ describe("G16. 层失败回退 implement", () => {
       const r = await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
-          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", source_phase: "tool", dimension: "style" }],
+          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )
@@ -671,7 +671,7 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
       const r = await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
-          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", source_phase: "tool", dimension: "style" }],
+          new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )
@@ -691,7 +691,7 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
           {
             change_id: CID, step_id: "verify_task", verdict: "failed",
             verified_tasks: ["1", "2", "3"],
-            new_children: [{ id: "7", title: "建议", description: "d", severity: "Info" }],
+            new_children: [{ id: "7", title: "建议", description: "d", severity: "Info", dimension: "style" }],
           },
           makeCtx("openspec-reviewer-task", wt)
         ),
@@ -709,7 +709,7 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
         {
           change_id: CID, step_id: "verify_task", verdict: "failed",
           verified_tasks: ["1", "2"], failed_tasks: [{ task_id: "3", reason: "验收未过" }],
-          new_children: [{ id: "7", title: "建议", description: "d", severity: "Info" }],
+          new_children: [{ id: "7", title: "建议", description: "d", severity: "Info", dimension: "style" }],
         },
         makeCtx("openspec-reviewer-task", wt)
       )

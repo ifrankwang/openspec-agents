@@ -39,7 +39,7 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
           failed_tasks: [{ task_id: "1", reason: "Incomplete" }],
           new_children: [{
             id: "tk1", title: "任务层问题", description: "任务实现不完整", severity: "Low",
-            source_phase: "task", dimension: "style", file: "src/T.java", line: 1, suggestion: "补全",
+            dimension: "style", file: "src/T.java", line: 1, suggestion: "补全",
           }],
         },
         ctx.taskR
