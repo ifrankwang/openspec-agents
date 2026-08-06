@@ -1,6 +1,6 @@
 import path from "path"
 import type { TaskItem, TaskStatus } from "../types.js"
-import { BUILD_PHASE_TARGETS, REVIEW_LAYERS } from "../types.js"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.js"
 import { ORCHESTRATOR_AGENT } from "../constants.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
@@ -10,7 +10,7 @@ import type { ParsedTask } from "../tasks-md.js"
 import { assertOrchestrator, findTaskGroup } from "../derive.js"
 import { assertPathWithin } from "../paths.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep } from "../workflow/engine.js"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags } from "../workflow/engine.js"
 import { renderWorkflowStatusView } from "../workflow/status.js"
 import { taskChildrenOf } from "../task-children.js"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.js"
@@ -167,6 +167,12 @@ function applyRecoveryState(
       if (item.tags[key] !== "passed") delete item.tags[key]
     }
   }
+  // reset_steps：把指定 verify step 的全部 tags 重置为 pending（删除 tag 键），使 currentStep 落在
+  // 第一个未全部通过的 verify step，可能早于被重置的 step——用于已 passed 但被本层遗漏复核/裁定
+  // 阻塞的 review step 强制重新审查（与 resetReviewTagsOnFix 删除 tag 的既有语义一致）。
+  for (const stepId of recovery?.reset_steps ?? []) {
+    clearStepTags(item, stepId)
+  }
   // review_layer 强制前置：tool→task 时 verify_tool 强制 passed；quality 时 verify_tool+verify_task 强制 passed
   if (recovery?.review_layer === "task" || recovery?.review_layer === "quality") {
     item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
@@ -194,7 +200,9 @@ function applyRecoveryState(
  * recovery 参数值域校验（入口显式拒绝，早于任何状态变更）：
  * - phase 必须为合法恢复阶段（task_analysis/dev_impl/review），缺失/非法即抛错并列出合法值；
  * - review_layer 必须为合法子层（tool/task/quality），非法即抛错；
- * - review_layer 仅当 phase=review 时允许存在，其余 phase 组合复用既有组合错误消息。
+ * - review_layer 仅当 phase=review 时允许存在，其余 phase 组合复用既有组合错误消息；
+ * - reset_steps 必须为合法 verify step（verify_tool/verify_task/verify_quality），非空数组，
+ *   仅当 phase=review 时允许存在，且与 review_layer 互斥（二者都操纵哪些 review step 通过）。
  */
 function assertValidRecovery(recovery: InitParams["recovery"]): void {
   if (recovery === undefined) return
@@ -210,6 +218,24 @@ function assertValidRecovery(recovery: InitParams["recovery"]): void {
   }
   if (recovery.review_layer && recovery.phase !== "review") {
     throw new Error(`review_layer 参数仅当 recovery.phase 为 review 时有效，当前 phase 为 "${recovery.phase}"。`)
+  }
+  if (recovery.reset_steps !== undefined) {
+    if (recovery.phase !== "review") {
+      throw new Error(`reset_steps 参数仅当 recovery.phase 为 review 时有效，当前 phase 为 "${recovery.phase}"。`)
+    }
+    if (recovery.review_layer) {
+      throw new Error("reset_steps 与 review_layer 互斥，不可同时使用。")
+    }
+    if (recovery.reset_steps.length === 0) {
+      throw new Error("reset_steps 不能为空数组，请至少指定一个 verify step。")
+    }
+    for (const stepId of recovery.reset_steps) {
+      if (!(REVIEW_VERIFY_STEPS as readonly string[]).includes(stepId)) {
+        throw new Error(
+          `reset_steps 中的 step "${stepId}" 不合法，合法值：${REVIEW_VERIFY_STEPS.join("、")}。传入值："${stepId}"。`
+        )
+      }
+    }
   }
 }
 

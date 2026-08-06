@@ -8,7 +8,7 @@ import type {
 import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import { tagKey } from "./types.js"
-import { reviewLayerFromMetadata } from "../constants.js"
+import { reviewLayerFromMetadata, readIssueSource } from "../constants.js"
 
 const TERMINAL_PHASES: WorkItemPhase[] = ["done", "cancelled"]
 
@@ -372,6 +372,46 @@ function forwardAdvanceBlockReason(item: WorkItem, workflow: LoadedWorkflow, ste
   return undefined
 }
 
+/**
+ * 当前 step 门禁相关阻塞 children（blocked 推导与视图诊断共用）：
+ * - review 验证 step（verify_tool/verify_task/verify_quality）：层感知口径——本层可裁定的非终态 blocking issue
+ *   （childSourcePhase 与 REVIEW_STEP_TO_LAYER[step.id] 一致）。非本层 review 态 issue 不阻塞本 step，故不列出。
+ * - implement：镜像 stepCanPass 的 carve-out——review 态 blocking issue 已由 dev 提交进入待复核（等待对应
+ *   reviewer 裁定），不阻塞 dev 提交推进，故不计入；其余非终态 blocking issue 列出。
+ * - 其他非 review step：全部非终态 blocking issue。
+ */
+export function blockingStepChildren(item: WorkItem, step: StepConfig): WorkItem[] {
+  const layer = REVIEW_STEP_TO_LAYER[step.id]
+  return item.children.filter((child) => {
+    if (!isBlockingSeverity(child.severity)) return false
+    if (isTerminalPhase(child.phase)) return false
+    if (step.id === "implement" && child.phase === "review") return false
+    if (layer && childSourcePhase(child) !== layer) return false
+    return true
+  })
+}
+
+/**
+ * blocked step 应补交裁定的 reviewer 推导（谁提谁裁定）：
+ * - 带 exempt_request 标记的 child → 报源 reviewer 补交 exempt_adjudications
+ * - review 态 child → 报源 reviewer 补交 recheck_adjudications
+ * - todo/in_progress 等其他态 child → 不派 reviewer（补交无法解决），不加入 agents
+ * 报源解析：child.metadata.source（完整 agent 名）必须属于当前 step agents，否则跳过该 child——
+ * 裁定逻辑（submit.resolveAdjudicatorStepForIssue）硬性要求报源合法，非法报源派发出去提交即被拒，
+ * 形成不闭合循环；报源缺失/非法一律不派 reviewer，落入空派由视图输出诊断清单引导 recovery。
+ */
+export function blockedSupplementAgents(item: WorkItem, step: StepConfig): string[] {
+  const agents = new Set<string>()
+  const stepAgentSet = new Set(stepAgentIds(step))
+  for (const child of blockingStepChildren(item, step)) {
+    if (child.metadata["exempt_request"] === undefined && child.phase !== "review") continue
+    const source = readIssueSource(child)
+    if (!source || !stepAgentSet.has(source)) continue
+    agents.add(source)
+  }
+  return [...agents]
+}
+
 export interface EngineRecommendation {
   status: "recommend" | "suspended" | "checkpoint" | "blocked" | "terminal"
   stepId: string | null
@@ -421,11 +461,30 @@ export function recommendForItem(item: WorkItem, workflow: LoadedWorkflow): Engi
   const adjudication = adjudicateStep(item, current.step)
   if (adjudication === "passed" && !current.step.always_run) {
     if (!stepCanPass(item, current.step)) {
+      // 本层 blocking children 未终态（reviewer 漏带 recheck/豁免裁定导致）：推导应补交裁定的报源 reviewer，
+      // 不再恒返回 agents=[]（否则 orchestrator 收不到"下一步分派谁"的指令，形成静默死锁）。
+      // 仅 review step（verify_tool/verify_task/verify_quality）走 supplement 派生：implement 的
+      // stepCanPass carve-out 已把 review 态 child 排除在阻塞之外，其 blocked 恒为待修复/豁免申请中条目，
+      // 补交裁定无意义，保持 agents=[] 走诊断清单。
+      const blockingChildren = blockingStepChildren(item, current.step)
+      const recheckCount = blockingChildren.filter(
+        (c) => c.phase === "review" && c.metadata["exempt_request"] === undefined,
+      ).length
+      const exemptCount = blockingChildren.filter((c) => c.metadata["exempt_request"] !== undefined).length
+      const todoCount = blockingChildren.length - recheckCount - exemptCount
+      const isReviewStep = REVIEW_STEP_TO_LAYER[current.step.id] !== undefined
+      const agents = isReviewStep ? blockedSupplementAgents(item, current.step) : []
+      const blockedReason =
+        agents.length > 0
+          ? `step 全部 agent 已 passed 但存在 ${blockingChildren.length} 个本层待复核/待裁定 blocking children（待复核 ${recheckCount}、豁免申请中 ${exemptCount}），需报源 reviewer 补交复核/裁定解除阻塞。`
+          : todoCount > 0
+            ? `step 全部 agent 已 passed 但存在 ${blockingChildren.length} 个未到终态的 blocking children（待修复 ${todoCount}、豁免申请中 ${exemptCount}），需 developer 修复后重新提交审查。`
+            : `step 全部 agent 已 passed 但存在 ${blockingChildren.length} 个待复核/豁免申请中的 blocking children 且无法推导需补交的 reviewer，请核对 state 后按需调用 opx_orch_init(recovery=...) 恢复。`
       return {
         status: "blocked",
         stepId: current.step.id,
-        agents: [],
-        blockedReason: "step 全部 agent 已 passed 但存在未到终态的 children，暂不沿 on:pass 推进。",
+        agents,
+        blockedReason,
       }
     }
     // step 全 passed 且 children 达标后仍可能被跨 phase 门禁或 done 的 task children 终态检查拦截

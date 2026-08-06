@@ -406,15 +406,15 @@ describe("G10. 谁提谁裁定守卫", () => {
     const { wt, root } = fresh()
     try {
       await setupExemptRequest(wt)
-      // architecture 维度在上一轮 verify_quality 已 passed（rollbackQuality 聚合回退前的裁决保留），
-      // 其带 exempt_adjudications 提交先被重复提交守卫拦截（已 passed 不允许重复提交，豁免裁定非 recheck-only 补交）；
-      // 谁提谁裁定的负向拦截由未 passed 维度场景覆盖（opx_agent_submit test 43 等）。
+      // architecture 维度在上一轮 verify_quality 已 passed（rollbackQuality 聚合回退前的裁决保留）。
+      // 其带 exempt_adjudications 提交为纯裁定补交（isSupplementOnly 放行重复提交守卫），
+      // 随后由谁提谁裁定在 adjudicateExempt 拦截：非报源 agent 无权裁定（guard 放行不改变裁定归属）。
       await expectError(
         agent_submit.execute(
           { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
           makeCtx("openspec-reviewer-architecture", wt)
         ),
-        /重复提交守卫/
+        /由报源 "openspec-reviewer-style"/
       )
       const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
       expect(child.phase).toBe("todo")

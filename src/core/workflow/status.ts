@@ -3,7 +3,7 @@ import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import { stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER } from "./engine.js"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.js"
 import { ORCHESTRATOR_AGENT, agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
 import { taskListOf, issueChildrenOf } from "../task-children.js"
@@ -262,6 +262,13 @@ function renderOrchestratorDispatch(
       lines.push("⚠️ 状态不一致：存在 failed 裁决残留但无待分派项，下一步无法正常推进。")
       lines.push(`  - 失败维度：${failed.map((a) => `\`${a}\``).join("、")}`)
       lines.push("  建议：调用 `opx_orch_init(recovery=...)` 重置对应层审查进度后重新验证，勿盲目回退 dev。")
+    } else if (rec.status === "blocked") {
+      // blocked 且无可推导 reviewer（全部为 todo/in_progress 态或报源缺失）：输出阻塞 children 诊断清单，
+      // 替代信息量为零的占位文案，编排者据此判断是派 dev 修复还是走 recovery。
+      // 无阻塞 issue children（如跨 phase 门禁拦截的 task child 场景）回退占位文案，避免空区块。
+      const diag = renderBlockedChildrenDiagnostic(item, workflow, rec.stepId)
+      if (diag.length > 0) lines.push(...diag)
+      else lines.push("（无待分派项，请检查状态）")
     } else {
       lines.push("（无待分派项，请检查状态）")
     }
@@ -276,6 +283,32 @@ function failedAgentsOnStep(item: WorkItem, workflow: LoadedWorkflow, stepId: st
   const step = workflow.stepMap.get(stepId)?.step
   if (!step) return []
   return step.agents.filter((a) => getStepVerdict(item, stepId, a.id) === "failed").map((a) => a.id)
+}
+
+/** blocked 且无可推导 reviewer 时的阻塞 children 诊断清单（归属/报源/阶段 + 处理建议）。 */
+function renderBlockedChildrenDiagnostic(item: WorkItem, workflow: LoadedWorkflow, stepId: string | null): string[] {
+  if (!stepId) return []
+  const step = workflow.stepMap.get(stepId)?.step
+  if (!step) return []
+  const children = blockingStepChildren(item, step)
+  if (children.length === 0) return []
+  const lines = [
+    "⚠️ 当前 step 已全 passed 但存在阻塞 children，且无可补交裁定的 reviewer：",
+    "",
+  ]
+  for (const c of children) {
+    const id = c.externalId ?? c.id.replace(/^issue:/, "")
+    const f = resolveChildIssueFields(c)
+    const source = readIssueSource(c) ?? "(报源缺失)"
+    const state =
+      c.metadata["exempt_request"] !== undefined ? "豁免申请中" : c.phase === "review" ? "待复核" : `待处理(${c.phase})`
+    lines.push(`- Issue #${id} | ${formatSeverity(c.severity ?? "Info")} | 归属:${f.dimension} | 报源:${source} | ${state}`)
+  }
+  lines.push("")
+  lines.push("处理建议：待复核/豁免申请中条目需报源 reviewer 补交裁定（recheck_adjudications / exempt_adjudications）；")
+  lines.push("待处理条目需 developer 修复；报源缺失时核对 state 文件后按需 `opx_orch_init(recovery=...)` 恢复。")
+  lines.push("")
+  return lines
 }
 
 /** orchestrator 阶段进展/审核进度：各 step:agent:verdict 汇总 + children 统计。 */

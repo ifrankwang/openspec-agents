@@ -31,18 +31,21 @@ function normalizeIssueId(id: string): string {
 }
 
 /**
- * 判定本次 review 提交是否「仅携带 recheck_adjudications」（无其他实质参数）。
- * 供重复提交守卫的复核补交豁免：reviewer 上次 passed 提交漏带复核导致本层 review 态 issue
- * 阻塞门禁时，允许仅补带 recheck_adjudications 重提解除阻塞；空提交或携带其他实质参数的
- * 重复提交仍被守卫拒绝。
+ * 判定本次 review 提交是否「仅携带裁定类参数」（recheck_adjudications / exempt_adjudications，无其他实质参数）。
+ * 供重复提交守卫的补交豁免：reviewer 上次 passed 提交漏带复核/豁免裁定导致本层 review 态 issue
+ * 阻塞门禁时（见 engine.blockedSupplementAgents 推导），允许仅补带 recheck_adjudications /
+ * exempt_adjudications 重提解除阻塞；空提交或携带其他实质参数（含 fixed_issue_ids /
+ * exempt_issue_ids / new_children）的重复提交仍被守卫拒绝。
  */
-function isRecheckOnlySupplement(params: AgentSubmitParams): boolean {
+function isSupplementOnly(params: AgentSubmitParams): boolean {
+  const hasAdjudication =
+    (params.recheck_adjudications?.length ?? 0) > 0 ||
+    (params.exempt_adjudications?.length ?? 0) > 0
+  if (!hasAdjudication) return false
   return (
-    (params.recheck_adjudications?.length ?? 0) > 0 &&
     (params.fixed_issue_ids?.length ?? 0) === 0 &&
     (params.exempt_issue_ids?.length ?? 0) === 0 &&
     (params.new_children?.length ?? 0) === 0 &&
-    (params.exempt_adjudications?.length ?? 0) === 0 &&
     (params.verified_tasks?.length ?? 0) === 0 &&
     (params.failed_tasks?.length ?? 0) === 0 &&
     !params.boundary_expansion &&
@@ -511,16 +514,17 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     // 重复提交守卫（仅 review step）：同 step 同 agent 已以 passed 通过后不允许重复提交；failed 允许重提
     // （回退重审期 failed tag 未被归因清空时须可重提，如 verify_task 仅 failed_tasks 驳回）。
-    // 复核补交豁免：仅携带 recheck_adjudications（无其他实质参数）的补交放行——上次提交漏带
-    // 复核导致本层 review 态 issue 阻塞门禁时，reviewer 可补带复核结论重提解除阻塞；空提交/携带
-    // 其他实质参数（含 fixed_issue_ids / exempt_issue_ids）的重复提交仍被拒绝。
+    // 补交豁免：仅携带裁定类参数（recheck_adjudications / exempt_adjudications，无其他实质参数）的补交放行——
+    // 上次提交漏带复核/豁免裁定导致本层 review 态 issue 阻塞门禁时（engine.blockedSupplementAgents 已推导
+    // 应补交的报源 reviewer），reviewer 可补带裁定重提解除阻塞；空提交/携带其他实质参数（含 fixed_issue_ids /
+    // exempt_issue_ids）的重复提交仍被拒绝。
     // 守卫在一切裁定（豁免/复核）之前执行，保证守卫拒绝时零副作用。step 归属按 stepMap 直接判定
     // （不依赖 assertSubmitRouting，保持越权 step 提交的裁定拦截语义不变）。
     const guardStepPhase = workflow.stepMap.get(params.step_id)?.phase.name
     if (
       guardStepPhase === "review" &&
       getStepVerdict(item, params.step_id, ctx.agent) === "passed" &&
-      !isRecheckOnlySupplement(params)
+      !isSupplementOnly(params)
     ) {
       throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
     }

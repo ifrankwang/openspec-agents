@@ -1,5 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
-import { BUILD_PHASE_TARGETS, REVIEW_LAYERS } from "../../core/types.js"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../../core/types.js"
 import {
   initExecute, setWorktreeExecute, statusExecute,
   completeTaskGroupExecute, setUnattendedExecute,
@@ -21,6 +21,9 @@ export const init = tool({
         .optional()
         .describe("恢复到 review 内某子层（仅 phase=review 时有效）。tool→从 tool 层开始（默认），task→tool 层标记完成从 task 层开始，quality→tool+task 层完成从 quality 层开始。已通过（passed）的审查层标记在恢复时保留，恢复自动跳到第一个未全部通过的子层"),
       reopenIssues: tool.schema.boolean().default(false).optional().describe("完成后继续修 issue：将目标任务组全部非 verified issue 置为 rejected，重置 review 进度，回到 dev_impl 阶段。目标组必须为 completed。与 review_layer 互斥。"),
+      reset_steps: tool.schema.array(
+        tool.schema.enum(REVIEW_VERIFY_STEPS).describe("要重置为 pending 的 verify step（verify_tool/verify_task/verify_quality）")
+      ).optional().describe("重置指定 verify step 的通过标记为 pending（仅 phase=review 时有效，与 review_layer 互斥）。用于已 passed 但被本层遗漏复核/裁定阻塞的 review step 强制重新审查；恢复后 currentStep 落在第一个未全部通过的 verify step，可能早于被重置的 step。"),
     }).optional().describe("进度恢复参数。提供后按 phase 恢复阶段状态，< phase 为 completed，== phase 为 in_progress，> phase 为 not_started。"),
   },
   async execute(args, context) {

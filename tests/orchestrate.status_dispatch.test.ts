@@ -173,25 +173,62 @@ describe("gap5 blocked 态子代理视图集成", () => {
 })
 
 // ════════════════════════════════════════════════════════════════
-//  gap6：分派视图防御出口 2（rec.agents=[] 且无 failed 残留）
+//  gap6：blocked 分派视图（原防御出口断言锁定的 bug 行为已修复）
+//  blocked（step 全 passed 但本层 blocking children 未终态）不再恒 agents=[]：
+//  - 报源可推导 → 分派报源 reviewer 补交裁定（engine.blockedSupplementAgents）
+//  - 报源不可推导 / 全为 todo 态 → 输出阻塞 children 诊断清单（status.renderBlockedChildrenDiagnostic）
 // ════════════════════════════════════════════════════════════════
 
-describe("gap6 分派视图防御出口 2", () => {
-  test("agents 为空且无 failed 残留 → （无待分派项，请检查状态），不报状态不一致", async () => {
+describe("gap6 blocked 分派视图", () => {
+  test("blocked 且报源可推导 → 分派报源 reviewer，不再输出（无待分派项，请检查状态）", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
-      // verify_quality 5 维全 passed + 未终态 blocking child → 引擎 blocked（agents=[]），无 failed 残留
+      // verify_quality 5 维全 passed + 本层 review 态 blocking child（报源 style reviewer，漏带复核）→ 引擎 blocked
       rewriteItem(wt, (item) => {
         item.tags["verify_quality:openspec-reviewer-style"] = "passed"
         item.tags["verify_quality:openspec-reviewer-architecture"] = "passed"
         item.tags["verify_quality:openspec-reviewer-performance"] = "passed"
         item.tags["verify_quality:openspec-reviewer-security"] = "passed"
         item.tags["verify_quality:openspec-reviewer-maintainability"] = "passed"
-        item.children.push(makeIssueChild("7"))
+        item.children.push({
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "遗留 issue", description: "d", phase: "review", suspended: false,
+          currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style" },
+          children: [], labels: [], severity: "Low",
+        })
       })
       const out = await status.execute({ change_id: CID }, ctx.orch)
-      expect(out).toContain("（无待分派项，请检查状态）")
+      expect(out).toContain("**推进阻塞**:")
+      expect(out).toContain("需报源 reviewer 补交复核/裁定")
+      expect(out).toContain("分派子代理：`openspec-reviewer-style`")
+      expect(out).not.toContain("（无待分派项，请检查状态）")
+    } finally { teardown(root) }
+  })
+
+  test("blocked 且报源缺失（无 source 且无 dimension 无法推导）→ 输出阻塞 children 诊断清单", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.tags["verify_quality:openspec-reviewer-style"] = "passed"
+        item.tags["verify_quality:openspec-reviewer-architecture"] = "passed"
+        item.tags["verify_quality:openspec-reviewer-performance"] = "passed"
+        item.tags["verify_quality:openspec-reviewer-security"] = "passed"
+        item.tags["verify_quality:openspec-reviewer-maintainability"] = "passed"
+        // 报源缺失且无显式 dimension → 多 agent step 无法映射回维度 reviewer → agents 空
+        item.children.push({
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "遗留 issue", description: "d", phase: "review", suspended: false,
+          currentStep: null, tags: {}, metadata: { source_phase: "quality" },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      const out = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out).toContain("当前 step 已全 passed 但存在阻塞 children，且无可补交裁定的 reviewer")
+      expect(out).toContain("Issue #7")
+      expect(out).toContain("报源:(报源缺失)")
+      expect(out).not.toContain("（无待分派项，请检查状态）")
       expect(out).not.toContain("⚠️ 状态不一致")
     } finally { teardown(root) }
   })

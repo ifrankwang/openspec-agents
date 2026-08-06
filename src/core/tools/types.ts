@@ -1,4 +1,4 @@
-import type { BuildPhaseTarget, ReviewLayer } from "../types.js"
+import type { BuildPhaseTarget, ReviewLayer, ReviewVerifyStep } from "../types.js"
 
 export interface ToolContext {
   worktree: string
@@ -19,6 +19,9 @@ export interface InitParams {
     phase: BuildPhaseTarget
     review_layer?: ReviewLayer
     reopenIssues?: boolean
+    /** 重置指定 verify step 的审查 tags 为 pending（仅 phase=review 时有效，与 review_layer 互斥），
+     *  恢复后 currentStep 落在第一个未全部通过的 verify step，可能早于被重置的 step。 */
+    reset_steps?: ReviewVerifyStep[]
   }
 }
 
