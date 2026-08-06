@@ -310,7 +310,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("verify_tool 视角：全部 children + 待裁定（review/exempt_request）", async () => {
+  test("verify_tool 视角：全部 children + 待裁定（豁免申请中）", async () => {
     const root = `/tmp/wf-m1d-b-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -319,7 +319,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const state = readStateSync(wt)
     const item = taskItemOf(state)
     item.children = [
-      makeIssueChild("1", { phase: "review", severity: "High", metadata: { source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9 } }),
+      makeIssueChild("1", { phase: "todo", metadata: { source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9, exempt_request: { requestedBy: "openspec-developer" } } }),
       makeIssueChild("2", { metadata: { source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "openspec-developer" }, exempt_reason: "设计如此" } }),
     ]
     writeStateSync(wt, state)
@@ -328,13 +328,37 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const output = await status.execute({ change_id: CID }, toolR)
     expect(output).toContain("# ✅ 当前轮到你执行")
     expect(output).toContain("全部 Issue（tool 层可见）")
-    // review 态 child → 待裁定
-    expect(output).toContain("待裁定 (review / 豁免申请中)")
+    // 带 exempt_request 标记的 child → 待裁定区块
+    expect(output).toContain("待裁定 (豁免申请中)")
     expect(output).toContain("issue 1 描述")
-    expect(output).toContain("待裁定")
+    expect(output).toContain("豁免申请中")
+    // 无标记 review 态 child 不再进入待裁定（新语义仅豁免申请可裁定）
+    expect(output).not.toContain("待裁定 (review / 豁免申请中)")
     // exempt_request child → 豁免申请中
     expect(output).toContain("issue 2 描述")
     expect(output).toContain("豁免申请中")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("无豁免申请标记的终态 child 不进入待裁定区块", async () => {
+    const root = `/tmp/wf-pending-clean-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.children = [
+      makeIssueChild("1", { phase: "cancelled", metadata: { source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9 } }),
+      makeIssueChild("2", { phase: "todo", metadata: { source_phase: "tool", dimension: "style", file: "src/c.ts", line: 3 } }),
+    ]
+    writeStateSync(wt, state)
+
+    const output = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-tool", wt))
+    // 无豁免申请 → 不渲染待裁定区块（cancelled/todo 无标记均不进入）
+    expect(output).not.toContain("待裁定 (豁免申请中)")
+    expect(output).toContain("全部 Issue（tool 层可见）")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

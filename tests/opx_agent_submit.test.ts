@@ -1285,7 +1285,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
   })
-  test("32. verify_quality 维度限定裁定：非报 issue 维度的 agent 裁定 quality issue → 抛错", async () => {
+  test("32. 无豁免申请标记的 quality issue 被裁定 → 抛未申请豁免（标记校验先于谁提谁裁定）", async () => {
     const root = `/tmp/opxsub-32-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -1295,7 +1295,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
 
-      // architecture reviewer 报 quality issue（dimension=architecture）
+      // architecture reviewer 报 quality issue（dimension=architecture），未申请豁免（无 exempt_request 标记）
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_quality", verdict: "failed",
@@ -1303,13 +1303,13 @@ describe("opx_agent_submit 通用 step 提交", () => {
         },
         makeCtx("openspec-reviewer-architecture", wt)
       )
-      // style reviewer 尝试裁定该 issue → 越权（谁提谁裁定）
+      // style reviewer 尝试裁定该 issue → 标记校验先于谁提谁裁定：未申请豁免
       const err = await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
         makeCtx("openspec-reviewer-style", wt)
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/裁定者必须为报 issue 的/)
+      expect(err.message).toMatch(/未申请豁免/)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

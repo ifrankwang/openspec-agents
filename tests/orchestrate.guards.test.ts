@@ -418,6 +418,29 @@ describe("G10. 谁提谁裁定守卫", () => {
       expect(child.metadata["exempt_request"]).toBeDefined()
     } finally { teardown(root) }
   })
+
+  test("无豁免申请标记的 issue 被裁定 → 抛未申请豁免且落盘 children 零变更", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "不可修 issue", description: "第三方限制", severity: "Low", source_phase: "quality", dimension: "style" }],
+      })
+      // 不经过 dev exempt_issue_ids 申请豁免 → child 无 exempt_request 标记
+      const child0 = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child0.metadata["exempt_request"]).toBeUndefined()
+      const before = JSON.stringify(readItem(wt, CID).children)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
+          ctx.dims["style"]
+        ),
+        /未申请豁免/
+      )
+      expect(JSON.stringify(readItem(wt, CID).children)).toBe(before)
+    } finally { teardown(root) }
+  })
 })
 
 // ── G11: review 参数守卫 ──
