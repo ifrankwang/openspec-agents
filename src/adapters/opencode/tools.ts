@@ -19,7 +19,7 @@ export const init = tool({
       review_layer: tool.schema
         .enum(REVIEW_LAYERS)
         .optional()
-        .describe("恢复到 review 内某子层（仅 phase=review 时有效）。tool→从 tool 层开始（默认），task→tool 层标记完成从 task 层开始，quality→tool+task 层完成从 quality 层开始"),
+        .describe("恢复到 review 内某子层（仅 phase=review 时有效）。tool→从 tool 层开始（默认），task→tool 层标记完成从 task 层开始，quality→tool+task 层完成从 quality 层开始。已通过（passed）的审查层标记在恢复时保留，恢复自动跳到第一个未全部通过的子层"),
       reopenIssues: tool.schema.boolean().default(false).optional().describe("完成后继续修 issue：将目标任务组全部非 verified issue 置为 rejected，重置 review 进度，回到 dev_impl 阶段。目标组必须为 completed。与 review_layer 互斥。"),
     }).optional().describe("进度恢复参数。提供后按 phase 恢复阶段状态，< phase 为 completed，== phase 为 in_progress，> phase 为 not_started。"),
   },

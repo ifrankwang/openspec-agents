@@ -272,6 +272,212 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
   })
 })
 
+describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / 前移跳层 / 全 passed 收口）", () => {
+  test("已 passed 的 verify_tool 保留且跳过：recovery review → currentStep 直达 verify_task", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_tool"
+        item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_task")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+    } finally { teardown(root) }
+  })
+
+  test("部分维度 passed 保留：quality 层 style passed 不变，其余维度保持 pending", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_quality"
+        item.tags["verify_quality:openspec-reviewer-style"] = "passed"
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.currentStep).toBe("verify_quality")
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      // 其余维度无 passed 残留（保持 pending）
+      for (const d of DIMENSION_AGENTS) {
+        if (d !== "style") expect(item.tags[`verify_quality:openspec-reviewer-${d}`]).toBeUndefined()
+      }
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+    } finally { teardown(root) }
+  })
+
+  test("failed 重置为 pending：performance 维度 failed 恢复后 tag 清除", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_quality"
+        item.tags["verify_quality:openspec-reviewer-performance"] = "failed"
+        item.tags["verify_quality:openspec-reviewer-security"] = "passed"
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.tags["verify_quality:openspec-reviewer-performance"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-security"]).toBe("passed")
+      expect(item.currentStep).toBe("verify_quality")
+    } finally { teardown(root) }
+  })
+
+  test("三个 review step 全 passed 且 task children 终态 → 收口 done，currentStep 置 null", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_quality"
+        item.tags = {
+          "analyze:openspec-architect": "passed",
+          "implement:openspec-developer": "passed",
+          "verify_tool:openspec-reviewer-tool": "passed",
+          "verify_task:openspec-reviewer-task": "passed",
+        }
+        for (const d of DIMENSION_AGENTS) {
+          item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
+        }
+        for (const c of item.children) {
+          if (c.type === "task") c.phase = "done"
+        }
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("done")
+      expect(item.currentStep).toBeNull()
+    } finally { teardown(root) }
+  })
+
+  test("全 passed 但存在未终态 task child → 停在 verify_quality（不收口 done）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_quality"
+        item.tags = {
+          "verify_tool:openspec-reviewer-tool": "passed",
+          "verify_task:openspec-reviewer-task": "passed",
+        }
+        for (const d of DIMENSION_AGENTS) {
+          item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
+        }
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_quality")
+    } finally { teardown(root) }
+  })
+
+  test("重复提交守卫仍生效：recovery 保留 passed 后 reviewer-tool 再提交 verify_tool 被拒绝", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_tool"
+        item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
+      })
+      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      const item = readItem(wt, CID)
+      // 恢复后 verify_tool 全 passed 被跳过，currentStep 已前移到 verify_task
+      expect(item.currentStep).toBe("verify_task")
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      // reviewer-tool 以 passed 再提交 verify_tool → submit 路由守卫（currentStep 不一致）拒绝，零状态变更
+      await expectError(
+        agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR),
+        /submit 校验失败|重复提交守卫/
+      )
+    } finally { teardown(root) }
+  })
+
+  test("正向续跑：部分维度 passed 恢复后剩余维度提交推进到 done", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 模拟会话中断前 style/architecture 两维已通过：置 passed 后其余 3 维仍 pending
+      rewriteItem(wt, (item) => {
+        item.tags["verify_quality:openspec-reviewer-style"] = "passed"
+        item.tags["verify_quality:openspec-reviewer-architecture"] = "passed"
+      })
+      await init.execute(
+        { change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } },
+        ctx.orch
+      )
+      let item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_quality")
+      // 已 passed 维度 tag 保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      // pending 维度无 passed 残留
+      for (const d of ["performance", "security", "maintainability"]) {
+        expect(item.tags[`verify_quality:openspec-reviewer-${d}`]).toBeUndefined()
+      }
+      // review_layer=quality 强制前置 tool/task
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
+
+      // 剩余 3 个 pending 维度 reviewer 依次提交 passed：聚合等待期停在 verify_quality
+      for (const d of ["performance", "security"]) {
+        const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+        expect(r).toContain("- **推进**: 否")
+        expect(readItem(wt, CID).currentStep).toBe("verify_quality")
+      }
+      // 最后一维提交 → 全部维度已 passed → 聚合推进 done（task children 经 driveToQuality 已终态）
+      const last = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed" },
+        ctx.dims["maintainability"]
+      )
+      expect(last).toContain("- **推进**: 是")
+      item = readItem(wt, CID)
+      expect(item.phase).toBe("done")
+      expect(item.currentStep).toBeNull()
+      // 全程保留已 passed 维度 tag，无 pending 残留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
+      for (const d of ["performance", "security", "maintainability"]) {
+        expect(item.tags[`verify_quality:openspec-reviewer-${d}`]).toBe("passed")
+      }
+    } finally { teardown(root) }
+  })
+
+  test("review_layer=task 强制覆盖 prior failed 的 verify_tool", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      // 模拟 tool 层 failed 残留：verify_tool 曾以 failed 提交后会话中断
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "verify_tool"
+        item.tags["verify_tool:openspec-reviewer-tool"] = "failed"
+      })
+      await init.execute(
+        { change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "task" } },
+        ctx.orch
+      )
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      // review_layer=task 强制前置：failed 被覆盖为 passed
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      // currentStep 前移到第一个未全 passed 的子层
+      expect(item.currentStep).toBe("verify_task")
+      // verify_task 未被强制前置，保持 pending（无 passed 残留）
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+})
+
 describe("B4. boundary 参数", () => {
   test("analyze passed 必须携带 execution_boundary；缺省抛错", async () => {
     const { wt, root } = fresh()

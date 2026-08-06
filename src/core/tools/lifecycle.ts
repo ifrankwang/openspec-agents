@@ -9,8 +9,8 @@ import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFro
 import type { ParsedTask } from "../tasks-md.js"
 import { assertOrchestrator, findTaskGroup } from "../derive.js"
 import { assertPathWithin } from "../paths.js"
-import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../workflow/loader.js"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount } from "../workflow/engine.js"
+import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep } from "../workflow/engine.js"
 import { renderWorkflowStatusView } from "../workflow/status.js"
 import { taskChildrenOf } from "../task-children.js"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.js"
@@ -111,10 +111,24 @@ function migrateLegacyTasks(item: WorkItem): void {
 }
 
 /**
+ * 扫描 review 阶段第一个未全 passed 的 step（按 workflow 声明顺序 verify_tool → verify_task → verify_quality）。
+ * 一个 step 全 passed 由 adjudicateStep 判定（该 step 所有 agent 的 tag 均为 passed）；全部通过返回 null。
+ */
+function firstUnpassedReviewStep(item: WorkItem, workflow: LoadedWorkflow): string | null {
+  const review = workflow.phases.find((p) => p.name === "review")
+  if (!review) return null
+  for (const step of review.steps) {
+    if (adjudicateStep(item, step) !== "passed") return step.id
+  }
+  return null
+}
+
+/**
  * 按 recovery 合成活跃组 WorkItem 的 phase/currentStep/tags/task children。
  * - task_analysis：todo/analyze、tags 清空、task children 全 todo（全新开始）
  * - dev_impl：in_progress/implement、analyze 已 passed、task children 保留既有进度（无则 todo）
- * - review：review/verify_*（按 review_layer 决定从哪个子层继续）、analyze+implement 已 passed、
+ * - review：review/verify_*（增量合并——已 passed 的审查标记保留、failed 重置为 pending，currentStep
+ *   前移到第一个未全 passed 的子层；review_layer 决定强制前置哪些子层）、analyze+implement 已 passed、
  *   task children 保留既有进度（无则 done——review 恢复时子任务应视为已验证，否则 G21 remaining 会让 implement 无法提交）
  */
 function applyRecoveryState(
@@ -126,6 +140,8 @@ function applyRecoveryState(
   delete item.metadata["_advance_block_reason"]
   // 清除内部重试计数：recovery 恢复后残留 _retryCount 会在下次回退时立即再次触发检查点（死锁）。
   resetInternalRetryCount(item)
+  // 清除检查点标记残留：恢复重建为已知状态后 _checkpoint 已无意义（checkpoint 态属于中断中的 step）。
+  delete item.metadata["_checkpoint"]
   const phase = recovery?.phase
   if (!phase || phase === "task_analysis") {
     item.phase = "todo"
@@ -142,18 +158,34 @@ function applyRecoveryState(
     return
   }
   item.phase = "review"
-  item.currentStep = "verify_tool"
-  item.tags = {
-    "analyze:openspec-architect": "passed",
-    "implement:openspec-developer": "passed",
+  // 前置层保证：恢复进 review 时 analyze/implement 必然已通过
+  item.tags["analyze:openspec-architect"] = "passed"
+  item.tags["implement:openspec-developer"] = "passed"
+  // 增量合并 review 审查标记：值为 passed 的保留（已审查通过层无需重跑），failed 删除回到 pending
+  for (const key of Object.keys(item.tags)) {
+    if (key.startsWith("verify_tool:") || key.startsWith("verify_task:") || key.startsWith("verify_quality:")) {
+      if (item.tags[key] !== "passed") delete item.tags[key]
+    }
   }
+  // review_layer 强制前置：tool→task 时 verify_tool 强制 passed；quality 时 verify_tool+verify_task 强制 passed
   if (recovery?.review_layer === "task" || recovery?.review_layer === "quality") {
     item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
-    item.currentStep = "verify_task"
   }
   if (recovery?.review_layer === "quality") {
     item.tags["verify_task:openspec-reviewer-task"] = "passed"
-    item.currentStep = "verify_quality"
+  }
+  // currentStep 前移：显式指向第一个未全 passed 的 review step（已全 passed 的子层跳过）
+  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+  item.currentStep = firstUnpassedReviewStep(item, workflow)
+  // 全 passed 收口 done：三个 review step 全 passed 时，仅当 task children 全部终态才收口；
+  // 存在未终态 task child 则停在 verify_quality（recommendForItem 会返回 blocked 而非 terminal，安全）。
+  if (item.currentStep === null) {
+    const unfinishedTasks = item.children.filter((child) => child.type === "task" && !isTerminalPhase(child.phase))
+    if (unfinishedTasks.length === 0) {
+      item.phase = "done"
+    } else {
+      item.currentStep = "verify_quality"
+    }
   }
   syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
 }
