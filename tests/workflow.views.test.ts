@@ -45,21 +45,27 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: verify
           on_fail: analyze
   - name: review
     steps:
       - id: verify
-        agents: [reviewer]
+        agents:
+          - id: reviewer
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement

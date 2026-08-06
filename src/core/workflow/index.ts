@@ -1,11 +1,11 @@
 // types
 export {
   WORK_ITEM_PHASES, WORK_ITEM_TYPES, VERDICTS, SEVERITY_LEVELS, BLOCKING_SEVERITIES,
-  INTERNAL_METADATA_PREFIX, tagKey, isInternalMetadataKey,
+  INTERNAL_METADATA_PREFIX, tagKey, isInternalMetadataKey, stepAgentIds,
 } from "./types.js"
 export type {
   WorkItemPhase, WorkItemType, Verdict, Severity,
-  WorkItem, WorkItemWriteback, StepConfig, PhaseConfig, StepTransitions,
+  WorkItem, WorkItemWriteback, StepConfig, StepAgent, PhaseConfig, StepTransitions,
   WorkflowConfig, StepAdjudication,
 } from "./types.js"
 

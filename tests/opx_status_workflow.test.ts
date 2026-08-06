@@ -396,6 +396,37 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  test("verify_quality：style 与 security reviewer 渲染出不同的 skill 加载清单（agent 级 capability_tags 生效）", async () => {
+    const root = `/tmp/wf-agent-caps-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.currentStep = "verify_quality"
+    item.tags = {
+      "analyze:openspec-architect": "passed",
+      "implement:openspec-developer": "passed",
+      "verify_tool:openspec-reviewer-tool": "passed",
+      "verify_task:openspec-reviewer-task": "passed",
+    }
+    writeStateSync(wt, state)
+
+    // style 只命中 [style, efficiency] 对应 skill；security 只命中 [security, efficiency] 对应 skill
+    const styleOut = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-style", wt))
+    expect(styleOut).toContain("## Skill 加载清单")
+    expect(styleOut).toContain("`java-code-style`")
+    expect(styleOut).not.toContain("`security-baseline`")
+
+    const secOut = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-security", wt))
+    expect(secOut).toContain("## Skill 加载清单")
+    expect(secOut).toContain("`security-baseline`")
+    expect(secOut).not.toContain("`java-code-style`")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("analyze step：blockers 渲染（awaiting_user/resolved + 处理指引）", async () => {
     const root = `/tmp/wf-m1d-d-${Date.now()}`
     const wt = freshWt(root)

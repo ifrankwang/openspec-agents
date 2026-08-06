@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { loadWorkflow } from "../src/core/workflow/loader"
+import { stepAgentIds } from "../src/core/workflow/types"
 
 const BASE_YAML = `
 id: x
@@ -19,14 +20,18 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: done
           on_fail: analyze
@@ -91,7 +96,7 @@ common:
   instructions:
     - 通用指引
 `)
-    expect(wf.stepMap.get("analyze")?.step.agents).toEqual(["architect"])
+    expect(stepAgentIds(wf.stepMap.get("analyze")!.step)).toEqual(["architect"])
     expect(wf.stepMap.get("implement")?.step.transitions.on_pass).toBe("done")
     // common 未注入 step 内部，仅渲染层合并
     expect(wf.stepMap.get("implement")?.step.instructions).toBeUndefined()

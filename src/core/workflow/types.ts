@@ -51,15 +51,24 @@ export interface StepTransitions {
   on_fail: string | "done" | "halt"
 }
 
+export interface StepAgent {
+  id: string
+  capability_tags: string[]
+}
+
 export interface StepConfig {
   id: string
-  agents: string[]
+  agents: StepAgent[]
   always_run?: boolean
-  capability_tags?: string[]
   max_retries?: number
   instructions?: string[]
   constraints?: string[]
   transitions: StepTransitions
+}
+
+/** step.agents 的 id 投影：状态机/视图消费点统一从对象数组归一化为 id 字符串数组。 */
+export function stepAgentIds(step: { agents: StepAgent[] }): string[] {
+  return step.agents.map((a) => a.id)
 }
 
 export interface PhaseConfig {

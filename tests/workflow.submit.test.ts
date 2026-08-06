@@ -14,21 +14,29 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: approve
           on_fail: analyze
   - name: review
     steps:
       - id: approve
-        agents: [reviewer, designer]
+        agents:
+          - id: reviewer
+            capability_tags: [quality-gate]
+          - id: designer
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -212,21 +220,31 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: approve
           on_fail: analyze
   - name: review
     steps:
       - id: approve
-        agents: [reviewer, designer, auditor]
+        agents:
+          - id: reviewer
+            capability_tags: [quality-gate]
+          - id: designer
+            capability_tags: [quality-gate]
+          - id: auditor
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -269,26 +287,34 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: a
           on_fail: analyze
   - name: review
     steps:
       - id: a
-        agents: [ra]
+        agents:
+          - id: ra
+            capability_tags: [quality-gate]
         transitions:
           on_pass: b
           on_fail: implement
       - id: b
-        agents: [rb]
+        agents:
+          - id: rb
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -317,26 +343,34 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: a
           on_fail: analyze
   - name: review
     steps:
       - id: a
-        agents: [ra]
+        agents:
+          - id: ra
+            capability_tags: [quality-gate]
         transitions:
           on_pass: b
           on_fail: implement
       - id: b
-        agents: [rb]
+        agents:
+          - id: rb
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -368,26 +402,34 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: a
           on_fail: analyze
   - name: review
     steps:
       - id: a
-        agents: [ra]
+        agents:
+          - id: ra
+            capability_tags: [quality-gate]
         transitions:
           on_pass: b
           on_fail: implement
       - id: b
-        agents: [rb]
+        agents:
+          - id: rb
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement

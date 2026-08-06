@@ -5,11 +5,12 @@ import type {
   WorkflowConfig,
   PhaseConfig,
   StepConfig,
+  StepAgent,
   StepTransitions,
   WorkItemPhase,
   WorkflowCommon,
 } from "./types.js"
-import { WORK_ITEM_PHASES } from "./types.js"
+import { WORK_ITEM_PHASES, stepAgentIds } from "./types.js"
 import { DIMENSION_AGENT_MAP } from "../constants.js"
 
 const SPECIAL_TRANSITIONS = ["done", "halt"] as const
@@ -38,7 +39,6 @@ interface RawStep {
   id?: unknown
   agents?: unknown
   always_run?: unknown
-  capability_tags?: unknown
   max_retries?: unknown
   instructions?: unknown
   constraints?: unknown
@@ -83,12 +83,21 @@ function expectStringArray(value: unknown, path: string): string[] {
   return value as string[]
 }
 
-function expectOptionalStringArray(value: unknown, path: string): string[] | undefined {
-  if (value === undefined) return undefined
-  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
-    fail(`workflow 配置非法：${path} 必须是字符串数组，收到 ${JSON.stringify(value)}`)
+/** agents 对象数组解析：每个元素须含非空 id 与非空字符串数组 capability_tags（agent 级 capability_tags 必填）。 */
+function expectAgentList(value: unknown, path: string): StepAgent[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail(`workflow 配置非法：${path} 必须是非空对象数组（每个元素含 id 与 capability_tags），收到 ${JSON.stringify(value)}`)
   }
-  return value as string[]
+  return value.map((v, i) => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) {
+      fail(`workflow 配置非法：${path}[${i}] 必须是对象（含 id 与 capability_tags），收到 ${JSON.stringify(v)}`)
+    }
+    const a = v as { id?: unknown; capability_tags?: unknown }
+    return {
+      id: expectString(a.id, `${path}[${i}].id`),
+      capability_tags: expectStringArray(a.capability_tags, `${path}[${i}].capability_tags`),
+    }
+  })
 }
 
 function expectOptionalPositiveInt(value: unknown, path: string): number | undefined {
@@ -117,11 +126,11 @@ function parseCommon(raw: unknown, workflowId: string): WorkflowCommon | undefin
   return { instructions, constraints }
 }
 
-/** verify_quality 双源一致性校验：存在该 step 时，agents 集合须等于质量维度 agent 映射值集合（改一处不同步即不一致）。 */
+/** verify_quality 双源一致性校验：存在该 step 时，agents 的 id 集合须等于质量维度 agent 映射值集合（改一处不同步即不一致）。 */
 function assertQualityAgentsConsistent(workflowId: string, stepMap: Map<string, { step: StepConfig; phase: PhaseConfig }>): void {
   const qualityStep = stepMap.get(QUALITY_REVIEW_STEP_ID)
   if (!qualityStep) return
-  const declared = new Set(qualityStep.step.agents)
+  const declared = new Set(stepAgentIds(qualityStep.step))
   const expected = new Set(Object.values(DIMENSION_AGENT_MAP))
   if (declared.size !== expected.size || ![...expected].every((a) => declared.has(a))) {
     fail(
@@ -207,12 +216,11 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
       }
       allStepIds.add(stepId)
       rawTransitions.set(stepId, rs.transitions)
-      const agents = expectStringArray(rs.agents, `step "${stepId}" 的 agents`)
+      const agents = expectAgentList(rs.agents, `step "${stepId}" 的 agents`)
       const step: StepConfig = {
         id: stepId,
         agents,
         always_run: typeof rs.always_run === "boolean" ? rs.always_run : undefined,
-        capability_tags: expectOptionalStringArray(rs.capability_tags, `step "${stepId}" 的 capability_tags`),
         max_retries: expectOptionalPositiveInt(rs.max_retries, `step "${stepId}" 的 max_retries`),
         instructions: expectOptionalNonEmptyStringArray(rs.instructions, `step "${stepId}" 的 instructions`),
         constraints: expectOptionalNonEmptyStringArray(rs.constraints, `step "${stepId}" 的 constraints`),

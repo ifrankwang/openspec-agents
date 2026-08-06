@@ -18,21 +18,27 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [architect]
+        agents:
+          - id: architect
+            capability_tags: [architecture]
         transitions:
           on_pass: implement
           on_fail: analyze
   - name: in_progress
     steps:
       - id: implement
-        agents: [developer]
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
         transitions:
           on_pass: verify
           on_fail: analyze
   - name: review
     steps:
       - id: verify
-        agents: [reviewer]
+        agents:
+          - id: reviewer
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -102,7 +108,9 @@ describe("2. workflow YAML loader", () => {
   })
 
   test("非法 YAML 报错：缺少必需字段", () => {
-    expect(() => loadWorkflow(`id: x\nphases:\n  - name: todo\n    steps:\n      - id: s1\n        agents: [a]\n`))
+    expect(() => loadWorkflow(`id: x\nphases:\n  - name: todo\n    steps:\n      - id: s1\n        agents:
+          - id: a
+            capability_tags: [architecture]\n`))
       .toThrow()
     expect(() => loadWorkflow(`id: x\nmax_retries: 0\nphases: []`)).toThrow()
     expect(() => loadWorkflow(`id: x\nmax_retries: 3\nphases: []`)).toThrow()
@@ -116,7 +124,9 @@ phases:
   - name: todo
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
         transitions:
           on_pass: missing_step
           on_fail: s1
@@ -132,7 +142,9 @@ phases:
   - name: wrong
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
 `
     expect(() => loadWorkflow(badPhase)).toThrow(/wrong/)
     const dupStep = `
@@ -142,11 +154,15 @@ phases:
   - name: todo
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
   - name: in_progress
     steps:
       - id: s1
-        agents: [b]
+        agents:
+          - id: b
+            capability_tags: [architecture]
 `
     expect(() => loadWorkflow(dupStep)).toThrow(/重复/)
   })
@@ -168,7 +184,9 @@ phases:
   - name: in_progress
     steps:
       - id: implement
-        agents: [dev]
+        agents:
+          - id: dev
+            capability_tags: [efficiency]
         instructions:
           - 提交时须带 completed_task_ids 必传参数
         constraints:
@@ -190,7 +208,9 @@ phases:
   - name: todo
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
         instructions: ["  "]
 `)).toThrow(/instructions/)
     expect(() => loadWorkflow(`
@@ -200,7 +220,9 @@ phases:
   - name: todo
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
         constraints: ["ok", 42]
 `)).toThrow(/constraints/)
   })
@@ -223,7 +245,13 @@ phases:
   - name: review
     steps:
       - id: multi
-        agents: [a, b, c]
+        agents:
+          - id: a
+            capability_tags: [architecture]
+          - id: b
+            capability_tags: [architecture]
+          - id: c
+            capability_tags: [architecture]
         transitions:
           on_pass: done
           on_fail: multi
@@ -244,7 +272,13 @@ phases:
   - name: review
     steps:
       - id: multi
-        agents: [a, b, c]
+        agents:
+          - id: a
+            capability_tags: [architecture]
+          - id: b
+            capability_tags: [architecture]
+          - id: c
+            capability_tags: [architecture]
         transitions:
           on_pass: done
           on_fail: multi
@@ -265,7 +299,13 @@ phases:
   - name: review
     steps:
       - id: multi
-        agents: [a, b, c]
+        agents:
+          - id: a
+            capability_tags: [architecture]
+          - id: b
+            capability_tags: [architecture]
+          - id: c
+            capability_tags: [architecture]
         transitions:
           on_pass: done
           on_fail: multi
@@ -286,7 +326,13 @@ phases:
   - name: review
     steps:
       - id: multi
-        agents: [a, b, c]
+        agents:
+          - id: a
+            capability_tags: [architecture]
+          - id: b
+            capability_tags: [architecture]
+          - id: c
+            capability_tags: [architecture]
         transitions:
           on_pass: done
           on_fail: multi
@@ -315,7 +361,11 @@ phases:
   - name: review
     steps:
       - id: multi
-        agents: [a, b]
+        agents:
+          - id: a
+            capability_tags: [architecture]
+          - id: b
+            capability_tags: [architecture]
         transitions:
           on_pass: done
           on_fail: multi
@@ -332,7 +382,11 @@ phases:
   - name: review
     steps:
       - id: always
-        agents: [a, b]
+        agents:
+          - id: a
+            capability_tags: [architecture]
+          - id: b
+            capability_tags: [architecture]
         always_run: true
         transitions:
           on_pass: done
@@ -523,7 +577,9 @@ phases:
   - name: todo
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
         transitions:
           on_pass: halt
           on_fail: s1
@@ -555,12 +611,16 @@ phases:
   - name: todo
     steps:
       - id: s1
-        agents: [a]
+        agents:
+          - id: a
+            capability_tags: [architecture]
         transitions:
           on_pass: s2
           on_fail: s1
       - id: s2
-        agents: [b]
+        agents:
+          - id: b
+            capability_tags: [architecture]
         transitions:
           on_pass: done
           on_fail: s1

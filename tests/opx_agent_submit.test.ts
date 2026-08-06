@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, agent_submit, set_worktree, complete_task_group } from "../src/adapters/opencode/tools"
-import { loadWorkflow } from "../src/core/workflow"
+import { loadWorkflow, stepAgentIds } from "../src/core/workflow"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
 import { FakeGitRunner, makeCtx, setupWorkspace } from "./helpers"
@@ -423,11 +423,11 @@ describe("opx_agent_submit 通用 step 提交", () => {
     try {
       // YAML agents 与编排真实 agent 名一致
       const wf = loadWorkflow(readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8"))
-      expect(wf.stepMap.get("analyze")!.step.agents).toEqual(["openspec-architect"])
-      expect(wf.stepMap.get("implement")!.step.agents).toEqual(["openspec-developer"])
-      expect(wf.stepMap.get("verify_tool")!.step.agents).toEqual(["openspec-reviewer-tool"])
-      expect(wf.stepMap.get("verify_task")!.step.agents).toEqual(["openspec-reviewer-task"])
-      expect(wf.stepMap.get("verify_quality")!.step.agents).toContain("openspec-reviewer-style")
+      expect(stepAgentIds(wf.stepMap.get("analyze")!.step)).toEqual(["openspec-architect"])
+      expect(stepAgentIds(wf.stepMap.get("implement")!.step)).toEqual(["openspec-developer"])
+      expect(stepAgentIds(wf.stepMap.get("verify_tool")!.step)).toEqual(["openspec-reviewer-tool"])
+      expect(stepAgentIds(wf.stepMap.get("verify_task")!.step)).toEqual(["openspec-reviewer-task"])
+      expect(stepAgentIds(wf.stepMap.get("verify_quality")!.step)).toContain("openspec-reviewer-style")
 
       // 推进到 review 阶段后，tool reviewer 按 verify_tool step 提交
       await initWorktree(wt)

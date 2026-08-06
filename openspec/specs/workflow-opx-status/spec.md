@@ -11,7 +11,7 @@ TBD - created by archiving change workflow-engine. Update Purpose after archive.
 - **THEN** 视图按各自 step 推荐对应 agent 与能力类别，且不出现硬编码 agent 名的流程描述
 
 #### Scenario: 无匹配 skill 优雅降级
-- **WHEN** 某 step 的 capability_tags 无匹配 skill
+- **WHEN** 某 agent 的 capability_tags 无匹配 skill
 - **THEN** 视图仍正常渲染，并提示该能力无对应 skill 加载
 
 ### Requirement: 检查点呈现

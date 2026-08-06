@@ -5,7 +5,7 @@ import type {
   StepConfig,
   StepAdjudication,
 } from "./types.js"
-import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES } from "./types.js"
+import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import { tagKey } from "./types.js"
 
@@ -99,25 +99,25 @@ export function getStepVerdict(item: WorkItem, stepId: string, agentKey: string)
 }
 
 export function adjudicateStep(item: WorkItem, step: StepConfig): StepAdjudication {
-  const verdicts = step.agents.map((agent) => getStepVerdict(item, step.id, agent))
+  const verdicts = step.agents.map((agent) => getStepVerdict(item, step.id, agent.id))
   if (verdicts.length > 0 && verdicts.every((v) => v === "passed")) return "passed"
   if (verdicts.some((v) => v === "failed")) return "failed"
   return "pending"
 }
 
 export function recommendAgents(item: WorkItem, step: StepConfig): string[] {
-  if (step.always_run) return [...step.agents]
+  if (step.always_run) return stepAgentIds(step)
   // 多 agent step（verify_quality 5 维并行）：
   // - 存在 pending → 聚合等待期仅重派 pending（已 failed 维度不重复分派，避免单维失败过早重派）
   // - 无任何 pending → 引擎级自愈：回退返回 failed 维度（failed tag 残留如归因缺 source_phase
   //   导致的历史 state，静默死锁转为可见循环并被既有机制收敛；语义与 main 分支非 passed 全重派收敛）
   if (step.agents.length > 1) {
-    const pending = step.agents.filter((agent) => getStepVerdict(item, step.id, agent) === "pending")
-    if (pending.length > 0) return pending
-    return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) === "failed")
+    const pending = step.agents.filter((agent) => getStepVerdict(item, step.id, agent.id) === "pending")
+    if (pending.length > 0) return pending.map((a) => a.id)
+    return step.agents.filter((agent) => getStepVerdict(item, step.id, agent.id) === "failed").map((a) => a.id)
   }
   // 单 agent step：返回非 passed 的 agent（analyze 同 phase 回退不清 tag，必须返回 failed 的 architect 重审）。
-  return step.agents.filter((agent) => getStepVerdict(item, step.id, agent) !== "passed")
+  return step.agents.filter((agent) => getStepVerdict(item, step.id, agent.id) !== "passed").map((a) => a.id)
 }
 
 export function applyAgentVerdict(item: WorkItem, stepId: string, agentKey: string, verdict: Verdict): void {
@@ -200,7 +200,7 @@ export function applyCheckpointGiveup(item: WorkItem, step: StepConfig): void {
     if (!isTerminalPhase(child.phase)) child.phase = "cancelled"
   }
   for (const agent of step.agents) {
-    applyAgentVerdict(item, step.id, agent, "passed")
+    applyAgentVerdict(item, step.id, agent.id, "passed")
   }
   item.metadata["_checkpoint"] = false
   // 与 continue 对称重置：跨 step 差异化 max_retries 时，防止上一 step 残留计数污染下一 step 检查点判定。

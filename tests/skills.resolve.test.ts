@@ -2,7 +2,8 @@
  * skill 解析模块（resolve.ts）单测：
  * - resolveSkillsForCapabilities tag 匹配
  * - scanSkillTags 进程内缓存
- * - task.yaml 各 step capability_tags 经 loadWorkflow 可解析
+ * - task.yaml 各 agent 级 capability_tags 经 loadWorkflow 可解析
+ * - loader 对 agents 对象数组 schema 的校验（缺 id / 缺 tags / tags 非字符串数组 / 旧字符串形式）
  */
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
@@ -14,6 +15,7 @@ import {
   getToolImprovementSkills,
 } from "../src/skills/resolve"
 import { loadWorkflow } from "../src/core/workflow/loader"
+import { stepAgentIds } from "../src/core/workflow/types"
 
 describe("resolveSkillsForCapabilities tag 匹配", () => {
   test("caps 命中 → skillNames 非空", () => {
@@ -81,33 +83,93 @@ describe("getEfficiencySkills / getToolImprovementSkills", () => {
   })
 })
 
-describe("workflow YAML capability_tags 可解析", () => {
+describe("workflow YAML agent 级 capability_tags 可解析", () => {
   const readWf = (name: string) => loadWorkflow(readFileSync(join(import.meta.dir, "..", "assets", "workflows", name), "utf8"))
 
-  test("task.yaml 各 step capability_tags 经 loadWorkflow 解析且可 resolve", () => {
+  test("task.yaml 各 agent capability_tags 经 loadWorkflow 解析且可 resolve", () => {
     const wf = readWf("task.yaml")
-    const expectResolvable = (stepId: string, expected: string[]) => {
+    const expectResolvable = (stepId: string, agent: string, expected: string[]) => {
       const step = wf.stepMap.get(stepId)!.step
-      expect(step.capability_tags).toEqual(expected)
-      const r = resolveSkillsForCapabilities(step.capability_tags)
+      const a = step.agents.find((x) => x.id === agent)
+      expect(a?.capability_tags).toEqual(expected)
+      const r = resolveSkillsForCapabilities(a?.capability_tags)
       expect(r.skillNames.length).toBeGreaterThan(0)
     }
-    expectResolvable("analyze", ["architecture", "api-design", "db-design", "efficiency"])
-    expectResolvable("implement", ["efficiency", "api-testing"])
-    expectResolvable("verify_tool", ["quality-gate", "efficiency", "api-testing"])
-    expectResolvable("verify_task", ["api-testing", "quality-gate"])
-    expectResolvable("verify_quality", ["style", "architecture", "performance", "security", "maintainability", "efficiency"])
+    expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
+    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing"])
+    expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
+    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "quality-gate"])
+    expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency"])
+    expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency"])
+  })
+
+  test("agent 级 capability_tags 生效：style 命中 style 相关 skill，security 命中 security 相关 skill", () => {
+    const style = resolveSkillsForCapabilities(["style", "efficiency"])
+    expect(style.skillNames).toContain("java-code-style")
+    expect(style.skillNames).not.toContain("security-baseline")
+    expect(style.skillNames).not.toContain("java-security")
+    const security = resolveSkillsForCapabilities(["security", "efficiency"])
+    expect(security.skillNames).toContain("security-baseline")
+    expect(security.skillNames).toContain("java-security")
+    expect(security.skillNames).not.toContain("java-code-style")
   })
 
   test("既有测试断言的 skill 名由两个来源兜底产出", () => {
     const wf = readWf("task.yaml")
     const yamlTags = new Set<string>()
     for (const step of wf.phases.flatMap((p) => p.steps)) {
-      for (const t of step.capability_tags || []) yamlTags.add(t)
+      for (const a of step.agents) {
+        for (const t of a.capability_tags) yamlTags.add(t)
+      }
     }
     const fromYaml = resolveSkillsForCapabilities([...yamlTags])
     expect(fromYaml.skillNames).toContain("code-efficiency")
     expect(fromYaml.skillNames).toContain("api-test")
     expect(resolveSkillsForCapabilities(["tool-improvement"]).skillNames).toContain("java-quality-tool-improve")
+  })
+})
+
+describe("loader：agents 对象数组 schema 校验", () => {
+  const wrap = (agentsYaml: string) => `id: x
+max_retries: 3
+phases:
+  - name: review
+    steps:
+      - id: s1
+        ${agentsYaml}
+        transitions:
+          on_pass: done
+          on_fail: s1
+`
+
+  test("合法对象数组 → 解析出 id 与 capability_tags", () => {
+    const wf = loadWorkflow(wrap(`agents:
+          - id: a
+            capability_tags: [style]`))
+    expect(stepAgentIds(wf.stepMap.get("s1")!.step)).toEqual(["a"])
+    expect(wf.stepMap.get("s1")!.step.agents[0].capability_tags).toEqual(["style"])
+  })
+
+  test("缺 id → 抛错", () => {
+    expect(() => loadWorkflow(wrap(`agents:
+          - capability_tags: [style]`))).toThrow(/agents\[0\]\.id/)
+  })
+
+  test("缺 capability_tags → 抛错", () => {
+    expect(() => loadWorkflow(wrap(`agents:
+          - id: a`))).toThrow(/capability_tags/)
+  })
+
+  test("capability_tags 非字符串数组 → 抛错", () => {
+    expect(() => loadWorkflow(wrap(`agents:
+          - id: a
+            capability_tags: style`))).toThrow(/capability_tags/)
+    expect(() => loadWorkflow(wrap(`agents:
+          - id: a
+            capability_tags: [1, 2]`))).toThrow(/capability_tags/)
+  })
+
+  test("字符串 agents 旧形式 → 不再支持，按新 schema 校验失败", () => {
+    expect(() => loadWorkflow(wrap("agents: [a]"))).toThrow(/agents/)
   })
 })

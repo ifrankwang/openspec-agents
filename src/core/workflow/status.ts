@@ -1,5 +1,6 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
+import { stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch } from "./engine.js"
@@ -130,7 +131,7 @@ function renderTerminalPhase(item: WorkItem): string {
 /** blocked 视图：调用者若为当前 step 轮次 agent 用 blocked_agent 文案，否则用通用 blocked 文案。 */
 function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: LoadedWorkflow, ctxAgent: string): string {
   const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-  const isCurrentAgent = step?.agents.includes(ctxAgent) ?? false
+  const isCurrentAgent = step ? stepAgentIds(step).includes(ctxAgent) : false
   const reason = rec.blockedReason ?? "(未知)"
   if (isCurrentAgent) {
     return [
@@ -240,7 +241,7 @@ function failedAgentsOnStep(item: WorkItem, workflow: LoadedWorkflow, stepId: st
   if (!stepId) return []
   const step = workflow.stepMap.get(stepId)?.step
   if (!step) return []
-  return step.agents.filter((a) => getStepVerdict(item, stepId, a) === "failed")
+  return step.agents.filter((a) => getStepVerdict(item, stepId, a.id) === "failed").map((a) => a.id)
 }
 
 /** orchestrator 阶段进展/审核进度：各 step:agent:verdict 汇总 + children 统计。 */
@@ -251,7 +252,7 @@ function renderProgressSection(item: WorkItem, workflow: LoadedWorkflow): string
   for (const phase of workflow.phases) {
     if (isTerminalPhase(phase.name)) continue
     for (const step of phase.steps) {
-      for (const agent of step.agents) {
+      for (const agent of stepAgentIds(step)) {
         lines.push(`| \`${step.id}\` | \`${agent}\` | ${getStepVerdict(item, step.id, agent)} |`)
       }
     }
@@ -346,7 +347,8 @@ function renderAgentWorking(
       "",
     ].join("\n")
   }
-  const caps = step?.capability_tags ?? []
+  // skill 加载清单按当前调用者 agent 声明的 capability_tags 过滤（step 内各 agent 独立声明，互不相同）
+  const caps = step?.agents.find((a) => a.id === ctxAgent)?.capability_tags ?? []
   // step 语义占位符插值上下文：动态值来源见各 key（缺值保留占位符原文，不阻断渲染）
   const stepCtx: Record<string, string> = {}
   if (tg.worktreePath) stepCtx["worktree_path"] = tg.worktreePath

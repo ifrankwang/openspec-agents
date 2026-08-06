@@ -25,8 +25,9 @@ phases:
   - name: todo
     steps:
       - id: analyze
-        agents: [openspec-architect]
-        capability_tags: [architecture, api-design, db-design, efficiency]
+        agents:
+          - id: openspec-architect
+            capability_tags: [architecture, api-design, db-design, efficiency]
         transitions:
           on_pass: implement
           on_fail: analyze
@@ -46,8 +47,9 @@ phases:
   - name: in_progress
     steps:
       - id: implement
-        agents: [openspec-developer]
-        capability_tags: [efficiency, api-testing]
+        agents:
+          - id: openspec-developer
+            capability_tags: [efficiency, api-testing]
         transitions:
           on_pass: verify_tool
           on_fail: analyze
@@ -74,8 +76,9 @@ phases:
   - name: review
     steps:
       - id: verify_tool
-        agents: [openspec-reviewer-tool]
-        capability_tags: [quality-gate, efficiency, api-testing]
+        agents:
+          - id: openspec-reviewer-tool
+            capability_tags: [quality-gate, efficiency, api-testing]
         transitions:
           on_pass: verify_task
           on_fail: implement
@@ -90,8 +93,9 @@ phases:
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
       - id: verify_task
-        agents: [openspec-reviewer-task]
-        capability_tags: [api-testing, quality-gate]
+        agents:
+          - id: openspec-reviewer-task
+            capability_tags: [api-testing, quality-gate]
         transitions:
           on_pass: verify_quality
           on_fail: implement
@@ -107,12 +111,16 @@ phases:
           - "即使无 issue / 无待验证 task 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
       - id: verify_quality
         agents:
-          - openspec-reviewer-style
-          - openspec-reviewer-architecture
-          - openspec-reviewer-performance
-          - openspec-reviewer-security
-          - openspec-reviewer-maintainability
-        capability_tags: [style, architecture, performance, security, maintainability, efficiency]
+          - id: openspec-reviewer-style
+            capability_tags: [style, efficiency]
+          - id: openspec-reviewer-architecture
+            capability_tags: [architecture, efficiency]
+          - id: openspec-reviewer-performance
+            capability_tags: [performance, efficiency]
+          - id: openspec-reviewer-security
+            capability_tags: [security, efficiency]
+          - id: openspec-reviewer-maintainability
+            capability_tags: [maintainability, efficiency]
         transitions:
           on_pass: done
           on_fail: implement

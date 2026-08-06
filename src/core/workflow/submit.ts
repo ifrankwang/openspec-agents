@@ -1,4 +1,5 @@
 import type { WorkItem, WorkItemPhase, StepConfig, StepAdjudication } from "./types.js"
+import { stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase } from "./engine.js"
 import { DIMENSION_AGENT_MAP } from "../constants.js"
@@ -52,7 +53,7 @@ function resolveReviewStepForSource(workflow: LoadedWorkflow, source: string): S
   for (const phase of workflow.phases) {
     if (phase.name !== "review") continue
     for (const step of phase.steps) {
-      if (step.agents.includes(source)) return step
+      if (stepAgentIds(step).includes(source)) return step
     }
   }
   return null
@@ -69,7 +70,7 @@ export function assertSubmitRouting(workflow: LoadedWorkflow, item: WorkItem, st
     throw new Error(`submit 路由失败：step "${stepId}" 未在 workflow "${workflow.id}" 中声明。`)
   }
   const step = entry.step
-  if (!step.agents.includes(agentKey)) {
+  if (!stepAgentIds(step).includes(agentKey)) {
     throw new Error(`submit 越权：agent "${agentKey}" 不属于 step "${stepId}" 的 agents，拒绝提交且不产生任何状态变更。`)
   }
   if (item.currentStep !== null && item.currentStep !== stepId) {
@@ -162,7 +163,7 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
   const adjudication = adjudicateStep(item, step)
   // 多 agent step（verify_quality 5 维并行）聚合判定：须全部 agent 非 pending 才允许触发迁移。
   // passed 天然意味着全提交；failed 须等最后一维提交后才回退，避免单维失败过早回退阻断其余维度提交。
-  const allAdjudicated = step.agents.every((a) => getStepVerdict(item, step.id, a) !== "pending")
+  const allAdjudicated = step.agents.every((a) => getStepVerdict(item, step.id, a.id) !== "pending")
   let advanced = false
   let transitionTarget: string | undefined
   let advanceBlockReason: string | undefined
@@ -263,7 +264,7 @@ export function adjudicateExempt(
       )
     }
   } else {
-    const whitelist = new Set<string>(step.agents)
+    const whitelist = new Set<string>(stepAgentIds(step))
     if (!whitelist.has(input.agentKey)) {
       throw new Error(`豁免裁定失败：agent "${input.agentKey}" 不在 review step "${step.id}" 的裁定白名单（agents）内。`)
     }
