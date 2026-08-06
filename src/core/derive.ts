@@ -88,7 +88,7 @@ function projectIssueFromChild(child: WorkItem): IssueItem {
     description: child.description,
     suggestion: typeof child.metadata["suggestion"] === "string" ? child.metadata["suggestion"] : "",
     status: baseStatus === "open" && hasExemptRequest ? "exemption_requested" : baseStatus,
-    refixCount: 0,
+    refixCount: typeof child.metadata["refix_count"] === "number" ? child.metadata["refix_count"] : 0,
     rootCauseGuess: typeof child.metadata["root_cause_guess"] === "string" ? child.metadata["root_cause_guess"] : null,
     exemptReason: typeof child.metadata["exempt_reason"] === "string" ? child.metadata["exempt_reason"] : null,
     rejectReason: typeof child.metadata["reject_reason"] === "string" ? child.metadata["reject_reason"] : null,

@@ -11,6 +11,19 @@ import { tagKey } from "./types.js"
 
 const TERMINAL_PHASES: WorkItemPhase[] = ["done", "cancelled"]
 
+/** review 三个验证 step → 其可裁定的 issue 报源层（层感知门禁归因依据）。 */
+export const REVIEW_STEP_TO_LAYER: Record<string, "tool" | "task" | "quality"> = {
+  verify_tool: "tool",
+  verify_task: "task",
+  verify_quality: "quality",
+}
+
+/** 读取 issue child 的报源层（缺省 tool）。内联解析避免 engine↔reset 循环依赖。 */
+function childSourcePhase(child: WorkItem): "tool" | "task" | "quality" {
+  const raw = child.metadata["source_phase"]
+  return raw === "tool" || raw === "task" || raw === "quality" ? raw : "tool"
+}
+
 export function isTerminalPhase(phase: WorkItemPhase): boolean {
   return phase === "done" || phase === "cancelled"
 }
@@ -132,9 +145,19 @@ export function clearStepTags(item: WorkItem, stepId: string): void {
 
 export function stepCanPass(item: WorkItem, step: StepConfig): boolean {
   if (adjudicateStep(item, step) !== "passed") return false
-  return item.children
-    .filter((child) => isBlockingSeverity(child.severity))
-    .every((child) => isTerminalPhase(child.phase))
+  const blockers = item.children.filter((child) => isBlockingSeverity(child.severity))
+  if (step.id === "implement") {
+    // implement 门禁 carve-out：review 态 blocking issue 已由 dev 提交进入待复核（等待对应 reviewer 裁定），
+    // 不阻塞 dev 提交推进（防 dev 死锁在 implement）；其余 blocking issue 仍须终态。
+    return blockers.every((child) => child.phase === "review" || isTerminalPhase(child.phase))
+  }
+  const layer = REVIEW_STEP_TO_LAYER[step.id]
+  if (layer) {
+    // 层感知门禁 carve-out：verify_tool/verify_task/verify_quality 仅要求本层可裁定的 blocking issue 为终态
+    // （防止末位提交时本层未复核 issue 假收尾），其他层 review 态 issue 不阻塞本 step。
+    return blockers.every((child) => childSourcePhase(child) !== layer || isTerminalPhase(child.phase))
+  }
+  return blockers.every((child) => isTerminalPhase(child.phase))
 }
 
 export function phaseStepsAllPassed(item: WorkItem, workflow: LoadedWorkflow, phaseName: WorkItemPhase): boolean {

@@ -40,6 +40,12 @@ export const exemptAdjudicationItem = tool.schema.object({
   action: tool.schema.enum(["dismissed", "rejected"]).describe("dismissed=豁免成立（issue 置 cancelled）；rejected=驳回（issue 回 todo 继续修复）"),
 })
 
+export const recheckAdjudicationItem = tool.schema.object({
+  issue_id: tool.schema.string().min(1).describe("已修复待复核（review 态）的 issue ID"),
+  verdict: tool.schema.enum(["passed", "rejected"]).describe("passed=复核通过（issue 置 done）；rejected=复核驳回（issue 回 todo 继续修复）"),
+  reject_reason: tool.schema.string().optional().describe("复核驳回原因（verdict=rejected 必填，供 developer 修复参考）"),
+})
+
 export const agentSubmitSchema = tool.schema.object({
   change_id: tool.schema.string().min(1).describe("change ID"),
   step_id: tool.schema.string().min(1).describe("workflow step 的 id"),
@@ -47,6 +53,7 @@ export const agentSubmitSchema = tool.schema.object({
   fixed_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("声明已修复的 issue child id"),
   exempt_issue_ids: tool.schema.array(tool.schema.string()).optional().describe("声明申请豁免的 issue child id"),
   exempt_adjudications: tool.schema.array(exemptAdjudicationItem).optional().describe("裁定的豁免申请列表：dismissed→cancelled，rejected→回 todo"),
+  recheck_adjudications: tool.schema.array(recheckAdjudicationItem).optional().describe("复核已修复待复核（review 态）issue 的结论列表：passed→done，rejected→回 todo + refix_count 递增 + 写 reject_reason（谁提谁裁定）"),
   checkpoint_decision: tool.schema.enum(["continue", "giveup"]).optional().describe("重试检查点决策：continue=重置该 step tag 并回退 parent；giveup=未解决 children 强制 cancelled 并将 step 标记 completed"),
   new_children: tool.schema.array(tool.schema.object({
     id: tool.schema.string().min(1).describe("新 issue 的唯一 id（不可为空）"),

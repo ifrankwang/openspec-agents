@@ -28,9 +28,9 @@ export type {
 } from "./engine.js"
 
 // submit
-export { submitForStep, routeExempt, adjudicateExempt, assertSubmitRouting, EXEMPT_REQUEST_KEY } from "./submit.js"
+export { submitForStep, routeExempt, adjudicateExempt, adjudicateRecheck, assertSubmitRouting, EXEMPT_REQUEST_KEY } from "./submit.js"
 export type {
-  SubmitInput, SubmitResult, ExemptRouteResult, AdjudicationResult,
+  SubmitInput, SubmitResult, ExemptRouteResult, AdjudicationResult, RecheckAdjudicationResult,
 } from "./submit.js"
 
 // reset（review 分层重置 + new_children 去重）

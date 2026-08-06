@@ -575,8 +575,8 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     expect(output).toContain("| `analyze` | `openspec-architect` | passed |")
     expect(output).toContain("| `implement` | `openspec-developer` | passed |")
     expect(output).toContain("| `verify_tool` | `openspec-reviewer-tool` | pending |")
-    // children 统计
-    expect(output).toContain("待处理 1 · 待裁定 1 · 已验证 1 · 已豁免 1")
+    // children 统计（review 态计为待复核）
+    expect(output).toContain("待处理 1 · 待复核 1 · 已验证 1 · 已豁免 1")
     // 下一步分派
     expect(output).toContain("## 下一步")
     expect(output).toContain("分派子代理：`openspec-reviewer-tool`")
@@ -602,6 +602,64 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     expect(output).toContain("## 上轮会话摘要")
     expect(output).toContain("**openspec-developer**：完成 task 2 个")
     expect(output).not.toContain("预检通过，已输出执行边界")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_tool blocked 视图：本层待复核 issue 清单 + recheck_adjudications 自助恢复指引", async () => {
+    const root = `/tmp/wf-status-rcheck-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    // verify_tool 已 passed 但 tool 层 review 态 blocking issue 未复核 → stepCanPass false → blocked
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
+    item.children.push(makeIssueChild("9", { phase: "review", metadata: { source_phase: "tool", dimension: "style" } }))
+    writeStateSync(wt, state)
+
+    const toolR = makeCtx("openspec-reviewer-tool", wt)
+    const output = await status.execute({ change_id: CID }, toolR)
+    expect(output).toContain("# ⛔ 当前 step 阻塞中，等待编排处理")
+    expect(output).toContain("本层待复核 issue")
+    expect(output).toContain("Issue #9")
+    expect(output).toContain("recheck_adjudications")
+    expect(output).toContain("自助恢复")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_quality blocked 视图按调用者维度过滤：非报源维度 reviewer 不展示其他维度待复核 issue", async () => {
+    const root = `/tmp/wf-status-rcheck-dim-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+    const toolR = makeCtx("openspec-reviewer-tool", wt)
+    const taskR = makeCtx("openspec-reviewer-task", wt)
+    await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, toolR)
+    await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2"] }, taskR)
+    expect(taskItemOf(readStateSync(wt)).currentStep).toBe("verify_quality")
+
+    // verify_quality 5 维全 passed + style 维度 review 态 blocking issue → blocked
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
+      item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
+    }
+    item.children.push(makeIssueChild("9", { phase: "review", metadata: { source_phase: "quality", dimension: "style" } }))
+    writeStateSync(wt, state)
+
+    // 非报源维度 reviewer（architecture）→ 不展示 style 维度待复核 issue（避免照指引补交后被谁提谁裁定拒绝）
+    const archView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-architecture", wt))
+    expect(archView).toContain("# ⛔ 当前 step 阻塞中，等待编排处理")
+    expect(archView).not.toContain("Issue #9")
+    expect(archView).not.toContain("recheck_adjudications")
+    // 报源维度 reviewer（style）→ 展示待复核清单与自助恢复指引
+    const styleView = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-style", wt))
+    expect(styleView).toContain("本层待复核 issue")
+    expect(styleView).toContain("Issue #9")
+    expect(styleView).toContain("recheck_adjudications")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

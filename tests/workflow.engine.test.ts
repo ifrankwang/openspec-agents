@@ -44,6 +44,41 @@ phases:
           on_fail: implement
 `
 
+/** 含真实 verify_tool/verify_quality 层感知 step 的 workflow（验证 stepCanPass 层感知 carve-out）。 */
+const LAYER_YAML = `
+id: layer-flow
+name: Layer Flow
+max_retries: 3
+phases:
+  - name: todo
+    steps:
+      - id: analyze
+        agents:
+          - id: architect
+            capability_tags: [architecture]
+        transitions:
+          on_pass: implement
+          on_fail: analyze
+  - name: in_progress
+    steps:
+      - id: implement
+        agents:
+          - id: developer
+            capability_tags: [efficiency]
+        transitions:
+          on_pass: verify_tool
+          on_fail: analyze
+  - name: review
+    steps:
+      - id: verify_tool
+        agents:
+          - id: reviewer
+            capability_tags: [quality-gate]
+        transitions:
+          on_pass: done
+          on_fail: implement
+`
+
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
     id: "w1",
@@ -403,7 +438,7 @@ phases:
 describe("4. children 联动与门禁", () => {
   const wf = loadWorkflow(BASE_YAML)
 
-  test("step 通过要求全部 children 终态", () => {
+  test("非 carve-out step（analyze）通过要求全部 blocking children 终态", () => {
     const item = makeItem()
     applyAgentVerdict(item, "analyze", "architect", "passed")
     item.children.push(child({ phase: "done" }))
@@ -413,6 +448,40 @@ describe("4. children 联动与门禁", () => {
     applyAgentVerdict(item2, "analyze", "architect", "passed")
     item2.children.push(child({ phase: "review" }))
     expect(stepCanPass(item2, wf.stepMap.get("analyze")!.step)).toBe(false)
+  })
+
+  test("implement carve-out：review 态 blocking child 放行（不阻塞 dev 提交，防死锁），todo 态仍阻塞", () => {
+    const wfLayer = loadWorkflow(LAYER_YAML)
+    // review 态（已修复待复核）→ 放行
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item, "implement", "developer", "passed")
+    item.children.push(child({ phase: "review", metadata: { source_phase: "tool" } }))
+    expect(stepCanPass(item, wfLayer.stepMap.get("implement")!.step)).toBe(true)
+    // todo 态（未修复）→ 仍阻塞
+    const item2 = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item2, "implement", "developer", "passed")
+    item2.children.push(child({ phase: "todo", metadata: { source_phase: "tool" } }))
+    expect(stepCanPass(item2, wfLayer.stepMap.get("implement")!.step)).toBe(false)
+  })
+
+  test("verify_tool 层感知门禁：本层 review 态 blocking child 阻塞（防假收尾），其他层 review 态放行", () => {
+    const wfLayer = loadWorkflow(LAYER_YAML)
+    const step = wfLayer.stepMap.get("verify_tool")!.step
+    // 本层（tool）review 态未复核 → 阻塞
+    const item = makeItem({ phase: "review", currentStep: "verify_tool" })
+    applyAgentVerdict(item, "verify_tool", "reviewer", "passed")
+    item.children.push(child({ phase: "review", metadata: { source_phase: "tool" } }))
+    expect(stepCanPass(item, step)).toBe(false)
+    // 本层 done → 放行
+    const item2 = makeItem({ phase: "review", currentStep: "verify_tool" })
+    applyAgentVerdict(item2, "verify_tool", "reviewer", "passed")
+    item2.children.push(child({ phase: "done", metadata: { source_phase: "tool" } }))
+    expect(stepCanPass(item2, step)).toBe(true)
+    // 其他层（quality/task）review 态 → 不阻塞本 step
+    const item3 = makeItem({ phase: "review", currentStep: "verify_tool" })
+    applyAgentVerdict(item3, "verify_tool", "reviewer", "passed")
+    item3.children.push(child({ phase: "review", metadata: { source_phase: "quality", dimension: "style" } }))
+    expect(stepCanPass(item3, step)).toBe(true)
   })
 
   test("D1: Info 级 children 不阻塞 stepCanPass（仅 Low+ children 要求终态）", () => {

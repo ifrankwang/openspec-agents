@@ -123,7 +123,7 @@ describe("sourcePhase A: tool 层 issue fixed 只清 verify_tool", () => {
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
       // child 终态
-      expect(item.children.find((c: WorkItem) => c.externalId === "t1").phase).toBe("done")
+      expect(item.children.find((c: WorkItem) => c.externalId === "t1").phase).toBe("review")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
@@ -266,7 +266,7 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
-      expect(item.children.find((c: WorkItem) => c.externalId === "q7").phase).toBe("done")
+      expect(item.children.find((c: WorkItem) => c.externalId === "q7").phase).toBe("review")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
@@ -293,7 +293,7 @@ describe("sourcePhase F: 集成路径——review 回退 dev 修复后分层重�
       await fixIssue(wt, ["t7"])
       const item = readItem(wt, CID)
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      expect(item.children.find((c: WorkItem) => c.externalId === "t7").phase).toBe("done")
+      expect(item.children.find((c: WorkItem) => c.externalId === "t7").phase).toBe("review")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
@@ -334,7 +334,7 @@ describe("sourcePhase G: quality reviewer 提报缺 source_phase → 强制归�
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
-      expect(item.children.find((c: WorkItem) => c.externalId === "g1").phase).toBe("done")
+      expect(item.children.find((c: WorkItem) => c.externalId === "g1").phase).toBe("review")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
@@ -361,7 +361,7 @@ describe("sourcePhase H: 缺 source_phase 但报源为 quality reviewer 的历�
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
       // 报源是 quality reviewer 而非 tool/task 层 → 不清 verify_tool 维度逻辑之外的层级（fixed 属代码变更仍清 verify_tool）
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
-      expect(item.children.find((c: WorkItem) => c.externalId === "h1").phase).toBe("done")
+      expect(item.children.find((c: WorkItem) => c.externalId === "h1").phase).toBe("review")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

@@ -1,9 +1,10 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
+import { REVIEW_DIMENSIONS } from "../types.js"
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import { stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch } from "./engine.js"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER } from "./engine.js"
 import { ORCHESTRATOR_AGENT, agentToReviewDimension } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
 import { taskListOf, issueChildrenOf } from "../task-children.js"
@@ -128,20 +129,53 @@ function renderTerminalPhase(item: WorkItem): string {
   ].join("\n")
 }
 
-/** blocked 视图：调用者若为当前 step 轮次 agent 用 blocked_agent 文案，否则用通用 blocked 文案。 */
+/** blocked 视图：调用者若为当前 step 轮次 agent 用 blocked_agent 文案，否则用通用 blocked 文案。
+ *  verify_* 层当前 agent 且存在本层待复核（review 态）blocking issue 时，列出待复核清单并给出
+ *  recheck_adjudications 自助恢复指引（上次提交漏带复核导致门禁阻塞的可补交解除）。 */
 function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: LoadedWorkflow, ctxAgent: string): string {
   const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
   const isCurrentAgent = step ? stepAgentIds(step).includes(ctxAgent) : false
   const reason = rec.blockedReason ?? "(未知)"
   if (isCurrentAgent) {
-    return [
+    const layer = step ? REVIEW_STEP_TO_LAYER[step.id] : undefined
+    const pendingRecheck = layer
+      ? issueChildrenOf(item).filter((c) => {
+          if (!(c.phase === "review" && isBlockingSeverity(c.severity) && resolveChildIssueFields(c).sourcePhase === layer)) {
+            return false
+          }
+          // verify_quality 为多 agent step：按调用者维度过滤，只展示调用者复核不会越权的待复核 issue。
+          // 合法声明的维度须与调用者维度一致；缺维度/非法维度走 review step 白名单 fallback（任何 quality reviewer 可复核）。
+          if (layer === "quality") {
+            const dim = agentToReviewDimension(ctxAgent)
+            if (!dim) return false
+            const declared = c.metadata["dimension"]
+            return (REVIEW_DIMENSIONS as readonly string[]).includes(declared as string) ? declared === dim : true
+          }
+          return true
+        })
+      : []
+    const lines = [
       "# ⛔ 当前 step 阻塞中，等待编排处理",
       "",
       `- **原因**: ${reason}`,
       "",
-      "你属于当前轮次角色，请勿自行推进，等待编排者解除阻塞后重新查询状态。",
-      "",
-    ].join("\n")
+    ]
+    if (pendingRecheck.length > 0 && step) {
+      lines.push(`- **本层待复核 issue（${pendingRecheck.length} 个）**:`)
+      for (const c of pendingRecheck) {
+        const id = c.externalId ?? c.id.replace(/^issue:/, "")
+        lines.push(`  - Issue #${id} | ${formatSeverity(c.severity ?? "Info")}`)
+      }
+      lines.push("")
+      lines.push(
+        `**自助恢复**：调用 \`opx_agent_submit({ step_id: "${step.id}", verdict: "passed", recheck_adjudications: [{ issue_id: "<上述 issue id>", verdict: "passed" }] })\` 补带复核结论重提；` +
+        `复核通过后自动推进。复核不通过则传 verdict=rejected 并附 reject_reason 驳回（issue 回待修复并累计修复未过次数）。`
+      )
+    } else {
+      lines.push("你属于当前轮次角色，请勿自行推进，等待编排者解除阻塞后重新查询状态。")
+    }
+    lines.push("")
+    return lines.join("\n")
   }
   return [
     "# ⛔ 当前无法推进（blocked）",
@@ -260,13 +294,13 @@ function renderProgressSection(item: WorkItem, workflow: LoadedWorkflow): string
   lines.push("")
   const counts = childStatusCounts(item)
   lines.push("**children 统计**：", "")
-  lines.push(`- 待处理 ${counts.todo} · 待裁定 ${counts.review} · 已验证 ${counts.done} · 已豁免 ${counts.cancelled}`)
+  lines.push(`- 待处理 ${counts.todo} · 待复核 ${counts.review} · 已验证 ${counts.done} · 已豁免 ${counts.cancelled}`)
   if (counts.exempt > 0) lines.push(`- 豁免申请中 ${counts.exempt}`)
   lines.push("")
   return lines
 }
 
-/** children 状态统计：todo=待处理、review=待裁定、done=已验证、cancelled=已豁免、exempt_request=豁免申请中。 */
+/** children 状态统计：todo=待处理、review=待复核、done=已验证、cancelled=已豁免、exempt_request=豁免申请中。 */
 function childStatusCounts(item: WorkItem): { todo: number; review: number; done: number; cancelled: number; exempt: number } {
   const counts = { todo: 0, review: 0, done: 0, cancelled: 0, exempt: 0 }
   // 仅统计 issue child（task child 不计入——子任务进度由 task 语义承载）
@@ -624,12 +658,12 @@ function renderChildIssue(child: WorkItem): string {
   return lines.join("\n")
 }
 
-/** child 状态标签：todo=待处理、review=待裁定、done=已验证、cancelled=已豁免；exempt_request 标记 → 豁免申请中。 */
+/** child 状态标签：todo=待处理、review=待复核、done=已验证、cancelled=已豁免；exempt_request 标记 → 豁免申请中。 */
 function childStateLabel(child: WorkItem): string {
   if (child.metadata["exempt_request"] !== undefined) return "豁免申请中"
   switch (child.phase) {
     case "todo": return "待处理"
-    case "review": return "待裁定"
+    case "review": return "待复核"
     case "done": return "已验证"
     case "cancelled": return "已豁免"
     default: return child.phase

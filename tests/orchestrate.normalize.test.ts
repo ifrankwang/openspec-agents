@@ -70,9 +70,9 @@ describe("N1. issue id # 前缀归一化", () => {
       expect(r).toContain("passed")
       const item = taskItemOf(readState(wt, CID)!)
       const child = item.children.find((c: any) => c.externalId === "7")
-      expect(child.phase).toBe("done")
-      // issue 投影回 tg.issues → verified
-      expect(taskGroupFromWorkItem(item).issues.find((i: any) => i.id === "7")?.status).toBe("verified")
+      expect(child.phase).toBe("review")
+      // issue 投影回 tg.issues → submitted（review 态 = 待复核，未终态）
+      expect(taskGroupFromWorkItem(item).issues.find((i: any) => i.id === "7")?.status).toBe("submitted")
       // 修复后推进到 verify_tool 且 verify_tool tag 被重置（可重验）
       expect(item.currentStep).toBe("verify_tool")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
@@ -152,7 +152,7 @@ describe("N1. issue id # 前缀归一化", () => {
       )
       const item = taskItemOf(readState(wt, CID)!)
       const child = item.children.find((c: any) => c.externalId === "7")
-      expect(child.phase).toBe("done")
+      expect(child.phase).toBe("review")
       // 修复按归因分层重置：仅 style 维度 quality tag 清除，其余已 passed 维度保留
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")

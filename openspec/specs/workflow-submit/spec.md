@@ -15,19 +15,34 @@ TBD - created by archiving change workflow-engine. Update Purpose after archive.
 - **THEN** 提交被拒绝并返回错误，不产生任何状态变更
 
 ### Requirement: 提交内执行门禁与 children 更新
-`opx_agent_submit` SHALL 在提交时执行 phase 门禁（正向前进检查当前 phase 全部 step passed，反向回退按规则处理）并更新 children：声明 fixed 的 child 置为 done、声明 exempt 的 child 挂 exempt 标记等待对应 reviewer 裁定、传入的 new_children 写入 children。
+`opx_agent_submit` SHALL 在提交时执行 phase 门禁（正向前进检查当前 phase 全部 step passed，反向回退按规则处理）并更新 children：声明 fixed 的 issue child 置为 review（已修复待复核）、声明 exempt 的 child 挂 exempt 标记等待对应 reviewer 裁定、传入的 new_children 写入 children。
 
 #### Scenario: 正向推进时校验 phase 门禁
 - **WHEN** 提交使得该 step 内全部 agent 均 passed 且目标跨 phase
 - **THEN** 仅当当前 phase 全部 step passed 且 Low+ children 达到目标 phase 才放行进入下一 phase，否则停留
 
-#### Scenario: fixed children 置为 done
-- **WHEN** 提交声明某 child 为 fixed
-- **THEN** 该 child 的 phase 被置为 done
+#### Scenario: fixed issue 进入待复核
+- **WHEN** 提交声明某 issue child 为 fixed
+- **THEN** 该 child 的 phase 被置为 review（已修复待复核），终态由对应 reviewer 复核裁定
 
 #### Scenario: exempt 等待裁定
 - **WHEN** 提交声明某 child 为 exempt
 - **THEN** 该 child 在自身 metadata 记录 exempt 标记，等待对应 reviewer 裁定，不直接改变终态且不写入 tags
+
+### Requirement: 已修复 issue 复核裁定
+review 阶段提交 SHALL 支持对已修复待复核（review 态）的 issue child 复核裁定：复核者必须为报 issue 的对应 review step（谁提谁裁定，与豁免裁定同源归因）。复核 passed 时 child 置为 done；复核 rejected 时 child 回 todo、metadata.refix_count 递增并写入 metadata.reject_reason（给 developer 驳回原因）。
+
+#### Scenario: 复核通过关闭 issue
+- **WHEN** 报 issue 的 reviewer 对 review 态 issue 复核 passed
+- **THEN** 该 child 的 phase 被置为 done
+
+#### Scenario: 复核驳回打回重做
+- **WHEN** 报 issue 的 reviewer 对 review 态 issue 复核 rejected（附驳回原因）
+- **THEN** 该 child 的 phase 被置为 todo，metadata.refix_count 递增，metadata.reject_reason 写入驳回原因
+
+#### Scenario: 越权复核被拒
+- **WHEN** 非报 issue 层对应的 reviewer 复核 review 态 issue
+- **THEN** 复核被拒绝并返回错误，不产生任何状态变更
 
 ### Requirement: new_children 仅 review 阶段 step 可提报
 `opx_agent_submit` SHALL 拒绝非 review 阶段 step 提交的 new_children：提交被拒绝并返回错误，不产生任何状态变更。仅 review 阶段 step 允许通过 new_children 提报新 issue。

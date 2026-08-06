@@ -3,7 +3,7 @@ import type { ToolContext, AgentSubmitParams } from "./types.js"
 import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
 import {
-  submitForStep, adjudicateExempt, assertSubmitRouting,
+  submitForStep, adjudicateExempt, adjudicateRecheck, assertSubmitRouting,
   type SubmitResult,
 } from "../workflow/submit.js"
 import {
@@ -26,6 +26,27 @@ const loadTaskWorkflow = () => loadWorkflowFile(TASK_WORKFLOW_PATH)
 /** issue id 归一化：去 # 前缀（review 工具按 tg.issue 序号引用时可能带 #）。 */
 function normalizeIssueId(id: string): string {
   return String(id).trim().replace(/^#/, "")
+}
+
+/**
+ * 判定本次 review 提交是否「仅携带 recheck_adjudications」（无其他实质参数）。
+ * 供重复提交守卫的复核补交豁免：reviewer 上次 passed 提交漏带复核导致本层 review 态 issue
+ * 阻塞门禁时，允许仅补带 recheck_adjudications 重提解除阻塞；空提交或携带其他实质参数的
+ * 重复提交仍被守卫拒绝。
+ */
+function isRecheckOnlySupplement(params: AgentSubmitParams): boolean {
+  return (
+    (params.recheck_adjudications?.length ?? 0) > 0 &&
+    (params.fixed_issue_ids?.length ?? 0) === 0 &&
+    (params.exempt_issue_ids?.length ?? 0) === 0 &&
+    (params.new_children?.length ?? 0) === 0 &&
+    (params.exempt_adjudications?.length ?? 0) === 0 &&
+    (params.verified_tasks?.length ?? 0) === 0 &&
+    (params.failed_tasks?.length ?? 0) === 0 &&
+    !params.boundary_expansion &&
+    (params.validation_steps?.length ?? 0) === 0 &&
+    params.test_results === undefined
+  )
 }
 
 /** 以 tg.issue 原始 id 解析 child（externalId 优先，兜底 issue: 前缀），供豁免裁定定位。
@@ -51,7 +72,8 @@ function resolveTaskWorkItem(state: OrchestrateState): WorkItem {
 }
 
 /** 渲染提交结果 markdown：step 裁决、是否推进、当前 phase、children 状态摘要。 */
-function renderSubmitResult(item: WorkItem, result: SubmitResult): string {
+function renderSubmitResult(item: WorkItem, result: SubmitResult, extraUpdated: string[] = []): string {
+  const allUpdated = [...new Set([...result.childrenUpdated, ...extraUpdated])]
   const lines = [
     `- **step**: \`${result.stepId}\``,
     `- **agent**: \`${result.agentKey}\``,
@@ -63,9 +85,9 @@ function renderSubmitResult(item: WorkItem, result: SubmitResult): string {
   if (!result.advanced && result.reason) {
     lines.push(`- **推进阻塞原因**: ${result.reason}`)
   }
-  if (result.childrenUpdated.length > 0) {
+  if (allUpdated.length > 0) {
     lines.push("- **children 变更**:")
-    for (const id of result.childrenUpdated) {
+    for (const id of allUpdated) {
       const child = item.children.find((c) => c.id === id || c.externalId === id)
       const phase = child?.phase ?? "?"
       const exemptMark = child?.metadata["exempt_request"] ? "（exempt_request 已标记）" : ""
@@ -446,11 +468,14 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       )
     }
 
-    // 参数归一化：issue id 去 # 前缀（fixed/exempt/adjudication 均接受带 # 的 tg.issue 序号引用）
+    // 参数归一化：issue id 去 # 前缀（fixed/exempt/adjudication/recheck 均接受带 # 的 tg.issue 序号引用）
     if (params.fixed_issue_ids) params.fixed_issue_ids = params.fixed_issue_ids.map(normalizeIssueId)
     if (params.exempt_issue_ids) params.exempt_issue_ids = params.exempt_issue_ids.map(normalizeIssueId)
     if (params.exempt_adjudications) {
       for (const adj of params.exempt_adjudications) adj.issue_id = normalizeIssueId(adj.issue_id)
+    }
+    if (params.recheck_adjudications) {
+      for (const adj of params.recheck_adjudications) adj.issue_id = normalizeIssueId(adj.issue_id)
     }
 
     // 无效 fixed/exempt id 入口显式拒绝（不静默吞掉修复/豁免声明）：未命中的 id 抛错并列出可用 id 清单。
@@ -471,6 +496,27 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         throw new Error(`exempt_issue_ids 中包含无效 issue id: "${id}"。\n可用 issue ID: ${availableIssueIds()}`)
       }
     }
+    for (const id of params.recheck_adjudications?.map((a) => a.issue_id) ?? []) {
+      if (!resolveChildByIssueId(item, id)) {
+        throw new Error(`recheck_adjudications 中包含无效 issue id: "${id}"。\n可用 issue ID: ${availableIssueIds()}`)
+      }
+    }
+
+    // 重复提交守卫（仅 review step）：同 step 同 agent 已以 passed 通过后不允许重复提交；failed 允许重提
+    // （回退重审期 failed tag 未被归因清空时须可重提，如 verify_task 仅 failed_tasks 驳回）。
+    // 复核补交豁免：仅携带 recheck_adjudications（无其他实质参数）的补交放行——上次提交漏带
+    // 复核导致本层 review 态 issue 阻塞门禁时，reviewer 可补带复核结论重提解除阻塞；空提交/携带
+    // 其他实质参数（含 fixed_issue_ids / exempt_issue_ids）的重复提交仍被拒绝。
+    // 守卫在一切裁定（豁免/复核）之前执行，保证守卫拒绝时零副作用。step 归属按 stepMap 直接判定
+    // （不依赖 assertSubmitRouting，保持越权 step 提交的裁定拦截语义不变）。
+    const guardStepPhase = workflow.stepMap.get(params.step_id)?.phase.name
+    if (
+      guardStepPhase === "review" &&
+      getStepVerdict(item, params.step_id, ctx.agent) === "passed" &&
+      !isRecheckOnlySupplement(params)
+    ) {
+      throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
+    }
 
     // 先裁定豁免申请（越权/不可路由/跨维抛错）：submitForStep 尚未执行，保证越权裁定零副作用。
     for (const adj of params.exempt_adjudications ?? []) {
@@ -479,6 +525,23 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         throw new Error(`豁免裁定失败：issue "${adj.issue_id}" 不存在于 item "${item.id}" 的 children 中。`)
       }
       adjudicateExempt(item, workflow, { issueId: child.id, agentKey: ctx.agent, action: adj.action })
+    }
+
+    // 复核已修复待复核（review 态）issue：passed→done，rejected→todo + refix_count + reject_reason。
+    // 谁提谁裁定，越权/非 review 态/缺驳回原因抛错零副作用，先于 submitForStep 执行使门禁按新 phase 判定。
+    const recheckUpdated: string[] = []
+    for (const adj of params.recheck_adjudications ?? []) {
+      const child = resolveChildByIssueId(item, adj.issue_id)
+      if (!child) {
+        throw new Error(`复核失败：issue "${adj.issue_id}" 不存在于 item "${item.id}" 的 children 中。`)
+      }
+      adjudicateRecheck(item, workflow, {
+        issueId: child.id,
+        agentKey: ctx.agent,
+        verdict: adj.verdict,
+        rejectReason: adj.reject_reason,
+      })
+      recheckUpdated.push(child.id)
     }
 
     // 路由/归属校验前置（与 submitForStep 共用），越权/错 step 在参数处理前拦截。
@@ -510,11 +573,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
     if (stepPhase === "review") {
-      // 重复提交守卫：同 step 同 agent 已以 passed 通过后不允许重复提交；failed 允许重提
-      // （回退重审期 failed tag 未被归因清空时须可重提，如 verify_task 仅 failed_tasks 驳回）。
-      if (getStepVerdict(item, params.step_id, ctx.agent) === "passed") {
-        throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
-      }
       handleReviewParams(item, params, newChildren, params.step_id)
     } else if (stepPhase === "todo") {
       handleAnalyzeParams(item, params)
@@ -581,7 +639,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       ? "\n\n已将主仓库污染文档并入 worktree 分支并清理主仓库工作树：\n" +
         reconciledFiles.map((f) => `- \`${f}\``).join("\n")
       : ""
-    return renderSubmitResult(item, result) + dedupNote + reconciledSuffix
+    return renderSubmitResult(item, result, recheckUpdated) + dedupNote + reconciledSuffix
   } finally {
     releaseLock(lockPath)
   }

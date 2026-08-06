@@ -299,7 +299,7 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
         },
         ctx.dev
       )
-      expect(r).toContain("99 → done")
+      expect(r).toContain("99 → review")
     } finally { teardown(root) }
   })
 })

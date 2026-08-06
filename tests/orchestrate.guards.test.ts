@@ -406,12 +406,15 @@ describe("G10. 谁提谁裁定守卫", () => {
     const { wt, root } = fresh()
     try {
       await setupExemptRequest(wt)
+      // architecture 维度在上一轮 verify_quality 已 passed（rollbackQuality 聚合回退前的裁决保留），
+      // 其带 exempt_adjudications 提交先被重复提交守卫拦截（已 passed 不允许重复提交，豁免裁定非 recheck-only 补交）；
+      // 谁提谁裁定的负向拦截由未 passed 维度场景覆盖（opx_agent_submit test 43 等）。
       await expectError(
         agent_submit.execute(
           { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
           makeCtx("openspec-reviewer-architecture", wt)
         ),
-        /裁定者必须为报 issue 的/
+        /重复提交守卫/
       )
       const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
       expect(child.phase).toBe("todo")
@@ -494,14 +497,14 @@ describe("G12. task 层完成守卫", () => {
 // ── G13: tool 层二次提交守卫 ──
 
 describe("G13. verify_tool 二次提交守卫", () => {
-  test("verify_tool passed 后再提交 → 抛错（currentStep 已推进）", async () => {
+  test("verify_tool passed 后再提交 → 抛错（重复提交守卫优先于 currentStep 校验）", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
       await expectError(
         agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR),
-        /submit 校验失败/
+        /重复提交守卫/
       )
     } finally { teardown(root) }
   })
@@ -510,7 +513,7 @@ describe("G13. verify_tool 二次提交守卫", () => {
 // ── G14: task 层二次提交守卫 ──
 
 describe("G14. verify_task 二次提交守卫", () => {
-  test("verify_task passed 后再提交 → 抛错（currentStep 已推进）", async () => {
+  test("verify_task passed 后再提交 → 抛错（重复提交守卫优先于 currentStep 校验）", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTask(wt, CID)
@@ -524,7 +527,7 @@ describe("G14. verify_task 二次提交守卫", () => {
           { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ids },
           ctx.taskR
         ),
-        /submit 校验失败/
+        /重复提交守卫/
       )
     } finally { teardown(root) }
   })
