@@ -544,16 +544,16 @@ function renderDeveloperChildren(item: WorkItem): string[] {
   return lines
 }
 
-/** verify_tool step：reviewer-tool 视角全部 issue children + 待裁定（review / exempt_request）。 */
+/** verify_tool step：reviewer-tool 视角全部 issue children + 待裁定（豁免申请中）。 */
 function renderToolChildren(item: WorkItem): string[] {
   const lines: string[] = []
   const issues = issueChildrenOf(item)
   if (issues.length > 0) {
     lines.push(...renderChildrenSection("全部 Issue（tool 层可见）", issues))
   }
-  const pending = issues.filter((c) => c.phase === "review" || c.metadata["exempt_request"] !== undefined)
+  const pending = issues.filter((c) => c.metadata["exempt_request"] !== undefined)
   if (pending.length > 0) {
-    lines.push(...renderChildrenSection("待裁定 (review / 豁免申请中)", pending))
+    lines.push(...renderChildrenSection("待裁定 (豁免申请中)", pending))
   }
   return lines
 }
@@ -567,7 +567,7 @@ function renderTaskChildren(item: WorkItem): string[] {
     for (const t of pendingTasks) lines.push(renderTaskItem(t))
     lines.push("")
   }
-  const pending = issueChildrenOf(item).filter((c) => c.phase === "review" || c.metadata["exempt_request"] !== undefined)
+  const pending = issueChildrenOf(item).filter((c) => c.metadata["exempt_request"] !== undefined)
   if (pending.length > 0) {
     lines.push(...renderChildrenSection("Issue (待裁定)", pending))
   }

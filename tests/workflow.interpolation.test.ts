@@ -156,11 +156,11 @@ describe("renderStepContext step.id 路由", () => {
     const item = makeItem({
       phase: "review",
       currentStep: "verify_tool",
-      children: [makeIssue("1", { phase: "review", severity: "High" })],
+      children: [makeIssue("1", { metadata: { source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "developer" } } })],
     })
     const out = renderWorking(item, "verify_tool", "openspec-reviewer-tool")
     expect(out).toContain("全部 Issue（tool 层可见）")
-    expect(out).toContain("待裁定 (review / 豁免申请中)")
+    expect(out).toContain("待裁定 (豁免申请中)")
   })
 
   test("verify_task（step.id=verify_task → review_task）：渲染待验证 Task 清单", () => {
@@ -324,7 +324,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描）")
     expect(out).toContain("new_children 的 dimension 字段自行指定归因维度（style/architecture/performance/security/maintainability）")
     expect(out).toContain("非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃")
-    expect(out).toContain("对视图「待裁定」区块中的 issue 与豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
+    expect(out).toContain("对视图「待裁定」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（自愈失效时提请用户）")
     expect(out).not.toContain("；禁止 opx_orch_*")
     expect(out).toContain("即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）")

@@ -226,8 +226,8 @@ export function routeExempt(item: WorkItem, workflow: LoadedWorkflow, issueId: s
 }
 
 /**
- * 裁定豁免申请：dismissed → cancelled；rejected → todo（清除 exempt_request 标记）。
- * 裁定者必须属于对应 review step 的 agents。
+ * 裁定豁免申请：dismissed → cancelled；rejected → todo；两种结果均清除 exempt_request 标记。
+ * 仅带 exempt_request 标记（已申请豁免）的 issue 可被裁定；裁定者必须属于对应 review step 的 agents。
  */
 export function adjudicateExempt(
   item: WorkItem,
@@ -239,6 +239,11 @@ export function adjudicateExempt(
     taskChildrenOf(item).find((c) => c.id === input.issueId)
   if (!child) {
     throw new Error(`豁免裁定失败：issue "${input.issueId}" 不存在于 item "${item.id}" 的 children 中。`)
+  }
+  if (child.metadata[EXEMPT_REQUEST_KEY] === undefined) {
+    throw new Error(
+      `豁免裁定失败：issue "${input.issueId}" 未申请豁免（无 exempt_request 标记），仅可裁定带豁免申请标记的 issue。`
+    )
   }
   const source = readIssueSource(child)
   const step = source ? resolveReviewStepForSource(workflow, source) : null
@@ -268,7 +273,7 @@ export function adjudicateExempt(
     child.phase = "cancelled"
   } else {
     child.phase = "todo"
-    delete child.metadata[EXEMPT_REQUEST_KEY]
   }
+  delete child.metadata[EXEMPT_REQUEST_KEY]
   return { issueId: input.issueId, action: input.action, childPhase: child.phase }
 }

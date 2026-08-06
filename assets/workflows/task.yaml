@@ -83,7 +83,7 @@ phases:
           - "加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构并跨维提交"
           - "跨维报 issue 时在 new_children 的 dimension 字段自行指定归因维度（style/architecture/performance/security/maintainability）"
           - "工具检查覆盖全量代码；非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃"
-          - "对视图「待裁定」区块中的 issue 与豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
+          - "对视图「待裁定」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
           - "提交 opx_agent_submit，必带 verdict 参数（passed / failed）"
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（自愈失效时提请用户）；可 bash 运行工具但不得 edit/write 任何文件"

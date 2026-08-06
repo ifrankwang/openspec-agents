@@ -444,7 +444,7 @@ describe("5. adjudicateExempt 裁定", () => {
 
   test("dismissed → cancelled", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
     const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "dismissed" })
     expect(r.childPhase).toBe("cancelled")
     expect(item.children[0].phase).toBe("cancelled")
@@ -461,16 +461,50 @@ describe("5. adjudicateExempt 裁定", () => {
 
   test("属于该 step agents 的裁定者也可裁定", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
     const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "designer", action: "dismissed" })
     expect(r.childPhase).toBe("cancelled")
   })
 
   test("白名单外裁定者抛错且不产生状态变更", () => {
     const item = makeItem()
-    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
     expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "manager", action: "dismissed" })).toThrow(/白名单/)
     expect(item.children[0].phase).toBe("todo")
+  })
+
+  test("无 exempt_request 标记的 issue dismissed → 抛错且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "dismissed" })).toThrow(/未申请豁免/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("无 exempt_request 标记的 issue rejected → 抛错且 state 零变更", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer" } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "rejected" })).toThrow(/未申请豁免/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("dismissed → cancelled 且清除 exempt_request 标记（不再滞留待裁定）", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
+    const r = adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "dismissed" })
+    expect(r.childPhase).toBe("cancelled")
+    expect(item.children[0].phase).toBe("cancelled")
+    expect(item.children[0].metadata["exempt_request"]).toBeUndefined()
+  })
+
+  test("rejected 清除标记后再次裁定同 issue → 抛未申请豁免", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
+    adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "rejected" })
+    expect(item.children[0].phase).toBe("todo")
+    expect(item.children[0].metadata["exempt_request"]).toBeUndefined()
+    expect(() => adjudicateExempt(item, WF, { issueId: "i1", agentKey: "reviewer", action: "rejected" })).toThrow(/未申请豁免/)
   })
 })
 
