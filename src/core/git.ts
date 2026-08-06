@@ -203,7 +203,14 @@ export async function detectMainRepoPollution(worktreePath: string): Promise<{ r
   } catch {
     return null
   }
-  const out = await runGit(repoRoot, ["status", "--porcelain", "--", "openspec/"])
+  // 健壮性：git 调用失败（如非 git 仓库/权限/损坏）时返回 null，不使 opx_status 整体抛错；
+  // 污染诊断属编排者视图的辅助信息，缺失不应阻断状态视图渲染。
+  let out: string
+  try {
+    out = await runGit(repoRoot, ["status", "--porcelain", "--", "openspec/"])
+  } catch {
+    return null
+  }
   const files = parsePorcelainPaths(out)
   if (files.length === 0) return null
   return { repoRoot, files }

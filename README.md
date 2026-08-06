@@ -103,4 +103,4 @@ bun test                    # 全部测试
 bun test tests/orchestrate.flow.test.ts  # 单一文件
 ```
 
-测试基于 `FakeGitRunner` 伪造 Git，零外部依赖。
+测试基于 `FakeGitRunner` 伪造 Git，零外部依赖。`orchestrate.status_dispatch.test.ts` 覆盖 opx_status 分派判定（活跃 item、checkpoint giveup、blocked 视图、verify_quality 聚合等待期、回退/recovery 分派、多任务组切换、git 抛错容错）与 baseRef 省略"变更范围"的执行视图。

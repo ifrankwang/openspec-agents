@@ -251,3 +251,23 @@ describe("orchestrator 分派视图硬编码", () => {
     expect(out).not.toContain("分派子代理：")
   })
 })
+
+// ═══════════════════════════════════════════════════════════════
+//  6. 执行视图：baseRef 为空时省略「变更范围」指引（status.ts:389-391 分支）
+// ═══════════════════════════════════════════════════════════════
+
+describe("执行视图：baseRef 分支控制「变更范围」指引", () => {
+  test("tg.baseRef 为空/undefined → 不含变更范围文案；有 baseRef → 包含", () => {
+    const wf = loadWorkflow(BASE_YAML)
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    const rec = { status: "recommend", stepId: "implement", agents: ["developer"] } as any
+    // baseRef undefined → status.ts:389 `if (tg.worktreePath && tg.baseRef)` 分支省略该指引步骤
+    const noBase = render(item, wf, rec, "developer", { tg: { worktreePath: "/wt", baseRef: undefined } })
+    expect(noBase).toContain("# ✅ 当前轮到你执行")
+    expect(noBase).not.toContain("变更范围")
+    // baseRef 有值 → 指引步骤与 Worktree 区块变更范围命令均渲染
+    const withBase = render(item, wf, rec, "developer")
+    expect(withBase).toContain("变更范围")
+    expect(withBase).toContain("diff --name-only")
+  })
+})
