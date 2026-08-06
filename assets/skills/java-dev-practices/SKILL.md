@@ -1,7 +1,7 @@
 ---
 name: java-dev-practices
-description: Java 开发实践规范——构建命令、代码质量工具、测试策略、提交规范、Spring Boot 配置、开发流程。不定义质量规则（见 style / maintainability / performance / architecture / security skill）。仅在 Java 后端项目使用。
-capabilities: ["efficiency", "tech-stack-java"]
+description: Java 开发实践规范——构建命令、代码质量工具、测试策略、提交规范、Spring Boot 配置、开发流程。不定义质量规则，质量规则由各质量维度 skill 覆盖。仅在 Java 后端项目使用。
+capabilities: ["dev-practices", "tech-stack-java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

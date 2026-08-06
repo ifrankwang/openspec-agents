@@ -49,7 +49,7 @@ phases:
       - id: implement
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency, api-testing]
+            capability_tags: [efficiency, api-testing, quality-gate, dev-practices]
         transitions:
           on_pass: verify_tool
           on_fail: analyze

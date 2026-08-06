@@ -33,6 +33,13 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
     expect(r.skillNames).toContain("java-quality-tool-improve")
   })
 
+  test("dev-practices 命中 java-dev-practices（techStackOnly 组）", () => {
+    const r = resolveSkillsForCapabilities(["dev-practices"])
+    expect(r.skillNames).toContain("java-dev-practices")
+    expect(r.techStackOnly).toContain("java-dev-practices")
+    expect(r.generic).not.toContain("java-dev-practices")
+  })
+
   test("tech-stack tag 归 techStackOnly，generic tag 归 generic", () => {
     const r = resolveSkillsForCapabilities(["quality-gate", "efficiency"])
     expect(r.generic).toContain("quality-gate")
@@ -76,6 +83,10 @@ describe("getEfficiencySkills", () => {
   test("efficiency tag 命中效率类 skill", () => {
     expect(getEfficiencySkills()).toContain("code-efficiency")
   })
+
+  test("不含 java-dev-practices（与 code-efficiency 解耦）", () => {
+    expect(getEfficiencySkills()).not.toContain("java-dev-practices")
+  })
 })
 
 describe("workflow YAML agent 级 capability_tags 可解析", () => {
@@ -91,7 +102,7 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
       expect(r.skillNames.length).toBeGreaterThan(0)
     }
     expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
-    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing"])
+    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "quality-gate", "dev-practices"])
     expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
     expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "quality-gate"])
     expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
