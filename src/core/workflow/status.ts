@@ -550,8 +550,9 @@ function renderDeveloperChildren(item: WorkItem): string[] {
 function renderToolChildren(item: WorkItem): string[] {
   const lines: string[] = []
   const issues = issueChildrenOf(item)
-  if (issues.length > 0) {
-    lines.push(...renderChildrenSection("全部 Issue（tool 层可见）", issues))
+  const active = issues.filter((c) => !isTerminalPhase(c.phase))
+  if (active.length > 0) {
+    lines.push(...renderChildrenSection("全部 Issue（tool 层可见）", active))
   }
   const pending = issues.filter((c) => c.metadata["exempt_request"] !== undefined)
   if (pending.length > 0) {
@@ -581,7 +582,9 @@ function renderQualityChildren(item: WorkItem, ctxAgent: string): string[] {
   const dimension = agentToDimension(ctxAgent)
   if (!dimension) return []
   // task child 无 dimension 归因（resolveChildIssueFields 缺省 style），必须按 type 排除
-  const own = issueChildrenOf(item).filter((c) => resolveChildIssueFields(c).dimension === dimension)
+  const own = issueChildrenOf(item)
+    .filter((c) => resolveChildIssueFields(c).dimension === dimension)
+    .filter((c) => !isTerminalPhase(c.phase))
   if (own.length === 0) return []
   const lines = [`## 本维度 Issue（${dimension}）`, ""]
   for (const c of own) lines.push(renderChildIssue(c))

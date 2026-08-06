@@ -358,7 +358,10 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const output = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-tool", wt))
     // 无豁免申请 → 不渲染待裁定区块（cancelled/todo 无标记均不进入）
     expect(output).not.toContain("待裁定 (豁免申请中)")
+    // 全量区块仅渲染非终态 issue：todo child 2 仍在，cancelled child 1 不再出现
     expect(output).toContain("全部 Issue（tool 层可见）")
+    expect(output).toContain("issue 2 描述")
+    expect(output).not.toContain("issue 1 描述")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -392,6 +395,41 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     // architecture 维度 child 不可见（描述与 child id 均不出现）
     expect(output).not.toContain("issue 2 描述")
     expect(output).not.toContain("#2")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_quality 视角：终态（done/cancelled）维度 child 不再出现在本维度 Issue 区块", async () => {
+    const root = `/tmp/wf-m1d-c-terminal-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.currentStep = "verify_quality"
+    item.tags = {
+      "analyze:openspec-architect": "passed",
+      "implement:openspec-developer": "passed",
+      "verify_tool:openspec-reviewer-tool": "passed",
+      "verify_task:openspec-reviewer-task": "passed",
+    }
+    item.children = [
+      makeIssueChild("1", { metadata: { source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
+      makeIssueChild("2", { phase: "done", metadata: { source_phase: "quality", dimension: "style", file: "src/d.ts", line: 7 } }),
+      makeIssueChild("3", { phase: "cancelled", metadata: { source_phase: "quality", dimension: "style", file: "src/e.ts", line: 9 } }),
+    ]
+    writeStateSync(wt, state)
+
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    const output = await status.execute({ change_id: CID }, styleR)
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).toContain("## 本维度 Issue（style）")
+    // 非终态维度 child 仍渲染
+    expect(output).toContain("issue 1 描述")
+    // 终态维度 child 不再出现在本维度区块
+    expect(output).not.toContain("issue 2 描述")
+    expect(output).not.toContain("issue 3 描述")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
