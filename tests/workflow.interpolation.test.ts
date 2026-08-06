@@ -358,7 +358,14 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）")
     expect(out).toContain("顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃")
     expect(out).toContain("审查新 issue 前先查看视图「本维度 Issue」区块中的既有 issue（含 tool review 阶段工具产生的本维度 issue），避免语义重复")
+    // 工具化反思步骤：报 issue 前先判断能否经确定性扫描工具配置收敛
+    expect(out).toContain("报本维度新 issue 前先判断该问题能否通过调整确定性质量扫描工具配置")
+    expect(out).toContain("可工具化")
+    expect(out).toContain("工具改进 issue")
+    expect(out).toContain("[tool_eligible]")
     expect(out).toContain("禁止运行确定性工具检查（包括但不限于 linter/formatter/静态分析/编译/测试/架构约束检查等）")
+    // 追加澄清句不破坏原文匹配（运行权归 tool review 层）
+    expect(out).toContain("运行权归 tool review 层，本约束不排斥基于已加载 skill 做工具化可行性判断并提交工具改进 issue")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；不得 edit/write 任何文件，仅输出审查报告")
     expect(out).not.toContain("；禁止 opx_orch_*")
     expect(out).toContain("即使无 issue 也必须提交 verdict=passed；passed=false 时必须有至少一个归属本维度的 Low+ issue 作为理由")

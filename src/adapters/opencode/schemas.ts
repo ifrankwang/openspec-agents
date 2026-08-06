@@ -78,7 +78,7 @@ export const agentSubmitSchema = tool.schema.object({
   self_check_results: tool.schema.string().optional().describe("implement step：提交前自检结果汇总"),
   completed_task_ids: tool.schema.array(tool.schema.string()).optional().describe("implement step：已完成的 task id（覆盖门禁：全部 open/rejected task 必须被覆盖）"),
   test_results: tool.schema.string().optional().describe("verify_tool step：UT 运行结果摘要"),
-  validation_steps: tool.schema.array(validationStepSchema).optional().describe("verify_task step：验证步骤执行摘要"),
+  validation_steps: tool.schema.array(validationStepSchema).optional().describe("review step：验证步骤执行摘要"),
   boundary_expansion: boundaryExpansionSchema.optional().describe("review step：执行边界扩展（仅 verdict=failed 有效）"),
   verified_tasks: tool.schema.array(tool.schema.string()).optional().describe("verify_task step：验证通过的 task id"),
   failed_tasks: tool.schema.array(taskVerifyItem).optional().describe("verify_task step：验证失败的 task 列表（含原因）"),

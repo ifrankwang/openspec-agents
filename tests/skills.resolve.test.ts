@@ -12,7 +12,6 @@ import {
   scanSkillTags,
   resolveSkillsForCapabilities,
   getEfficiencySkills,
-  getToolImprovementSkills,
 } from "../src/skills/resolve"
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { stepAgentIds } from "../src/core/workflow/types"
@@ -73,13 +72,9 @@ describe("scanSkillTags 进程内缓存", () => {
   })
 })
 
-describe("getEfficiencySkills / getToolImprovementSkills", () => {
+describe("getEfficiencySkills", () => {
   test("efficiency tag 命中效率类 skill", () => {
     expect(getEfficiencySkills()).toContain("code-efficiency")
-  })
-
-  test("tool-improvement tag 命中工具改进类 skill", () => {
-    expect(getToolImprovementSkills()).toContain("java-quality-tool-improve")
   })
 })
 
@@ -99,8 +94,19 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
     expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing"])
     expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
     expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "quality-gate"])
-    expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency"])
-    expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency"])
+    expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
+    expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency", "tool-improvement"])
+  })
+
+  test("verify_quality 全部 5 个 agent 的 capability_tags 均命中 java-quality-tool-improve", () => {
+    const wf = readWf("task.yaml")
+    const step = wf.stepMap.get("verify_quality")!.step
+    expect(step.agents.length).toBe(5)
+    for (const agent of step.agents) {
+      expect(agent.capability_tags).toContain("tool-improvement")
+      const r = resolveSkillsForCapabilities(agent.capability_tags)
+      expect(r.skillNames).toContain("java-quality-tool-improve")
+    }
   })
 
   test("agent 级 capability_tags 生效：style 命中 style 相关 skill，security 命中 security 相关 skill", () => {

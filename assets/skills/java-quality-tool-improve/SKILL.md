@@ -24,10 +24,7 @@ capabilities: ["tool-improvement", "tech-stack-java"]
 
 ### ArchUnit 规则
 
-- **工具改进 issue 的 file**：由 agent 按项目结构确定（不可预设固定路径）
-- **suggestion** 包含规则代码正文 + 验证命令，末尾 `[tool_eligible]`：
-
-agent 必须按以下顺序自行推断规则文件路径，**禁止预设固定路径**：
+规则建议须附规则代码正文与验证命令。agent 必须按以下顺序自行推断规则文件路径，**禁止预设固定路径**：
 
 1. **查现有测试**：扫描项目已有 ArchUnit 测试文件（grep `ArchUnit`、`archunit`），沿用其所在包路径和目录结构
 2. **查构建配置**：如无现有 ArchUnit 测试，读取 `pom.xml` / `build.gradle` / `build.gradle.kts` 确定测试源目录（默认 `src/test/java`）和项目组/包前缀
@@ -49,8 +46,7 @@ void {testMethodName}() {
 
 ### PMD 规则
 
-- **工具改进 issue 的 file**：`src/main/resources/pmd-rules.xml`（现有文件，`line` 指目标插入行）
-- **suggestion** 包含待追加 XML 块 + 验证命令，末尾 `[tool_eligible]`：
+规则建议须附待追加 XML 块与验证命令：
 
 ```xml
 <!-- 规则文件位置：src/main/resources/pmd-rules.xml -->
@@ -77,9 +73,6 @@ void {testMethodName}() {
 
 ### Spotless 规则
 
-- **工具改进 issue 的 file**：`pom.xml`（现有文件，`line` 指 spotless-maven-plugin 配置块行号）
-- **suggestion** 包含需调整的配置段 + 验证命令，末尾 `[tool_eligible]`：
-
 Spotless 使用 Palantir Java Format，自定义空间有限。多数格式问题通过更新 pom.xml 中的 `spotless-maven-plugin` 配置实现：
 
 - 规则位置：`pom.xml` → `spotless-maven-plugin` 配置块
@@ -87,9 +80,6 @@ Spotless 使用 Palantir Java Format，自定义空间有限。多数格式问�
 - 自动修复：`mvn spotless:apply`
 
 ### SonarQube 规则
-
-- **工具改进 issue 的 file**：`sonar-project.properties`（项目根目录，`line` 指目标插入行）
-- **suggestion** 包含需追加的 exclusion/ignore 配置 + 验证命令，末尾 `[tool_eligible]`：
 
 SonarQube 使用内置规则库（6,500+），一般无需自定义规则。工具改进集中在**抑制误报**：
 
@@ -121,9 +111,6 @@ sonar.issue.ignore.multicriteria.e1.resourceKey=**/model/*.java
 
 ### JaCoCo 排除规则
 
-- **工具改进 issue 的 file**：`pom.xml`（现有文件，`line` 指 `jacoco-maven-plugin` 配置块行号）
-- **suggestion** 包含需追加的 `<exclude>` 配置片段 + 验证命令，末尾 `[tool_eligible]`：
-
 不需单元测试的类（包括但不限于：POJO / DTO / Lombok 注解类、`@Configuration` / `@ConfigurationProperties` 配置类、常量 / 枚举类、`@SpringBootApplication` 启动类、纯接口（无 default 方法）、生成代码）被覆盖率检查误报为"未覆盖"时，在 `jacoco-maven-plugin` 的 `<configuration><excludes>` 中追加 `<exclude>` 条目，排除范围与 SonarQube 覆盖率排除口径一一对应：
 
 ```xml
@@ -140,7 +127,7 @@ sonar.issue.ignore.multicriteria.e1.resourceKey=**/model/*.java
 
 ## 规则与 severity 映射
 
-| 来源 | 级别 | issue severity |
+| 来源 | 级别 | 严重级别 |
 |------|------|---------------|
 | ArchUnit 违规 | — | Medium |
 | PMD priority 1 | — | High |

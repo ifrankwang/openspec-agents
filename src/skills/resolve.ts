@@ -78,8 +78,3 @@ export function resolveSkillsForCapabilities(
 export function getEfficiencySkills(index: SkillTagIndex = scanSkillTags()): string[] {
   return index.tagMap.get("efficiency") || []
 }
-
-/** tool-improvement tag 命中的工具改进类 skill 名 */
-export function getToolImprovementSkills(index: SkillTagIndex = scanSkillTags()): string[] {
-  return index.tagMap.get("tool-improvement") || []
-}
