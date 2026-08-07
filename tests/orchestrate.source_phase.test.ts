@@ -9,9 +9,10 @@
  * A. tool 报源层 issue fixed → 清 verify_tool tag（无 dimension 不影响 quality 层）
  * B. task 报源层 issue fixed → 清 verify_tool + verify_task
  * C. quality 报源层 issue fixed（维度 dim）→ 清 verify_tool + 仅该 dim 的 verify_quality tag
- * D. quality 报源层 exempt（不改代码）→ 仅清该 dim 的 verify_quality tag（不动 verify_tool/verify_task）
+ * D. quality 报源层 exempt（不改代码）→ 不清任何维度 tag（exempt=接受现状，已 passed 维度保留）
  * E. task 报源层 exempt → 清 verify_tool + verify_task
- * I. 跨维归因：tool 报源层 issue 带 dimension → 修复后目标维 verify_quality tag 一并清（无论报源是谁）
+ * I. 跨维归因：tool 报源层 issue 带 dimension → fixed 后目标维 verify_quality tag 一并清（无论报源是谁）；
+ *    exempt 不清目标维 tag（I2）
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync, writeFileSync, rmSync } from "node:fs"
@@ -177,10 +178,10 @@ describe("sourcePhase C: quality 层 dim issue fixed 只清该 dim tag", () => {
   })
 })
 
-// ── Scene D: quality 层 exempt → 仅清该 dim tag（不改代码不动 verify_tool/verify_task）──
+// ── Scene D: quality 层 exempt → 不清维度 tag（exempt 不改代码，已 passed 维度保留）──
 
-describe("sourcePhase D: quality 层 exempt 仅清该 dim tag", () => {
-  test("quality exempt（dim=architecture）→ 仅 verify_quality:architecture 清，verify_tool/task 保留", async () => {
+describe("sourcePhase D: quality 层 exempt 不清维度 tag", () => {
+  test("quality exempt（dim=architecture）→ verify_tool/task 保留，verify_quality:architecture 也保留（exempt 不清维度 tag）", async () => {
     const root = `/tmp/sourcePhase-D-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -198,8 +199,8 @@ describe("sourcePhase D: quality 层 exempt 仅清该 dim tag", () => {
       // exempt 不改代码 → verify_tool/verify_task 保留
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
-      // 仅清该 dim
-      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBeUndefined()
+      // exempt 不触发 quality 维度 tag 清除 → 维度 tag 保留 passed（无实际待办的重复调度不再发生）
+      expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
@@ -392,6 +393,36 @@ describe("sourcePhase I: tool 跨维报 issue（带 dimension）→ dev 修复�
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
       expect(item.children.find((c: WorkItem) => c.externalId === "i1").phase).toBe("review")
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+// ── Scene I2: 跨维归因 exempt 镜像——tool 报源 + 显式 dimension + dev exempt → 目标维度 tag 保留 ──
+
+describe("sourcePhase I2: tool 跨维报 issue（带 dimension）→ dev exempt 不清目标维 verify_quality tag", () => {
+  test("tool reviewer 报 dimension=security 的 issue → exempt 后 verify_tool 清（谁提谁裁定）、verify_quality:security 保留（exempt 不改代码）", async () => {
+    const root = `/tmp/sourcePhase-I2-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      // tool 报源层 issue 带 dimension（跨维归因标签）
+      injectChild(wt, makeChild("i2", { metadata: { source_phase: "tool", dimension: "security", file: "src/i2.java", line: 12 } }))
+      seedReviewTags(wt)
+
+      const item0 = readItem(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["i2"], completed_task_ids: taskListOf(item0).map((t: any) => t.id) },
+        makeCtx("openspec-developer", wt)
+      )
+      const item = readItem(wt, CID)
+      // 报源层 tag 仍清：tool 报源 exempt 清 verify_tool——「谁提谁裁定」派发 tool reviewer 裁定豁免申请的通道，保持不动
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      // exempt 不触发维度 tag 清除 → 目标维 security 保留（此前 fixed 场景会清，exempt 不清）
+      expect(item.tags["verify_quality:openspec-reviewer-security"]).toBe("passed")
+      // 其余维度与 task 层保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+      expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

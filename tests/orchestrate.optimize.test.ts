@@ -10,7 +10,7 @@
  * B6   opx_status 视图（orchestrator 分派 / working / gate 三态）
  * B7/B9 verify_quality 维度 gate（5 维全推荐、提交后不再分派、全提交→done 终态）
  * B8   taskNumber 数字 ID 归一化（normalizeTaskIds）+ init base_branch
- * B10  dev 提交后 review 层按 issue sourcePhase 精化重置（resetReviewTagsOnFix 集成路径）
+ * B10  dev 提交后 review 层按 issue sourcePhase 精化重置（resetReviewTagsOnFix 集成路径）；blocked 豁免补交闭环视图（待裁定清单 + 补交指引）
  * B11  agentSummaries 会话摘要（metaOf 断言 + 视图渲染 + recovery 保留）
  * B12  new_children rule 透传（child.metadata.rule）
  *
@@ -26,7 +26,7 @@ import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loade
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
-  setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
+  setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, submitQualityPassed,
   taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS, rollbackQuality,
 } from "./helpers-workflow"
 
@@ -52,13 +52,20 @@ function rewriteItem(wt: string, mutate: (item: any) => void): void {
   writeFileSync(p, JSON.stringify(state, null, 2))
 }
 
-/** 注入 issue child（metadata 承载归因字段），返回 externalId。 */
+/** 注入 issue child（metadata 承载归因字段），返回 externalId。source 按 sourcePhase 映射为报源 agent，
+ *  对齐 buildIssueChild 的落盘形态（supplement 补交推导依赖 metadata.source）。 */
 function injectIssue(wt: string, overrides: Record<string, unknown>): string {
   const id = `inj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const sp = (overrides.sourcePhase as string) ?? "tool"
+  const dim = overrides.dimension as string | undefined
+  const source =
+    sp === "tool" ? "openspec-reviewer-tool"
+    : sp === "task" ? "openspec-reviewer-task"
+    : `openspec-reviewer-${dim ?? "style"}`
   rewriteItem(wt, (item) => {
     item.children.push({
       id: `issue:${id}`,
-      source: "openspec",
+      source: source,
       externalId: id,
       type: "issue",
       title: "注入 issue",
@@ -68,8 +75,9 @@ function injectIssue(wt: string, overrides: Record<string, unknown>): string {
       currentStep: null,
       tags: {},
       metadata: {
-        source_phase: (overrides.sourcePhase as string) ?? "tool",
-        ...(overrides.dimension !== undefined && overrides.dimension !== null ? { dimension: overrides.dimension as string } : {}),
+        source,
+        source_phase: sp,
+        ...(dim !== undefined && dim !== null ? { dimension: dim as string } : {}),
         file: overrides.file ?? "",
         line: overrides.line ?? 0,
         suggestion: overrides.suggestion ?? "",
@@ -723,7 +731,7 @@ describe("B7.5. verify_quality 聚合判定", () => {
       expect(back.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(back.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
 
-      // dev 仅豁免 style 层 issue（不改代码）→ reset 只清该维度 tag，verify_tool/verify_task 保留
+      // dev 仅豁免 style 层 issue（不改代码）→ exempt 不清维度 tag（style 已 failed 残留待重审），verify_tool/verify_task 保留
       const item0 = readItem(wt, CID)
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["7"], completed_task_ids: taskIdsOf(item0) },
@@ -732,10 +740,11 @@ describe("B7.5. verify_quality 聚合判定", () => {
       // 模拟编排将任务移回 verify_quality 恢复重审
       rewriteItem(wt, (item) => { item.phase = "review"; item.currentStep = "verify_quality" })
       const item = readItem(wt, CID)
-      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      // exempt 不触发维度 tag 清除：style 残留 failed（本维仍待重审），其余已 passed 维度保留
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("failed")
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
-      // 只重审失败维度：仅 style 可过 gate，其余已 passed 维度不可分派
+      // 只重审失败维度：仅 style（failed）可过 gate，其余已 passed 维度不可分派
       const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
       expect(styleView).toContain("# ✅ 当前轮到你执行")
       const archView = await status.execute({ change_id: CID }, ctx.dims["architecture"])
@@ -833,7 +842,7 @@ describe("B10. dev 提交后 review 层按报源层精化重置", () => {
     } finally { teardown(root) }
   })
 
-  test("dev 仅豁免 quality 层 issue → verify_tool/verify_task 保留；style 维度清空且可被分派", async () => {
+  test("dev 仅豁免 quality 层 issue → verify_tool/verify_task 与 quality 维度 tag 均保留；豁免裁定经补交路径派报源 reviewer", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
@@ -847,18 +856,67 @@ describe("B10. dev 提交后 review 层按报源层精化重置", () => {
       // 豁免不改代码：tool/task 层不重置
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBe("passed")
-      // 仅重置对应 quality 维度
-      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
+      // 豁免不清 quality 维度 tag：已 passed 的 style 维度保留（不再触发无实际待办的维度重复调度）
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       // 豁免申请标记落盘
       expect(item.children.find((c: any) => c.externalId === id).metadata["exempt_request"]).toBeDefined()
 
-      // 豁免裁定者（style reviewer）仍被分派；architecture 已 passed 不再分派
+      // 豁免裁定经补交路径派报源 reviewer（blockedSupplementAgents 基于 child 状态推导，不依赖维度 tag）；
+      // 维度 tag 已 passed，不触发「轮到你执行」的全量重审
       rewriteItem(wt, (it) => { it.phase = "review"; it.currentStep = "verify_quality" })
+      const orchView = await status.execute({ change_id: CID }, ctx.orch)
+      expect(orchView).toContain("分派子代理")
+      expect(orchView).toContain("openspec-reviewer-style")
       const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
-      expect(styleView).toContain("# ✅ 当前轮到你执行")
+      expect(styleView).not.toContain("# ✅ 当前轮到你执行")
       const archView = await status.execute({ change_id: CID }, ctx.dims["architecture"])
-      expect(archView).toContain("# ⛔ 阶段门禁")
+      expect(archView).not.toContain("# ✅ 当前轮到你执行")
+    } finally { teardown(root) }
+  })
+
+  test("B10 豁免补交闭环：blocked 被分派 reviewer 视图含待裁定豁免清单与补交指引；补交 dismissed+passed 解除推进", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 注入 style 报源豁免申请（todo + exempt_request 标记），报源 reviewer 应裁定
+      rewriteItem(wt, (item) => {
+        item.children.push({
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "不可修 issue", description: "第三方限制", phase: "todo", suspended: false,
+          currentStep: null, tags: {}, metadata: {
+            source: "openspec-reviewer-style", source_phase: "quality", dimension: "style",
+            exempt_request: { requestedBy: "openspec-developer" },
+          },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      // 5 维全 passed + 豁免申请未裁定 → 引擎 blocked → orchestrator 分派报源 style reviewer 补交裁定
+      await submitQualityPassed(ctx, CID)
+      const orchView = await status.execute({ change_id: CID }, ctx.orch)
+      expect(orchView).toContain("分派子代理：`openspec-reviewer-style`")
+
+      // 被分派 reviewer 的 blocked 视图渲染待裁定豁免清单 + 补交指引（修复前缺失 → reviewer 无据可依空转）
+      const styleView = await status.execute({ change_id: CID }, ctx.dims["style"])
+      expect(styleView).toContain("# ⛔ 当前 step 阻塞中，等待编排处理")
+      expect(styleView).toContain("本层待裁定豁免申请")
+      expect(styleView).toContain("Issue #7")
+      expect(styleView).toContain("exempt_adjudications")
+      expect(styleView).toContain('action: "dismissed"')
+      expect(styleView).toContain("自助恢复")
+      // 非报源维度 reviewer 不渲染他人豁免申请（谁提谁裁定）
+      const archView = await status.execute({ change_id: CID }, ctx.dims["architecture"])
+      expect(archView).toContain("# ⛔ 当前 step 阻塞中，等待编排处理")
+      expect(archView).not.toContain("本层待裁定豁免申请")
+
+      // 补交 dismissed + verdict=passed → 豁免解除 → 阻塞解除 → 正常推进 done
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
+        ctx.dims["style"]
+      )
+      const after = readItem(wt, CID)
+      expect(after.children.find((c: any) => c.externalId === "7").phase).toBe("cancelled")
+      expect(after.phase).toBe("done")
     } finally { teardown(root) }
   })
 })

@@ -38,7 +38,8 @@ export function resolveChildIssueFields(child: WorkItem): {
  * - fixed 中属 task 层 → 额外清 verify_task
  * - exempt 属 task 层 → 清 verify_tool + verify_task
  * - exempt 属 tool 层 → 清 verify_tool
- * - fixed/exempt 中属 quality 层且维度 dim → 只清 verify_quality 中 DIMENSION_AGENT_MAP[dim] 对应 agent 的 tag
+ * - fixed 中属 quality 层且维度 dim → 只清 verify_quality 中 DIMENSION_AGENT_MAP[dim] 对应 agent 的 tag
+ * - exempt 不清 quality 维度 tag：豁免=接受现状、不修改代码，已 passed 维度无需重审
  * - 豁免不改代码（exempt 无 tool/task 层）→ 不清 verify_tool/verify_task
  */
 export function resetReviewTagsOnFix(item: WorkItem, input: ResetReviewTagsInput): void {

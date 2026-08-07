@@ -153,6 +153,21 @@ describe("2. children 联动更新", () => {
     expect(JSON.stringify(item)).toBe(snapshot)
   })
 
+  test("exempt Info 级 issue → 抛错且 state 零变更（Info 不阻塞提交，无需豁免）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "todo", severity: "Info" }))
+    const snapshot = JSON.stringify(item)
+    expect(() => submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", exemptIds: ["c1"] })).toThrow(/Info 级 issue，不阻塞提交，无需申请豁免/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("exempt Info 级 issue 且非终态 → 抛错先于 applyAgentVerdict（verdict tag 未写入）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(child({ id: "c1", phase: "todo", severity: "Info" }))
+    expect(() => submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", exemptIds: ["c1"] })).toThrow(/Info 级 issue/)
+    expect(item.tags["implement:developer"]).toBeUndefined()
+  })
+
   test("newChildren 写入且同 id 去重", () => {
     const item = makeItem({ phase: "in_progress", currentStep: "implement" })
     const c1 = child({ id: "c1" })

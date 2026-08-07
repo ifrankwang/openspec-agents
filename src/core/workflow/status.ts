@@ -130,15 +130,21 @@ function renderTerminalPhase(item: WorkItem): string {
 
 /** blocked 视图：调用者若为当前 step 轮次 agent 用 blocked_agent 文案，否则用通用 blocked 文案。
  *  verify_* 层当前 agent 且存在本层待复核（review 态）blocking issue 时，列出待复核清单并给出
- *  recheck_adjudications 自助恢复指引（上次提交漏带复核导致门禁阻塞的可补交解除）。 */
+ *  recheck_adjudications 自助恢复指引（上次提交漏带复核导致门禁阻塞的可补交解除）；
+ *  存在本层调用者可裁定的豁免申请（待裁定）时同样列出并给出 exempt_adjudications 自助恢复指引
+ *  （rejected 须配 verdict=failed、dismissed 配 verdict=passed），两条阻塞解除路径均只对本层报源可见。 */
 function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: LoadedWorkflow, ctxAgent: string): string {
   const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
   const isCurrentAgent = step ? stepAgentIds(step).includes(ctxAgent) : false
   const reason = rec.blockedReason ?? "(未知)"
   if (isCurrentAgent) {
     const layer = step ? REVIEW_STEP_TO_LAYER[step.id] : undefined
+    const children = issueChildrenOf(item)
     const pendingRecheck = layer
-      ? issueChildrenOf(item).filter((c) => isAgentOwnedIssue(c, ctxAgent) && isBlockingSeverity(c.severity))
+      ? children.filter((c) => isAgentOwnedIssue(c, ctxAgent) && isBlockingSeverity(c.severity))
+      : []
+    const pendingExempt = layer
+      ? children.filter((c) => isAdjudicableExempt(c, layer, ctxAgent) && isBlockingSeverity(c.severity))
       : []
     const lines = [
       "# ⛔ 当前 step 阻塞中，等待编排处理",
@@ -147,17 +153,26 @@ function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: Load
       "",
     ]
     if (pendingRecheck.length > 0 && step) {
-      lines.push(`- **本层待复核 issue（${pendingRecheck.length} 个）**:`)
-      for (const c of pendingRecheck) {
-        const id = c.externalId ?? c.id.replace(/^issue:/, "")
-        lines.push(`  - Issue #${id} | ${formatSeverity(c.severity ?? "Info")}`)
-      }
-      lines.push("")
       lines.push(
-        `**自助恢复**：调用 \`opx_agent_submit({ step_id: "${step.id}", verdict: "passed", recheck_adjudications: [{ issue_id: "<上述 issue id>", verdict: "passed" }] })\` 补带复核结论重提；` +
-        `复核通过后自动推进。复核不通过则传 verdict=rejected 并附 reject_reason 驳回（issue 回待修复并累计修复未过次数）。`
+        ...renderBlockedAdjudicationBlock(
+          "本层待复核 issue",
+          pendingRecheck,
+          `调用 \`opx_agent_submit({ step_id: "${step.id}", verdict: "passed", recheck_adjudications: [{ issue_id: "<上述 issue id>", verdict: "passed" }] })\` 补带复核结论重提；` +
+            `复核通过后自动推进。复核不通过则传 verdict=rejected 并附 reject_reason 驳回（issue 回待修复并累计修复未过次数）。`,
+        ),
       )
-    } else {
+    }
+    if (pendingExempt.length > 0 && step) {
+      lines.push(
+        ...renderBlockedAdjudicationBlock(
+          "本层待裁定豁免申请",
+          pendingExempt,
+          `调用 \`opx_agent_submit({ step_id: "${step.id}", verdict: "passed", exempt_adjudications: [{ issue_id: "<上述 issue id>", action: "dismissed" }] })\` 补交豁免裁定解除阻塞；` +
+            `裁定 dismissed（认可豁免）时 verdict 配 passed，裁定 rejected（驳回=需修复）时 verdict 必须配 failed（审查不能判定通过）。`,
+        ),
+      )
+    }
+    if (pendingRecheck.length === 0 && pendingExempt.length === 0) {
       lines.push("你属于当前轮次角色，请勿自行推进，等待编排者解除阻塞后重新查询状态。")
     }
     lines.push("")
@@ -169,6 +184,17 @@ function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: Load
     `- **原因**: ${reason}`,
     "",
   ].join("\n")
+}
+
+/** blocked 视图裁定区块渲染：清单（Issue #id | severity）+ 自助恢复指引，children 为空时返回空数组。 */
+function renderBlockedAdjudicationBlock(title: string, children: WorkItem[], guidance: string): string[] {
+  const lines = [`- **${title}（${children.length} 个）**:`]
+  for (const c of children) {
+    const id = c.externalId ?? c.id.replace(/^issue:/, "")
+    lines.push(`  - Issue #${id} | ${formatSeverity(c.severity ?? "Info")}`)
+  }
+  lines.push("", `**自助恢复**：${guidance}`, "")
+  return lines
 }
 
 function renderTerminal(rec: EngineRecommendation): string {
@@ -598,6 +624,16 @@ function isTaskAdjudicable(child: WorkItem): boolean {
 function isQualityAdjudicable(child: WorkItem, dimension: Dimension | undefined): boolean {
   if (child.metadata["exempt_request"] === undefined || !dimension) return false
   return agentToReviewDimension(readIssueSource(child) ?? "") === dimension
+}
+
+/** blocked 视图待裁定豁免判定：按当前 step 层路由到「谁提谁裁定」判定（tool/task 按报源层、quality 按报源维度）。
+ *  与 isAgentOwnedIssue 互补：带 exempt_request 标记的 review 态项被主区块排除（isAgentOwnedIssue 返回 false），
+ *  但仍是本层调用者可裁定的豁免申请（blocked 补交路径，blockedSupplementAgents 据此派发报源 reviewer）。 */
+function isAdjudicableExempt(child: WorkItem, layer: string, ctxAgent: string): boolean {
+  if (layer === "quality") return isQualityAdjudicable(child, agentToDimension(ctxAgent))
+  if (layer === "tool") return isToolAdjudicable(child)
+  if (layer === "task") return isTaskAdjudicable(child)
+  return false
 }
 
 /** issue 主区块归属判定（单一事实源）：某 agent 该看到哪些 issue。

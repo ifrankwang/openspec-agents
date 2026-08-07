@@ -399,6 +399,78 @@ describe("G9. 豁免裁定非法参数", () => {
   })
 })
 
+// ── G9.1: Info 级 issue 禁止申请豁免 ──
+
+describe("G9.1. Info 级 issue 禁止申请豁免", () => {
+  test("dev 对 Info 级 issue 提交 exempt_issue_ids → 抛错且 state 不变（Info 不阻塞提交，无需豁免）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      injectIssue(wt, { id: "8", sourcePhase: "quality", dimension: "style", severity: "Info", description: "建议项" })
+      const before = JSON.stringify(readItem(wt, CID).children)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["8"], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+          ctx.dev
+        ),
+        /Info 级 issue，不阻塞提交，无需申请豁免/
+      )
+      expect(JSON.stringify(readItem(wt, CID).children)).toBe(before)
+    } finally { teardown(root) }
+  })
+})
+
+// ── G9.2: 豁免裁定组合守卫（rejected + passed 禁止）──
+
+describe("G9.2. 豁免裁定组合守卫", () => {
+  test("exempt_adjudications 含 rejected + verdict=passed → 抛错且 child 不变（驳回的 issue 需修复，审查不能判定通过）", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupExemptRequest(wt)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "rejected" }] },
+          makeCtx("openspec-reviewer-style", wt)
+        ),
+        /被驳回（rejected）[\s\S]*verdict 必须为 failed/
+      )
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("review")
+      expect(child.metadata["exempt_request"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("exempt_adjudications 含 dismissed + verdict=passed → 正常裁定（dismissed→cancelled）并推进", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupExemptRequest(wt)
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      expect(r).toContain("提交成功")
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("cancelled")
+      expect(child.metadata["exempt_request"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+
+  test("exempt_adjudications 含 rejected + verdict=failed → 合法裁定（rejected→todo 回退待修复）", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupExemptRequest(wt)
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "failed", exempt_adjudications: [{ issue_id: "7", action: "rejected" }] },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      expect(r).toContain("提交成功")
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("todo")
+      expect(child.metadata["exempt_request"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+})
+
 // ── G10: 谁提谁裁定守卫 ──
 
 describe("G10. 谁提谁裁定守卫", () => {

@@ -1,7 +1,7 @@
 import type { WorkItem, WorkItemPhase, StepConfig, StepAdjudication } from "./types.js"
 import { stepAgentIds } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
-import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase } from "./engine.js"
+import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase, isInfoSeverity } from "./engine.js"
 import { issueChildrenOf, taskChildrenOf } from "../task-children.js"
 import { readIssueSource } from "../constants.js"
 
@@ -149,12 +149,18 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
 
   // 终态 issue 豁免守卫：done/cancelled 已终态的 issue 不允许重新申请豁免（防止已 cancelled 的 issue
   // 被重复申请豁免、rejected 复活已豁免 issue）。校验在一切状态写入（applyAgentVerdict）之前，抛错零副作用。
+  // Info 级 issue 豁免守卫（纵深防御，与 agentSubmitExecute 入口校验同语义）：Info 级不阻塞任何流程，
+  // 豁免无意义。本分支仅处理「新申请」（写入 exempt_request 标记），不触及存量带 exempt_request 标记的
+  // Info issue 裁定路径（adjudicateExempt 不受影响）。
   for (const id of input.exemptIds ?? []) {
     const child = childById.get(id)
     if (child && isTerminalPhase(child.phase)) {
       throw new Error(
         `豁免申请失败：issue "${child.id}" 当前 phase 为 "${child.phase}"（终态），不允许对已终态的 issue 重新申请豁免。`
       )
+    }
+    if (child && isInfoSeverity(child.severity)) {
+      throw new Error(`豁免申请失败：issue "${child.id}" 为 Info 级 issue，不阻塞提交，无需申请豁免。`)
     }
   }
 

@@ -8,7 +8,7 @@ import {
 import {
   createInitialWorkItem, checkpointTriggered,
   applyCheckpointContinue, applyCheckpointGiveup,
-  getStepVerdict, clearStepTags, isBlockingSeverity, isTerminalPhase,
+  getStepVerdict, clearStepTags, isBlockingSeverity, isInfoSeverity, isTerminalPhase,
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
 import { agentToReviewDimension, readIssueSource } from "../constants.js"
@@ -121,7 +121,9 @@ function addItemBlockers(item: WorkItem, raw: NonNullable<AgentSubmitParams["blo
   item.metadata["blockers"] = list
 }
 
-/** 汇总 fixed/exempt issue 的归因分层（报源层 + quality 维度），供 resetReviewTagsOnFix 使用。 */
+/** 汇总 fixed/exempt issue 的归因分层（报源层 + quality 维度），供 resetReviewTagsOnFix 使用。
+ *  fixed（实际修改代码）触发 quality 维 tag 清除（含显式声明维度的跨维归因标签）；exempt（豁免=接受现状、
+ *  不修改代码）不触发 quality 维 tag 清除——已 passed 的维度无需因豁免重审。 */
 function collectFixedExemptLayers(
   item: WorkItem,
   fixedIds: string[],
@@ -130,8 +132,9 @@ function collectFixedExemptLayers(
   const fixedSourcePhases = new Set<string>()
   const exemptSourcePhases = new Set<string>()
   const touchedQualityDims = new Set<string>()
-  /** 归因维 tag 纳入：报源层为 quality（本维 issue，含缺省维度）或显式声明了维度（tool/task 跨维归因标签）
-   *  都计入——跨维 issue 修复后目标维 verify_quality tag 须清，否则回退重审期该维恒 failed 永不分派（死锁）。 */
+  /** 归因维 tag 纳入（仅 fixed）：报源层为 quality（本维 issue，含缺省维度）或显式声明了维度（tool/task 跨维归因标签）
+   *  都计入——跨维 issue 修复后目标维 verify_quality tag 须清，否则回退重审期该维恒 failed 永不分派（死锁）。
+   *  exempt 不调用本函数：豁免不改代码，清除维度 tag 会触发无实际待办的重复调度。 */
   const touchQualityDim = (child: WorkItem): void => {
     const f = resolveChildIssueFields(child)
     const declaredDim = (REVIEW_DIMENSIONS as readonly string[]).includes(child.metadata["dimension"] as string)
@@ -156,8 +159,9 @@ function collectFixedExemptLayers(
   for (const id of exemptIds) {
     const child = resolveChildByIssueId(item, id)
     if (!child) continue
+    // 报源层 tag 语义保留（tool/task 报源 exempt 仍清本层 tag——「谁提谁裁定」派发报源 reviewer 裁定豁免申请的通道），
+    // 但不触发 touchQualityDim：exempt 不改代码，quality 维度 tag 保留 passed。
     exemptSourcePhases.add(resolveChildIssueFields(child).sourcePhase)
-    touchQualityDim(child)
   }
   return {
     fixedSourcePhases: [...fixedSourcePhases],
@@ -471,8 +475,14 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       }
     }
     for (const id of params.exempt_issue_ids ?? []) {
-      if (!resolveChildByIssueId(item, id)) {
+      const child = resolveChildByIssueId(item, id)
+      if (!child) {
         throw new Error(`exempt_issue_ids 中包含无效 issue id: "${id}"。\n可用 issue ID: ${availableIssueIds()}`)
+      }
+      // Info 级 issue 不阻塞任何流程，豁免无意义且白耗一轮申报/裁定：developer 提交豁免申请的唯一入口在此拦截。
+      // 存量的已带 exempt_request 标记的 Info issue 不受影响（adjudicateExempt 裁定路径不经过此处）。
+      if (isInfoSeverity(child.severity)) {
+        throw new Error(`豁免申请失败：issue "${child.id}" 为 Info 级 issue，不阻塞提交，无需申请豁免。`)
       }
     }
     for (const id of params.recheck_adjudications?.map((a) => a.issue_id) ?? []) {
@@ -496,6 +506,19 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       !isSupplementOnly(params)
     ) {
       throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
+    }
+
+    // 豁免驳回（rejected）与 passed 组合守卫：rejected 的 issue 回 todo（非终态），verify_quality 门禁要求
+    // 本层 blocking issue 终态，rejected+passed 会静默死锁（stepCanPass=false 且无补交推导）。驳回意味着该
+    // issue 需修复，审查不能判定通过，verdict 必须为 failed。dismissed+passed 是合法组合（裁定完成且维度通过），
+    // 不受此守卫限制。守卫在一切裁定（adjudicateExempt）之前执行，保证拒绝时零副作用（含混合裁定清单）。
+    if (params.verdict === "passed") {
+      const rejected = params.exempt_adjudications?.find((adj) => adj.action === "rejected")
+      if (rejected) {
+        throw new Error(
+          `豁免裁定失败：issue "${rejected.issue_id}" 被驳回（rejected），该 issue 需修复，verdict 必须为 failed，不能以 passed 提交。`
+        )
+      }
     }
 
     // 先裁定豁免申请（越权/不可路由/跨维抛错）：submitForStep 尚未执行，保证越权裁定零副作用。
