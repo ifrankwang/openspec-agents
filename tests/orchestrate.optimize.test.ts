@@ -430,16 +430,14 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
 
       // 剩余 3 个 pending 维度 reviewer 依次提交 passed：聚合等待期停在 verify_quality
       for (const d of ["performance", "security"]) {
-        const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
-        expect(r).toContain("- **推进**: 否")
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
         expect(readItem(wt, CID).currentStep).toBe("verify_quality")
       }
       // 最后一维提交 → 全部维度已 passed → 聚合推进 done（task children 经 driveToQuality 已终态）
-      const last = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed" },
         ctx.dims["maintainability"]
       )
-      expect(last).toContain("- **推进**: 是")
       item = readItem(wt, CID)
       expect(item.phase).toBe("done")
       expect(item.currentStep).toBeNull()
@@ -677,13 +675,11 @@ describe("B7.5. verify_quality 聚合判定", () => {
       // 聚合等待：单维 failed 不触发回退，其余维度仍可提交
       expect(readItem(wt, CID).currentStep).toBe("verify_quality")
       for (const d of ["architecture", "performance", "security"]) {
-        const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
-        expect(r).toContain("- **推进**: 否")
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
         expect(readItem(wt, CID).currentStep).toBe("verify_quality")
       }
       // 最后一个维度提交 → 全部已裁决 → 聚合回退 implement
-      const last = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
-      expect(last).toContain("- **推进**: 是")
+      await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -698,10 +694,8 @@ describe("B7.5. verify_quality 聚合判定", () => {
         await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
         expect(readItem(wt, CID).currentStep).toBe("verify_quality")
       }
-      const last = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["security"])
-      expect(last).toContain("- **推进**: 否")
-      const done = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
-      expect(done).toContain("- **推进**: 是")
+      await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["security"])
+      await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
       expect(readItem(wt, CID).phase).toBe("done")
     } finally { teardown(root) }
   })

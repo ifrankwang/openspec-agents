@@ -32,7 +32,7 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
       const { item: preTask } = await driveToVerifyTask(wt, CID)
 
       // verify_task 驳回 task 1 并报 task 层 Low issue（作为 failed 不通过理由 + 供 dev 修复归因）
-      const rReject = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "failed",
           verified_tasks: taskListOf(preTask).filter((t: any) => t.id !== "1").map((t: any) => t.id),
@@ -44,7 +44,6 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
         },
         ctx.taskR
       )
-      expect(rReject).toContain("failed")
 
       let item = taskItemOf(readState(wt, CID)!)
       let t1 = taskListOf(item).find((t: any) => t.id === "1")
@@ -56,25 +55,23 @@ describe("修复项2+3: implement/verify_task 后 rejectReason 清除", () => {
 
       // dev 重提被驳回的 task + 修复 task 层 issue → status submitted + rejectReason 清除；
       // resetReviewTagsOnFix 按归因清 verify_tool + verify_task（可重提，重复提交守卫放行）
-      const rDev = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1"], fixed_issue_ids: ["tk1"] },
         ctx.dev
       )
-      expect(rDev).toContain("passed")
       item = taskItemOf(readState(wt, CID)!)
       t1 = taskListOf(item).find((t: any) => t.id === "1")
       expect(t1.status).toBe("submitted")
       expect(t1.rejectReason).toBeNull()
 
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
-      const rVerify = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed",
           verified_tasks: taskListOf(taskItemOf(readState(wt, CID)!)).map((t: any) => t.id),
         },
         ctx.taskR
       )
-      expect(rVerify).toContain("passed")
       item = taskItemOf(readState(wt, CID)!)
       t1 = taskListOf(item).find((t: any) => t.id === "1")
       expect(t1.status).toBe("verified")

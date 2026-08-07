@@ -183,7 +183,7 @@ describe("W3. agent_submit(verify_quality) 并发写锁", () => {
       await driveToQuality(wt, CID)
       expect(taskItemOf(wt).currentStep).toBe("verify_quality")
 
-      const [r1, r2] = await Promise.all([
+      await Promise.all([
         agent_submit.execute({
           change_id: CID, step_id: "verify_quality", verdict: "passed",
           new_children: [{ id: "7", title: "style", description: "Style 并发 issue", severity: "Info", dimension: "style" }],
@@ -193,9 +193,6 @@ describe("W3. agent_submit(verify_quality) 并发写锁", () => {
           new_children: [{ id: "8", title: "arch", description: "Arch 并发 issue", severity: "Info", dimension: "architecture" }],
         }, ctx.dims["architecture"]),
       ])
-
-      expect(r1).toContain("passed")
-      expect(r2).toContain("passed")
 
       // 两个维度 verdict 均落盘，无丢失
       const item = taskItemOf(wt)
@@ -216,11 +213,10 @@ describe("W3. agent_submit(verify_quality) 并发写锁", () => {
       const ctx = await setupToAnalyze(wt, CID)
       await driveToQuality(wt, CID)
 
-      const first = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed" },
         ctx.dims["style"]
       )
-      expect(first).toContain("passed")
 
       await expect(
         agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["style"])
@@ -623,10 +619,8 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     const wtPath = taskItemOf(wt).metadata["worktree_path"]
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    const result = await archSubmit(wt)
+    await archSubmit(wt)
 
-    expect(result).toContain("已将主仓库污染文档并入 worktree 分支")
-    expect(result).toContain("- `openspec/changes/cid/design.md`")
     expect(fakeGit.commitShas.length).toBe(1)
     const pollSha = fakeGit.commitShas[0]
     expect(fakeGit.callLog.some((l) => l.includes(`merge --no-ff ${pollSha}`))).toBe(true)
@@ -678,9 +672,8 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/new.md"])
 
-    const result = await archSubmit(wt)
+    await archSubmit(wt)
 
-    expect(result).toContain("- `openspec/changes/cid/new.md`")
     expect(fakeGit.commitShas.length).toBe(1)
     expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
     expect(fakeGit.callLog.some((l) => l.includes("restore --staged --worktree"))).toBe(true)
@@ -721,7 +714,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("成功路径：worktree HEAD 前进、main 分支 ref 不变、main 工作树恢复、返回体含 markdown 列表", async () => {
+  test("成功路径：worktree HEAD 前进、main 分支 ref 不变、main 工作树恢复、污染文档并入分支", async () => {
     const root = `/tmp/wts-w9f-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -729,12 +722,11 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    const result = await archSubmit(wt)
+    await archSubmit(wt)
 
     expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
     expect(fakeGit.callLog.some((l) => l.startsWith("checked:update-ref") || l.startsWith("checked:branch -f"))).toBe(false)
     expect(fakeGit.callLog.some((l) => l.includes(`restore --staged --worktree -- openspec/changes/${CID}`))).toBe(true)
-    expect(result).toContain("- `openspec/changes/cid/design.md`")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -788,9 +780,8 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state))
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    const result = await archSubmit(wt)
+    await archSubmit(wt)
 
-    expect(result).toContain("已将主仓库污染文档并入 worktree 分支")
     expect(fakeGit.commitShas.length).toBe(1)
     expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
 

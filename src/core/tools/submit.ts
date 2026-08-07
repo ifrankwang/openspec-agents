@@ -4,7 +4,6 @@ import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
 import {
   submitForStep, adjudicateExempt, adjudicateRecheck, assertSubmitRouting,
-  type SubmitResult,
 } from "../workflow/submit.js"
 import {
   createInitialWorkItem, checkpointTriggered,
@@ -76,38 +75,8 @@ function resolveTaskWorkItem(state: OrchestrateState): WorkItem {
   return item
 }
 
-/** 渲染提交结果 markdown：step 裁决、是否推进、当前 phase、children 状态摘要。 */
-function renderSubmitResult(item: WorkItem, result: SubmitResult, extraUpdated: string[] = []): string {
-  const allUpdated = [...new Set([...result.childrenUpdated, ...extraUpdated])]
-  const lines = [
-    `- **step**: \`${result.stepId}\``,
-    `- **agent**: \`${result.agentKey}\``,
-    `- **verdict**: ${result.verdict}`,
-    `- **stepAdjudication**: ${result.stepAdjudication}`,
-    `- **推进**: ${result.advanced ? `是 → ${result.transitionTarget ?? "(终态)"}` : "否"}`,
-    `- **当前 phase**: ${item.phase}`,
-  ]
-  if (!result.advanced && result.reason) {
-    lines.push(`- **推进阻塞原因**: ${result.reason}`)
-  }
-  if (allUpdated.length > 0) {
-    lines.push("- **children 变更**:")
-    for (const id of allUpdated) {
-      const child = item.children.find((c) => c.id === id || c.externalId === id)
-      const phase = child?.phase ?? "?"
-      const exemptMark = child?.metadata["exempt_request"] ? "（exempt_request 已标记）" : ""
-      lines.push(`  - ${id} → ${phase}${exemptMark}`)
-    }
-  }
-  // 未终态 issue children 摘要（task child 不混入——子任务进度由 task 语义承载）
-  const pendingChildren = item.children.filter(
-    (c) => c.type !== "task" && c.phase !== "done" && c.phase !== "cancelled"
-  )
-  if (pendingChildren.length > 0) {
-    lines.push(`- **未终态 children**: ${pendingChildren.map((c) => c.id).join("、")}`)
-  }
-  return lines.join("\n")
-}
+/** 正常提交路径的固定返回体：提交状态与推进详情对子代理无意义，仅告知提交成功并结束会话。 */
+const SUBMIT_OK_MESSAGE = "提交成功，请直接结束当前会话"
 
 // ─── M1a 参数面处理：task children / metadata.blockers / 分层重置 ───
 
@@ -540,7 +509,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     // 复核已修复待复核（review 态）issue：passed→done，rejected→todo + refix_count + reject_reason。
     // 谁提谁裁定，越权/非 review 态/缺驳回原因抛错零副作用，先于 submitForStep 执行使门禁按新 phase 判定。
-    const recheckUpdated: string[] = []
     for (const adj of params.recheck_adjudications ?? []) {
       const child = resolveChildByIssueId(item, adj.issue_id)
       if (!child) {
@@ -552,7 +520,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         verdict: adj.verdict,
         rejectReason: adj.reject_reason,
       })
-      recheckUpdated.push(child.id)
     }
 
     // 路由/归属校验前置（与 submitForStep 共用），越权/错 step 在参数处理前拦截。
@@ -621,7 +588,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       handleImplementParams(item, params)
     }
 
-    const { accepted, dedupedCount } = dedupeNewChildren(item, newChildren)
+    const { accepted } = dedupeNewChildren(item, newChildren)
 
     // verdict=failed 必须有具体不通过理由：理由判定在去重之后，仅依据实际接受的 new_children——
     // 重复新报（或与既有 child 同 key 被去重）不构成不通过理由，避免守卫放行但实际零新增 issue。
@@ -637,7 +604,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       )
     }
 
-    const result = submitForStep(item, workflow, {
+    submitForStep(item, workflow, {
       stepId: params.step_id,
       agentKey: ctx.agent,
       verdict: params.verdict,
@@ -648,7 +615,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     // arch_submit 主仓库污染文档自动合并兜底（56ddfe9 意图）：analyze step（架构师）以 passed 提交后，
     // 若主仓库本 change 目录下存在未提交 openspec 文档污染，并入 worktree 分支并清理主仓库工作树。
-    let reconciledFiles: string[] = []
     if (
       stepPhase === "todo" &&
       params.step_id === "analyze" &&
@@ -657,7 +623,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       typeof item.metadata["branch_name"] === "string"
     ) {
       const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : null
-      reconciledFiles = await reconcileMainPollution(ctx.worktree, wtPath, {
+      await reconcileMainPollution(ctx.worktree, wtPath, {
         changeId: state.changeId,
         baseRef,
       })
@@ -675,12 +641,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     }
 
     await writeState(ctx.worktree, state)
-    const dedupNote = dedupedCount > 0 ? `\n${dedupedCount} 个重复 issue 已自动跳过。` : ""
-    const reconciledSuffix = reconciledFiles.length > 0
-      ? "\n\n已将主仓库污染文档并入 worktree 分支并清理主仓库工作树：\n" +
-        reconciledFiles.map((f) => `- \`${f}\``).join("\n")
-      : ""
-    return renderSubmitResult(item, result, recheckUpdated) + dedupNote + reconciledSuffix
+    return SUBMIT_OK_MESSAGE
   } finally {
     releaseLock(lockPath)
   }

@@ -59,7 +59,7 @@ describe("blocker 生命周期", () => {
       expect(err.message).toMatch(/未解决的 blocker/)
 
       // blocker_updates 置 resolved → passed 推进
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "analyze", verdict: "passed",
           execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },
@@ -67,7 +67,6 @@ describe("blocker 生命周期", () => {
         },
         ctx.arch
       )
-      expect(r).toContain("- **推进**: 是 → implement")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -101,14 +100,13 @@ describe("blocker 生命周期", () => {
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/仅支持 verdict=failed/)
 
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "implement", verdict: "failed",
           blocker: { source_role: "developer", category: "infra", description: "构建环境异常", evidence: "CI 日志", attempted_actions: "已重试" },
         },
         ctx.dev
       )
-      expect(r).toContain("- **推进**: 是")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("todo")
       expect(item.currentStep).toBe("analyze")
@@ -189,7 +187,7 @@ describe("blocker 生命周期", () => {
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
         ctx.arch
       )
-      expect(r).toContain("- **推进**: 是 → implement")
+      expect(r).toContain("提交成功")
       const item = readItem(wt, CID)
       expect(blockersOf(item).every((b: any) => b.status === "resolved")).toBe(true)
     } finally { teardown(root) }

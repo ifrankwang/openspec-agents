@@ -540,7 +540,7 @@ describe("G15. 豁免完整性门禁", () => {
     const { wt, root } = fresh()
     try {
       await setupExemptRequest(wt)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed" },
         makeCtx("openspec-reviewer-style", wt)
       )
@@ -549,7 +549,6 @@ describe("G15. 豁免完整性门禁", () => {
       const child = item.children.find((c: any) => c.externalId === "7")
       expect(child.phase).toBe("review")
       expect(child.metadata["exempt_request"]).toBeDefined()
-      expect(r).toContain("- **推进**: 否")
     } finally { teardown(root) }
   })
 })
@@ -561,14 +560,13 @@ describe("G16. 层失败回退 implement", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
           new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )
-      expect(r).toContain("- **推进**: 是")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -668,14 +666,13 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
           new_children: [{ id: "7", title: "Tool issue", description: "d", severity: "Low", dimension: "style" }],
         },
         ctx.toolR
       )
-      expect(r).toContain("- **推进**: 是")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -705,7 +702,7 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "failed",
           verified_tasks: ["1", "2"], failed_tasks: [{ task_id: "3", reason: "验收未过" }],
@@ -713,7 +710,6 @@ describe("G20. passed=false 守卫放宽 + 分层重置", () => {
         },
         makeCtx("openspec-reviewer-task", wt)
       )
-      expect(r).toContain("- **推进**: 是")
       expect(readItem(wt, CID).currentStep).toBe("implement")
     } finally { teardown(root) }
   })
@@ -784,8 +780,7 @@ describe("G22. review failed 必须带不通过理由", () => {
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
       injectIssue(wt, { id: "9", sourcePhase: "tool", dimension: "style", severity: "Low", description: "遗留工具层问题" })
-      const r = await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed" }, ctx.toolR)
-      expect(r).toContain("- **推进**: 是")
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "failed" }, ctx.toolR)
       expect(readItem(wt, CID).currentStep).toBe("implement")
     } finally { teardown(root) }
   })
@@ -795,11 +790,10 @@ describe("G22. review failed 必须带不通过理由", () => {
     try {
       const { ctx } = await driveToVerifyTask(wt, CID)
       injectIssue(wt, { id: "9", sourcePhase: "task", dimension: "style", severity: "Low", description: "遗留任务层问题" })
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "verify_task", verdict: "failed", verified_tasks: ["1", "2", "3"] },
         ctx.taskR
       )
-      expect(r).toContain("- **推进**: 是")
       expect(readItem(wt, CID).currentStep).toBe("implement")
     } finally { teardown(root) }
   })
@@ -815,7 +809,7 @@ describe("G22. review failed 必须带不通过理由", () => {
       )
       // 归属本维的遗留阻塞 → architecture 维 failed 合法（聚合等待，不立即回退）
       const r = await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "failed" }, ctx.dims["architecture"])
-      expect(r).toContain("- **推进**: 否")
+      expect(r).toContain("提交成功")
     } finally { teardown(root) }
   })
 })
@@ -849,11 +843,10 @@ describe("G21. implement completed_task_ids 校验", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToImplement(wt, CID)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         ctx.dev
       )
-      expect(r).toContain("- **推进**: 是 → verify_tool")
       expect(taskListOf(readItem(wt, CID)).every((t: any) => t.status === "submitted")).toBe(true)
     } finally { teardown(root) }
   })
@@ -864,7 +857,7 @@ describe("G21. implement completed_task_ids 校验", () => {
       const { ctx } = await driveToVerifyTool(wt, CID)
       rewriteItem(wt, (item) => { item.phase = "in_progress"; item.currentStep = "implement" })
       const r = await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed" }, ctx.dev)
-      expect(r).toContain("- **推进**: 是 → verify_tool")
+      expect(r).toContain("提交成功")
     } finally { teardown(root) }
   })
 

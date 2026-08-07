@@ -60,14 +60,13 @@ describe("N1. issue id # 前缀归一化", () => {
 
       // dev 用 # 前缀修复
       const item1 = taskItemOf(readState(wt, CID)!)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "implement", verdict: "passed",
           completed_task_ids: taskIdsOf(item1), fixed_issue_ids: ["#7"],
         },
         ctx.dev
       )
-      expect(r).toContain("passed")
       const item = taskItemOf(readState(wt, CID)!)
       const child = item.children.find((c: any) => c.externalId === "7")
       expect(child.phase).toBe("review")
@@ -176,11 +175,10 @@ describe("N2. taskNumber 映射", () => {
         ctx.arch
       )
 
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1.1", "1.2"] },
         ctx.dev
       )
-      expect(r).toContain("passed")
       const item = taskItemOf(readState(wt, CID)!)
       expect(taskListOf(item).every((t: any) => t.status === "submitted")).toBe(true)
     } finally { teardown(root) }
@@ -202,11 +200,10 @@ describe("N2. taskNumber 映射", () => {
       )
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
 
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1.1", "1.2"] },
         ctx.taskR
       )
-      expect(r).toContain("passed")
       const item = taskItemOf(readState(wt, CID)!)
       expect(taskListOf(item).every((t: any) => t.status === "verified")).toBe(true)
     } finally { teardown(root) }

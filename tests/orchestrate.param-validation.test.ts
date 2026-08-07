@@ -364,11 +364,10 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "failed", new_children: [{ id: "7", title: "风格遗留", description: "d", severity: "Low" }] },
         ctx.dims["style"]
       )
-      expect(r).toContain("推进")
       const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
       expect(child.metadata["dimension"]).toBe("style")
       expect(child.metadata["source"]).toBe("openspec-reviewer-style")
@@ -400,14 +399,14 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
       })
       writeFileSync(p, JSON.stringify(state, null, 2))
 
-      const r = await agent_submit.execute(
+      await agent_submit.execute(
         {
           change_id: CID, step_id: "implement", verdict: "passed",
           fixed_issue_ids: ["#99"], completed_task_ids: taskIdsOf(readItem(wt, CID)),
         },
         ctx.dev
       )
-      expect(r).toContain("99 → review")
+      expect(readItem(wt, CID).children.find((c: any) => c.externalId === "99").phase).toBe("review")
     } finally { teardown(root) }
   })
 })
