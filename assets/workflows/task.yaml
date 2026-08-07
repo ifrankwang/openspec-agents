@@ -37,11 +37,11 @@ phases:
           - "校验设计文档与任务前提的一致性，评估架构模式合规性"
           - "输出执行边界：allowed_directories（含测试目录）与 allowed_packages 白名单，notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空"
           - "存在缺口时提交 blocker（category: architecture_design / info_gap），不以假设替代确认"
-          - "需用户确认的缺口以 blocker 提交（正常模式由编排者向用户确认，无人值守模式由编排者自动裁决），答复后经 blocker_updates 置 resolved，全部 blocker 处理完毕后再提交"
-          - "存在未解决 blocker 时无法以 passed 提交，先经 blocker_updates 逐条置 resolved（附用户答复）"
+          - "需用户拍板的问题由你直接确认，不提交用户确认型 blocker：有人值守时用 question 工具向用户提问（拿到答复当场继续，不留档）；无人值守时（依据视图「确认模式」标识）自行选择最优解继续。确认/裁决后当场继续执行，本轮未干完下一轮重新确认"
+          - "存在未解决 blocker 时无法以 passed 提交，先经 blocker_updates 逐条置 resolved（user_response 填确认/裁决结论）后再提交"
           - "提交 opx_agent_submit，必传参数 execution_boundary"
         constraints:
-          - "工具调用边界：仅可调用 opx_status 与 opx_agent_submit"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需用户拍板时使用）"
           - "只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节"
           - "仅可 edit 修复 md 文档；设计/架构验证问题与信息缺口一律走 blocker"
   - name: in_progress

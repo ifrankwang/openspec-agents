@@ -461,7 +461,7 @@ function renderAgentWorking(
   lines.push(...renderStepSemantics(step, common, stepCtx))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
-  lines.push(...renderStepContext(item, step, ctxAgent))
+  lines.push(...renderStepContext(item, step, ctxAgent, state))
   lines.push(...renderSkillSuggestions(ctxAgent, caps))
   lines.push("## 操作指引", "")
   let n = 0
@@ -504,11 +504,12 @@ function stepContextKind(stepId: string): StepContextKind | undefined {
 }
 
 /** 按 step 渲染动态上下文：由 step.id 推导渲染类型（未命中优雅降级返回空数组）。 */
-function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: string): string[] {
+function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: string, state: OrchestrateState): string[] {
   if (!step) return []
   const lines: string[] = []
   switch (stepContextKind(step.id)) {
     case "analyze":
+      lines.push(...renderAnalyzeMode(state))
       lines.push(...renderAnalyzeBlockers(item))
       break
     case "implement":
@@ -561,6 +562,19 @@ function readExecutionBoundary(item: WorkItem): ExecutionBoundary | null {
   return typeof raw === "object" && raw !== null ? (raw as ExecutionBoundary) : null
 }
 
+/** analyze step：确认模式渲染（有人值守/无人值守），架构师据此判断直接向用户确认还是自行裁决。 */
+function renderAnalyzeMode(state: OrchestrateState): string[] {
+  const unattended = state.unattended === true
+  return [
+    "## 确认模式",
+    "",
+    unattended
+      ? "- 当前：**无人值守**——不向用户提问，自行选择最优解继续"
+      : "- 当前：**有人值守**——可直接向用户确认（需用户拍板时）",
+    "",
+  ]
+}
+
 /** analyze step：blocker 清单（awaiting_user/resolved）+ 处理指引。 */
 function renderAnalyzeBlockers(item: WorkItem): string[] {
   const blockers = readBlockers(item)
@@ -579,7 +593,7 @@ function renderAnalyzeBlockers(item: WorkItem): string[] {
   }
   lines.push("")
   if (blockers.some((b) => b.status !== "resolved")) {
-    lines.push("> 存在未解决 blocker：analyze step 无法以 passed 提交。请先通过 `opx_agent_submit` 的 blocker_updates 逐条置 resolved（附用户答复）后再提交。", "")
+    lines.push("> 存在未解决 blocker：analyze step 无法以 passed 提交。请先经 blocker_updates 逐条置 resolved（user_response 填确认/裁决结论）后再提交。", "")
   }
   return lines
 }

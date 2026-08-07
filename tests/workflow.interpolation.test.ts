@@ -301,8 +301,8 @@ describe("step 操作层指引补全", () => {
     const item = makeItem({ phase: "todo", currentStep: "analyze" })
     const out = renderWorking(item, "analyze", "openspec-architect")
     expect(out).toContain("按评估维度逐项审查 design.md 并给出结论：architecture / api-design / db-design（无问题也需简要确认），不以假设替代确认")
-    expect(out).toContain("需用户确认的缺口以 blocker 提交（正常模式由编排者向用户确认，无人值守模式由编排者自动裁决）")
-    expect(out).toContain("工具调用边界：仅可调用 opx_status 与 opx_agent_submit")
+    expect(out).toContain("需用户拍板的问题由你直接确认，不提交用户确认型 blocker")
+    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需用户拍板时使用）")
     expect(out).toContain("只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节")
     // notes 规范展开
     expect(out).toContain("notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空")

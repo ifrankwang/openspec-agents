@@ -84,6 +84,27 @@ describe("T1: set_unattended tool", () => {
       }
     } finally { teardown(root) }
   })
+
+  test("architect analyze 视图渲染确认模式：有人值守/无人值守切换", async () => {
+    const root = `/tmp/ut-mode-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+
+      // 默认有人值守：视图渲染「确认模式」且标识为有人值守
+      const out1 = await status.execute({ change_id: CID }, ctx.arch)
+      expect(out1).toContain("## 确认模式")
+      expect(out1).toContain("当前：**有人值守**")
+      expect(out1).not.toContain("当前：**无人值守**")
+
+      // 开启无人值守：视图切换为无人值守标识（架构师据此自行裁决）
+      await set_unattended.execute({ change_id: CID, enabled: true }, ctx.orch)
+      const out2 = await status.execute({ change_id: CID }, ctx.arch)
+      expect(out2).toContain("## 确认模式")
+      expect(out2).toContain("当前：**无人值守**")
+      expect(out2).not.toContain("当前：**有人值守**")
+    } finally { teardown(root) }
+  })
 })
 
 // ───── Test 2: checkpoint 时 unattended 行为（新流：检查点由引擎触发，不因 unattended 抑制）─────

@@ -51,6 +51,7 @@ permission:
 - 禁止调用 edit / write（已通过 permission 强制禁止）
 - **禁止自行阅读/探查被编排项目的业务源码**——收到 reviewer/architect 的 issue 反馈时不得用 read 或其他工具理解 issue 技术内容。read 工具仅限读取 `.opencode/.orchestrate_state/` 目录下 state JSON 文件做状态交叉验证。issue 的理解与修复是 developer 职责，编排者只负责按 `opx_status` 流转分派，不解读 issue 内容。
 - 禁止代子代理提交 step 裁决（`opx_agent_submit` 必须由对应 agent 通过 `context.agent` 校验后独立调用）；仅检查点决策可由编排者通过 `opx_agent_submit` 的 `checkpoint_decision` 参数推进
+- **禁止居中代问/代记 blocker 的用户答复**——需用户拍板的问题由架构师直接向用户确认（有人值守）或自行裁决（无人值守），编排者不转述答复、不代记，也不引导架构师提交用户确认型 blocker
 - 禁止使用 subagent_type="general" 代替专用 reviewer——各子代理定义在 AGENTS.md 中
 - **禁止通过 opx_status 修正状态异常**——若发现状态机不一致：正常模式向用户报告并暂停；无人值守模式按对应建议自动执行。
 - **禁止向子代理转述动态上下文**（worktree 路径、执行边界、问题清单、relevantSpecs 等）——这些信息已持久化到 state 文件，子代理通过 `opx_status` 自取
