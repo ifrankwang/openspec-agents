@@ -96,7 +96,7 @@ phases:
       - id: verify_task
         agents:
           - id: openspec-reviewer-task
-            capability_tags: [api-testing, quality-gate]
+            capability_tags: [api-testing, efficiency]
         transitions:
           on_pass: verify_quality
           on_fail: implement
