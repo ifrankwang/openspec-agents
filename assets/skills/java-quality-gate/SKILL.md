@@ -114,6 +114,23 @@ PMD 违规输出格式：
 
 从输出中逐行解析，提取 file / line / rule / message 字段。
 
+### CPD 重复代码检查
+
+若项目 `maven-pmd-plugin` 配置了 `cpd-check` goal，则随 `mvn verify` 一并执行；未启用则本检查项跳过，不强制项目启用。
+
+重复块明细以 `target/cpd.xml` 为主解析来源。`cpd-check` 执行时在该文件生成报告，`<duplication>` 元素下逐 `<file>` 属性列出重复块的文件与起止行列（PMD 7 的 file 元素含 line/endline/column/endcolumn 属性）。重复块跨文件时，同一块对应的全部位置均须记录。
+
+控制台输出默认只有汇总行，逐位置明细行仅开启 `pmd.verbose=true` 或 `pmd.printFailingErrors=true` 时输出：
+
+```
+CPD Failure: Found 14 lines of duplicated code at locations:
+    <绝对路径> line 42
+```
+
+`CPD Failure` 行单独成行，下一行以 4 空格缩进列出重复位置、每文件一行；日志级别随版本而异（旧版 `[INFO]`、新版 `[WARNING]`）。汇总行表述随 maven-pmd-plugin 版本变化：3.26+ 为 `CPD <版本> has found N duplications`（以 `[WARNING]` 或失败时随异常 `[ERROR]` 呈现），3.22 及以前为 `You have N CPD duplications. For more details see: <path>`。位置明细以 `cpd.xml` 为准，不受版本差异影响。
+
+映射口径：每处重复块映射为一条 issue，description 列出该块全部文件位置，不按位置拆分多条。严重级别沿用上方逐条映射惯例——逻辑重复方法 → Medium、纯数据字段 → Low，不走「mvn verify 失败 → Critical」路径。
+
 ## 5. 单元测试 + 覆盖率
 
 ```bash
@@ -241,7 +258,40 @@ token 经 `SONAR_TOKEN` 环境变量注入（等价写法：`-Dsonar.token=<toke
 curl -sf -u <token>: "http://localhost:9000/api/issues/search?inNewCodePeriod=true&statuses=OPEN,CONFIRMED,REOPENED&componentKeys=<项目原key>-<namespace>"
 ```
 
+该端点不返回安全热点，热点经下方独立端点获取。
+
 MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。查询须携带认证，token 复用本流程生成的一次性 token，以 Basic auth 形式经 `-u <token>:` 传入（token 作用户名、密码留空），否则默认开启 forceAuthentication 时返回 401。`inNewCodePeriod` 仅限定 new code 期，不含状态过滤，会返回期内所有状态的 issue（含已关闭 CLOSED FIXED）。MUST 追加 `statuses=OPEN,CONFIRMED,REOPENED` 限定未解决 issue；已关闭 issue 不属本轮待处理项，不得据此误判排除/抑制配置未生效或触发重扫。
+
+### 安全热点（独立端点）
+
+`/api/issues/search` 不返回安全热点，热点属独立类别，须经专用端点获取。
+
+先查 `new_security_hotspots` 指标判断 new code 期热点存量：
+
+```bash
+curl -sf -u <token>: "http://localhost:9000/api/measures/component?component=<项目原key>-<namespace>&metricKeys=new_security_hotspots"
+```
+
+存量 > 0 时经热点专用端点拉取：
+
+```bash
+curl -sf -u <token>: "http://localhost:9000/api/hotspots/search?projectKey=<项目原key>-<namespace>&inNewCodePeriod=true&status=TO_REVIEW"
+```
+
+MUST 携带 `inNewCodePeriod=true` 限定 new code 期、`status=TO_REVIEW` 限定待评审热点，否则返回全项目历史存量热点。仅报告待评审热点，已审 SAFE/FIXED 不纳入。
+
+热点无 BLOCKER/CRITICAL 分级体系，按 `vulnerabilityProbability` 映射 issue severity：HIGH → High、MEDIUM → Medium、LOW → Low；TO_REVIEW 表示待评审而非已确认缺陷。违规映射沿用第 8 节映射表 `SECURITY_HOTSPOT → security`。
+
+### 质量门禁与代码规模指标
+
+扫描后一次调用获取质量门禁结果与代码规模指标：
+
+```bash
+curl -sf -u <token>: "http://localhost:9000/api/measures/component?component=<项目原key>-<namespace>&metricKeys=alert_status,ncloc,new_lines"
+```
+
+- `alert_status`：质量门禁结果（OK/ERROR）。ERROR 时经 `/api/qualitygates/project_status?projectKey=<项目原key>-<namespace>` 解析 `conditions` 字段，定位失败的具体 metric 以产出可定位 issue；亦可读 `sonar-scanner` 输出尾部的 `QUALITY GATE STATUS` 行（PASSED/FAILED）快速判断，失败时仍须以 conditions 定位具体 metric
+- `ncloc` / `new_lines`：代码规模指标，供降级判据使用；`new_lines=0` 表示 new code 期无新增行，按下方降级判据触发全量口径
 
 ### 回收一次性认证 token
 
@@ -301,6 +351,7 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 - 规则是否被删除或降级（如 PMD priority 从 1 改为 5，或规则项被整条移除）
 - 是否新增了过宽的 exclude/include 配置（如排除整个命名空间、跳过核心架构检查）
 - `pom.xml` 中 `spotless-maven-plugin` / `pmd-maven-plugin` 等质量插件配置是否被弱化（跳过执行、降低阻塞等级）
+- `pmd-maven-plugin` 的 CPD 配置是否被弱化（`cpd-check` goal 被移除、`<minimumTokens>` 被过度调高、`<excludes>` 或 `excludeFromFailureFile` 过宽排除——均属弱化形态）
 
 检查结果：
 
@@ -333,6 +384,7 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 | **PMD** | `ErrorProne` 规则 | `maintainability` |
 | **PMD** | `BestPractices` 规则 | `maintainability` |
 | **PMD** | `Performance` 规则 | `performance` |
+| **PMD** | CPD 重复代码 | `maintainability` |
 | **SonarQube** | `VULNERABILITY` / `SECURITY_HOTSPOT` | `security` |
 | **SonarQube** | `CODE_SMELL`（与可维护性相关） | `maintainability` |
 | **SonarQube** | `CODE_SMELL`（与格式/命名相关） | `style` |
