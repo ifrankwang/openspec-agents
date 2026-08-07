@@ -841,8 +841,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
         title: "First Task Group", description: "First Task Group",
         phase: "review", suspended: false, currentStep: "verify_tool",
         tags: { "verify_tool:openspec-reviewer-tool": "failed" },
-        // 真实触发：_retryCount=5（max_retries 5 的倍数）、无 _checkpoint 标记、未终态 child
-        metadata: { _retryCount: 5 },
+        // 真实触发：_retryCount=10（max_retries 10 的倍数）、无 _checkpoint 标记、未终态 child
+        metadata: { _retryCount: 10 },
         children: [{
           id: "issue:7", source: "openspec", externalId: "7", type: "issue",
           title: "遗留 issue", description: "d", phase: "todo", suspended: false,

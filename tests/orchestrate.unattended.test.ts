@@ -100,7 +100,7 @@ describe("T2: checkpoint 时 unattended 行为", () => {
       // 注入未终态 child + retryCount 达上限 → 检查点态
       const state = readState(wt, CID)
       const item = state.workItems.find((w: any) => w.id === "task:1")
-      item.metadata["_retryCount"] = 5
+      item.metadata["_retryCount"] = 10
       item.children.push({
         id: "issue:7", externalId: "7", source: "openspec", type: "issue",
         title: "遗留 issue", description: "d", phase: "todo", suspended: false,
@@ -129,7 +129,7 @@ describe("T2: checkpoint 时 unattended 行为", () => {
 
       const state = readState(wt, CID)
       const item = state.workItems.find((w: any) => w.id === "task:1")
-      item.metadata["_retryCount"] = 5
+      item.metadata["_retryCount"] = 10
       item.children.push({
         id: "issue:7", externalId: "7", source: "openspec", type: "issue",
         title: "遗留 issue", description: "d", phase: "todo", suspended: false,
@@ -141,7 +141,7 @@ describe("T2: checkpoint 时 unattended 行为", () => {
       const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
       const step = workflow.stepMap.get("verify_tool")!.step
       expect(checkpointTriggered(item, workflow, step)).toBe(true)
-      expect(effectiveMaxRetries(workflow, step)).toBe(5)
+      expect(effectiveMaxRetries(workflow, step)).toBe(10)
 
       // 关闭 unattended 后判定不变（引擎按 retry 计数，与无人值守标志无关）
       const o = makeCtx("openspec-orchestrator", wt)
@@ -188,13 +188,13 @@ describe("T5: checkpointTriggered / effectiveMaxRetries", () => {
 
   test("retryCount 达上限且存在未终态 children → 触发检查点", () => {
     const item = itemWithChildren(false)
-    item.metadata["_retryCount"] = 5
+    item.metadata["_retryCount"] = 10
     expect(checkpointTriggered(item, workflow, step)).toBe(true)
   })
 
   test("retryCount 达上限但全部 children 已终态 → 不触发", () => {
     const item = itemWithChildren(true)
-    item.metadata["_retryCount"] = 5
+    item.metadata["_retryCount"] = 10
     expect(checkpointTriggered(item, workflow, step)).toBe(false)
   })
 

@@ -110,7 +110,7 @@ describe("task.yaml 加载", () => {
     const yamlText = readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8")
     const wf = loadWorkflow(yamlText)
     expect(wf.id).toBe("task")
-    expect(wf.max_retries).toBe(5)
+    expect(wf.max_retries).toBe(10)
     expect(wf.phases.map((p) => p.name)).toEqual(["todo", "in_progress", "review"])
     const expectedSteps = [
       "analyze", "implement",

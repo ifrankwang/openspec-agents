@@ -104,7 +104,7 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
     expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
     expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "quality-gate", "dev-practices"])
     expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
-    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "quality-gate"])
+    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "efficiency"])
     expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
     expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency", "tool-improvement"])
   })

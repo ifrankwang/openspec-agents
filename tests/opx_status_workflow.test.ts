@@ -228,13 +228,13 @@ describe("P6-B 检查点 / 暂停 / 阻塞态", () => {
 
     const state = readStateSync(wt)
     const item = taskItemOf(state)
-    item.metadata["_retryCount"] = 5
+    item.metadata["_retryCount"] = 10
     item.children = [{ id: "issue:1", source: "openspec", type: "issue", phase: "todo", suspended: false, currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low" }]
     writeStateSync(wt, state)
 
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     const output = await status.execute({ change_id: CID }, toolR)
-    expect(output).toContain("检查点（第 5 轮）")
+    expect(output).toContain("检查点（第 10 轮）")
     expect(output).toContain("opx_agent_submit")
     expect(output).toContain("continue / giveup")
 

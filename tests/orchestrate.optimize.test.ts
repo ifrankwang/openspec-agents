@@ -554,9 +554,9 @@ describe("B5. checkpoint continue 重置 retryCount", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
-      // 真实触发路径：_retryCount=5（max_retries 5 的倍数）+ 无 _checkpoint 标记 + 未终态 child（task issue 遗留）
+      // 真实触发路径：_retryCount=10（max_retries 10 的倍数）+ 无 _checkpoint 标记 + 未终态 child（task issue 遗留）
       rewriteItem(wt, (item) => {
-        item.metadata["_retryCount"] = 5
+        item.metadata["_retryCount"] = 10
         delete item.metadata["_checkpoint"]
         item.tags["verify_tool:openspec-reviewer-tool"] = "failed"
       })
