@@ -114,13 +114,26 @@ describe("2. children 联动更新", () => {
     expect(r.childrenUpdated).toContain("c1")
   })
 
-  test("exempt child：metadata.exempt_request 标记，phase/tags 不变，不推进", () => {
+  test("exempt child：metadata.exempt_request 标记 + 进入 review（待裁定），implement 放行推进", () => {
     const item = makeItem({ phase: "in_progress", currentStep: "implement" })
     item.children.push(child({ id: "c1", phase: "in_progress" }))
     const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", exemptIds: ["c1"] })
     expect(item.children[0].metadata["exempt_request"]).toEqual({ requestedBy: "developer" })
-    expect(item.children[0].phase).toBe("in_progress")
+    expect(item.children[0].phase).toBe("review")
     expect(item.children[0].tags).toEqual({})
+    // 豁免申请进入 review 后 implement 门禁 carve-out（review 态 blocking 不阻塞）与 forwardGatePassed 放行
+    expect(r.advanced).toBe(true)
+    expect(r.transitionTarget).toBe("approve")
+    expect(item.phase).toBe("review")
+    expect(item.currentStep).toBe("approve")
+  })
+
+  test("exempt task child：打标记但不置 review（豁免仅 issue 语义），不推进", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.children.push(makeItem({ id: "t1", type: "task", phase: "in_progress" }))
+    const r = submitForStep(item, WF, { stepId: "implement", agentKey: "developer", verdict: "passed", exemptIds: ["t1"] })
+    expect(item.children[0].metadata["exempt_request"]).toEqual({ requestedBy: "developer" })
+    expect(item.children[0].phase).toBe("in_progress")
     expect(r.advanced).toBe(false)
   })
 
@@ -590,6 +603,14 @@ describe("7. adjudicateRecheck 复核已修复 issue", () => {
     item.children.push(child({ id: "i1", phase: "todo", metadata: { source: "reviewer" } }))
     const snapshot = JSON.stringify(item)
     expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "passed" })).toThrow(/仅 review 态/)
+    expect(JSON.stringify(item)).toBe(snapshot)
+  })
+
+  test("带 exempt_request 标记的 review 态 issue 复核 → 抛错且 state 零变更（须走 exempt_adjudications 裁定）", () => {
+    const item = makeItem()
+    item.children.push(child({ id: "i1", phase: "review", metadata: { source: "reviewer", exempt_request: { requestedBy: "developer" } } }))
+    const snapshot = JSON.stringify(item)
+    expect(() => adjudicateRecheck(item, WF, { issueId: "i1", agentKey: "reviewer", verdict: "passed" })).toThrow(/exempt_adjudications/)
     expect(JSON.stringify(item)).toBe(snapshot)
   })
 

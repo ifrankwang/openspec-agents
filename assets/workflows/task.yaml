@@ -63,7 +63,7 @@ phases:
           - "全部实现完成后先 git commit 再提交"
           - "提交前按已加载的质量门类 skill 完成本地构建验证并核对覆盖率门禁达标后再提交"
           - "提交前完成自检并经 self_check_results 汇总"
-          - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由对应 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
+          - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由对应 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
           - "提交 opx_agent_submit：passed 必带 completed_task_ids；不可修 issue 申请豁免（exempt_issue_ids）"
         constraints:

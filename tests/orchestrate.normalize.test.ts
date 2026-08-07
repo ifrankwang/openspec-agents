@@ -102,7 +102,8 @@ describe("N1. issue id # 前缀归一化", () => {
       let item = taskItemOf(readState(wt, CID)!)
       let child = item.children.find((c: any) => c.externalId === "7")
       expect(child.metadata["exempt_request"]).toBeDefined()
-      expect(item.currentStep).toBe("implement")
+      // 豁免申请进入 review（待裁定），推进到 review/verify_quality（style 维 tag 按归因清空待重审）
+      expect(item.currentStep).toBe("verify_quality")
 
       // 模拟编排将任务移回 review/verify_quality 供豁免复核
       const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)

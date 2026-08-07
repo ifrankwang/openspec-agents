@@ -178,6 +178,12 @@ export function submitForStep(item: WorkItem, workflow: LoadedWorkflow, input: S
     const child = childById.get(id)
     if (child) {
       child.metadata[EXEMPT_REQUEST_KEY] = { requestedBy: input.agentKey }
+      // 豁免申请进入 review（待裁定），与 fixed 的 fixed→review 对称：exempt 子项不再以 todo 态
+      // 滞留（todo 态被 implement 门禁计为阻塞，dev 无法推进、reviewer 又因 currentStep 停在
+      // implement 无法补交，形成死锁）。进入 review 后 implement 门禁 carve-out（review 态
+      // blocking 不阻塞）与 forwardGatePassed 天然放行，由报源 reviewer 在 review 轮次或补交中
+      // 裁定（dismissed→cancelled / rejected→todo 回退收敛）。task child 无豁免语义，保持原行为。
+      if (child.type === "issue") child.phase = "review"
       updated.add(child.id)
     }
   }
@@ -292,6 +298,13 @@ export function adjudicateRecheck(
   if (child.phase !== "review") {
     throw new Error(
       `复核失败：issue "${input.issueId}" 当前 phase 为 "${child.phase}"，仅 review 态（已修复待复核）issue 可复核。`
+    )
+  }
+  // 带 exempt_request 标记的 issue 处于豁免待裁定态，须由报源 reviewer 经 exempt_adjudications 裁定，
+  // recheck 复核会绕过豁免裁定语义（passed 直接置 done 且残留标记）；校验在一切状态写入之前，抛错零变更。
+  if (child.metadata[EXEMPT_REQUEST_KEY] !== undefined) {
+    throw new Error(
+      `复核失败：issue "${input.issueId}" 已申请豁免（exempt_request 标记），待裁定豁免申请应经 exempt_adjudications 裁定，不接受 recheck_adjudications 复核。`
     )
   }
   // 谁提谁裁定：解析报源 review step 并校验复核者权限（与豁免裁定同源，复用公共裁定权校验）。

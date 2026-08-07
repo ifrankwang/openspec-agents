@@ -22,7 +22,7 @@ import { init, status, agent_submit } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx } from "./helpers"
 import {
   setupToAnalyze, driveToQuality, submitQualityPassed,
-  taskIdsOf, readItem,
+  taskIdsOf, readItem, DEFAULT_EXECUTION_BOUNDARY,
 } from "./helpers-workflow"
 
 const CID = "test-blocked-dispatch"
@@ -321,6 +321,154 @@ describe("implement blocked：review 态 child 不阻塞，待修复 child 阻�
       expect(out).toContain("待处理(todo)")
       expect(out).not.toContain("Issue #8")
       expect(out).not.toContain("（无待分派项，请检查状态）")
+    } finally { teardown(root) }
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+//  exempt 提交→推进链路：dev 申请豁免 → child 进 review（待裁定）→ implement 放行推进 verify_tool
+//  → 漏带裁定 blocked → 分派报源 reviewer → exempt 补交解除；rejected 收敛回退 implement
+// ════════════════════════════════════════════════════════════════
+
+describe("exempt 提交→推进→裁定链路（exempt 子项进入 review 待裁定态）", () => {
+  test("dev 提交 exempt_issue_ids → child 进 review 待裁定 + implement 放行推进 verify_tool → 漏带裁定 blocked 分派报源 reviewer → 补交 dismissed 解除", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
+        ctx.arch
+      )
+      // 注入 tool 层报源阻塞 issue（todo 态，待 dev 申请豁免）
+      rewriteItem(wt, (item) => {
+        item.children.push({
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "不可修 issue", description: "第三方限制", phase: "todo", suspended: false,
+          currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+
+      // dev 提交豁免申请：exempt 子项进入 review（待裁定），implement 门禁放行并推进
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["7"], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      const item1 = readItem(wt, CID)
+      expect(item1.children.find((c: any) => c.externalId === "7").phase).toBe("review")
+      expect(item1.children.find((c: any) => c.externalId === "7").metadata["exempt_request"]).toBeDefined()
+      expect(item1.phase).toBe("review")
+      expect(item1.currentStep).toBe("verify_tool")
+
+      // tool reviewer 提交 passed 漏带豁免裁定 → verify_tool 被本层待裁定项阻塞（不推进）
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+      expect(readItem(wt, CID).currentStep).toBe("verify_tool")
+
+      // orchestrator 查 status → 分派报源 reviewer 补交豁免裁定
+      const out = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out).toContain("## 下一步")
+      expect(out).toContain("豁免申请中 1")
+      expect(out).toContain("分派子代理：`openspec-reviewer-tool`")
+
+      // exempt-only 补交 dismissed → child cancelled → 推进 verify_task
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
+        ctx.toolR
+      )
+      const after = readItem(wt, CID)
+      expect(after.children.find((c: any) => c.externalId === "7").phase).toBe("cancelled")
+      expect(after.currentStep).toBe("verify_task")
+    } finally { teardown(root) }
+  })
+
+  test("exempt 裁定 rejected：reviewer 提交 verify_tool failed + rejected 裁定 → issue 回 todo，item 回退 implement 收敛", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
+        ctx.arch
+      )
+      rewriteItem(wt, (item) => {
+        item.children.push({
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "可修但被申请豁免", description: "d", phase: "todo", suspended: false,
+          currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      // dev 提交豁免申请 → 推进 review/verify_tool
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", exempt_issue_ids: ["7"], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      expect(readItem(wt, CID).currentStep).toBe("verify_tool")
+      expect(readItem(wt, CID).children.find((c: any) => c.externalId === "7").phase).toBe("review")
+
+      // tool reviewer 裁定 rejected + 提交 failed（遗留 todo 态阻塞 issue 构成理由）→ 回退 implement
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "failed", exempt_adjudications: [{ issue_id: "7", action: "rejected" }] },
+        ctx.toolR
+      )
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(item.children.find((c: any) => c.externalId === "7").phase).toBe("todo")
+      expect(item.children.find((c: any) => c.externalId === "7").metadata["exempt_request"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+
+  test("mixed：同层 fixed 待复核 + exempt 待裁定，补交不全仍持续分派报源 reviewer 直至解除（不二次死锁）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
+        ctx.arch
+      )
+      // 注入 tool 层两个阻塞 issue：fixed 用（7）、exempt 用（8）
+      rewriteItem(wt, (item) => {
+        item.children.push(
+          { id: "issue:7", source: "openspec", externalId: "7", type: "issue", title: "可修 issue", description: "d", phase: "todo", suspended: false, currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" }, children: [], labels: [], severity: "Low" },
+          { id: "issue:8", source: "openspec", externalId: "8", type: "issue", title: "不可修 issue", description: "d", phase: "todo", suspended: false, currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" }, children: [], labels: [], severity: "Low" },
+        )
+      })
+      // dev 同时提交 fixed_issue_ids + exempt_issue_ids → 均进入 review，implement 放行推进
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", fixed_issue_ids: ["7"], exempt_issue_ids: ["8"], completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev
+      )
+      const item1 = readItem(wt, CID)
+      expect(item1.currentStep).toBe("verify_tool")
+      expect(item1.children.find((c: any) => c.externalId === "7").phase).toBe("review")
+      expect(item1.children.find((c: any) => c.externalId === "8").phase).toBe("review")
+      expect(item1.children.find((c: any) => c.externalId === "8").metadata["exempt_request"]).toBeDefined()
+
+      // tool reviewer passed 漏带 recheck + exempt 裁定 → blocked，分派报源 reviewer
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+      const out = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out).toContain("分派子代理：`openspec-reviewer-tool`")
+
+      // 只补交 exempt（dismissed）→ 8 解除但 7 仍待复核 → 继续 blocked 并继续分派 reviewer（不二次死锁）
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", exempt_adjudications: [{ issue_id: "8", action: "dismissed" }] },
+        ctx.toolR
+      )
+      const item2 = readItem(wt, CID)
+      expect(item2.currentStep).toBe("verify_tool")
+      expect(item2.children.find((c: any) => c.externalId === "8").phase).toBe("cancelled")
+      expect(item2.children.find((c: any) => c.externalId === "7").phase).toBe("review")
+      const out2 = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out2).toContain("分派子代理：`openspec-reviewer-tool`")
+
+      // 补交 recheck passed → 7 done → 解除阻塞推进 verify_task
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", recheck_adjudications: [{ issue_id: "7", verdict: "passed" }] },
+        ctx.toolR
+      )
+      const after = readItem(wt, CID)
+      expect(after.children.find((c: any) => c.externalId === "7").phase).toBe("done")
+      expect(after.currentStep).toBe("verify_task")
     } finally { teardown(root) }
   })
 })

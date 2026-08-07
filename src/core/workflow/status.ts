@@ -319,15 +319,17 @@ function renderProgressSection(item: WorkItem, workflow: LoadedWorkflow): string
   return lines
 }
 
-/** children 状态统计：todo=待处理、review=待复核、done=已验证、cancelled=已豁免、exempt_request=豁免申请中。 */
+/** children 状态统计：todo=待处理、review=待复核、done=已验证、cancelled=已豁免、exempt_request=豁免申请中。
+ *  待裁定豁免项（review 态 + exempt_request）只计入豁免申请中，不重复计入待复核/待处理。 */
 function childStatusCounts(item: WorkItem): { todo: number; review: number; done: number; cancelled: number; exempt: number } {
   const counts = { todo: 0, review: 0, done: 0, cancelled: 0, exempt: 0 }
   // 仅统计 issue child（task child 不计入——子任务进度由 task 语义承载）
   for (const c of issueChildrenOf(item)) {
-    if (c.metadata["exempt_request"] !== undefined) counts.exempt++
+    const isExemptRequest = c.metadata["exempt_request"] !== undefined
+    if (isExemptRequest) counts.exempt++
     switch (c.phase) {
-      case "todo": counts.todo++; break
-      case "review": counts.review++; break
+      case "todo": if (!isExemptRequest) counts.todo++; break
+      case "review": if (!isExemptRequest) counts.review++; break
       case "done": counts.done++; break
       case "cancelled": counts.cancelled++; break
     }
@@ -625,7 +627,9 @@ function isAgentOwnedIssue(child: WorkItem, ctxAgent: string): boolean {
   if (!layer) {
     return child.phase === "todo" && child.metadata["exempt_request"] === undefined
   }
-  if (child.phase !== "review") return false
+  // 待裁定豁免项（exempt_request 标记）归「待裁定」区块管：即使已进入 review 态也排除出主区块，
+  // 避免与待裁定区块重复展示；recheck 复核带标记项亦被工具层守卫拒绝（须走 exempt_adjudications 裁定）。
+  if (child.phase !== "review" || child.metadata["exempt_request"] !== undefined) return false
   if (f.sourcePhase !== layer) return false
   if (layer === "quality") {
     const dim = agentToReviewDimension(ctxAgent)

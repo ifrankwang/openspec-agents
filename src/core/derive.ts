@@ -87,7 +87,9 @@ function projectIssueFromChild(child: WorkItem): IssueItem {
     line: f.line,
     description: child.description,
     suggestion: typeof child.metadata["suggestion"] === "string" ? child.metadata["suggestion"] : "",
-    status: baseStatus === "open" && hasExemptRequest ? "exemption_requested" : baseStatus,
+    // 待裁定豁免项（exempt_request 标记）无条件投影 exemption_requested：申请豁免的 issue 已进入
+    // review（待裁定）态，baseStatus 为 submitted，若限定 open 态会丢失豁免申请语义（被误标为待复核）。
+    status: hasExemptRequest ? "exemption_requested" : baseStatus,
     refixCount: typeof child.metadata["refix_count"] === "number" ? child.metadata["refix_count"] : 0,
     rootCauseGuess: typeof child.metadata["root_cause_guess"] === "string" ? child.metadata["root_cause_guess"] : null,
     exemptReason: typeof child.metadata["exempt_reason"] === "string" ? child.metadata["exempt_reason"] : null,

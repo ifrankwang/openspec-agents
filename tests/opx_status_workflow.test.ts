@@ -342,6 +342,33 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  test("verify_tool 视角：review 态 + exempt_request 待裁定项只进待裁定区块，不进待复核主区块（isAgentOwnedIssue 排除）", async () => {
+    const root = `/tmp/wf-m1d-b2-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.children = [
+      // 真实 dev 提交 exempt 后的形态：review 态 + exempt_request 标记
+      makeIssueChild("1", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "openspec-developer" } } }),
+    ]
+    writeStateSync(wt, state)
+
+    const toolR = makeCtx("openspec-reviewer-tool", wt)
+    const output = await status.execute({ change_id: CID }, toolR)
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    // 待裁定区块可见待裁定项（reviewer 能看到自己需裁定的豁免申请）
+    expect(output).toContain("Issue (待裁定是否可豁免)")
+    expect(output).toContain("issue 1 描述")
+    expect(output).toContain("豁免申请中")
+    // 不进待复核主区块（避免重复展示，也防止被 recheck 自助恢复误列）
+    expect(output).not.toContain("Issue (待复核)")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("无豁免申请标记的终态 child 不进入待裁定区块", async () => {
     const root = `/tmp/wf-pending-clean-${Date.now()}`
     const wt = freshWt(root)

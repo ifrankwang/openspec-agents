@@ -417,7 +417,7 @@ describe("G10. 谁提谁裁定守卫", () => {
         /由报源 "openspec-reviewer-style"/
       )
       const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
-      expect(child.phase).toBe("todo")
+      expect(child.phase).toBe("review")
       expect(child.metadata["exempt_request"]).toBeDefined()
     } finally { teardown(root) }
   })
@@ -547,7 +547,7 @@ describe("G15. 豁免完整性门禁", () => {
       const item = readItem(wt, CID)
       expect(item.currentStep).toBe("verify_quality")
       const child = item.children.find((c: any) => c.externalId === "7")
-      expect(child.phase).toBe("todo")
+      expect(child.phase).toBe("review")
       expect(child.metadata["exempt_request"]).toBeDefined()
       expect(r).toContain("- **推进**: 否")
     } finally { teardown(root) }
