@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — 审核人（工具维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。顺序运行全部确定性工具检查（代码格式 / 架构约束 / 静态分析 / 单元测试编译 / 深度扫描），将工具输出映射为统一 issue 结构并跨维提交。允许 bash 禁止 edit。通过加载质量门 skill 获得工具清单与映射规则。
+description: OpenSpec 编排流程专用 — 审核人（工具维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。顺序运行全部确定性工具检查（代码格式 / 架构约束 / 静态分析 / 单元测试编译 / 深度扫描），将工具输出映射为统一 issue 结构并按归因维度提交。允许 bash 禁止 edit。通过加载质量门 skill 获得工具清单与映射规则。
 mode: subagent
 hidden: true
 steps: 200

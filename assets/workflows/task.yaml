@@ -32,17 +32,17 @@ phases:
           on_pass: implement
           on_fail: analyze
         instructions:
-          - "design.md 全文逐维校验一致性（据 tasks.md 各行 `[spec:xxx]` 溯源定位 specs/ 下相关 spec.md 一并复核）"
-          - "对视图列出的各评估维度逐项审查并给出结论（无问题也需简要确认），不以假设替代确认"
+          - "校验 design.md 与 tasks.md、specs/ 下相关 spec.md 的一致性（据 tasks.md 各行 `[spec:xxx]` 溯源定位相关 spec.md 一并复核）"
+          - "按评估维度逐项审查 design.md 并给出结论：architecture / api-design / db-design（无问题也需简要确认），不以假设替代确认"
           - "校验设计文档与任务前提的一致性，评估架构模式合规性"
           - "输出执行边界：allowed_directories（含测试目录）与 allowed_packages 白名单，notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空"
           - "存在缺口时提交 blocker（category: architecture_design / info_gap），不以假设替代确认"
-          - "需用户确认时正常模式先 question 工具向用户确认，无人值守模式自行推断决策后标记 resolved，全部 blocker 处理完毕后再提交"
+          - "需用户确认的缺口以 blocker 提交（正常模式由编排者向用户确认，无人值守模式由编排者自动裁决），答复后经 blocker_updates 置 resolved，全部 blocker 处理完毕后再提交"
           - "存在未解决 blocker 时无法以 passed 提交，先经 blocker_updates 逐条置 resolved（附用户答复）"
           - "提交 opx_agent_submit，必传参数 execution_boundary"
         constraints:
           - "工具调用边界：仅可调用 opx_status 与 opx_agent_submit"
-          - "只审当前任务组范围：除任务排列合理性需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节"
+          - "只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节"
           - "仅可 edit 修复 md 文档；设计/架构验证问题与信息缺口一律走 blocker"
   - name: in_progress
     steps:
@@ -72,7 +72,7 @@ phases:
           - "允许引用包范围：{{allowed_packages}}"
           - "实施前请注意遵守：{{notes}}"
           - "生产路径禁止 stub/fake/空实现/硬编码成功"
-          - "暂停条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
+          - "需以 verdict=failed + blocker 上报的条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
   - name: review
     steps:
       - id: verify_tool
@@ -83,14 +83,14 @@ phases:
           on_pass: verify_task
           on_fail: implement
         instructions:
-          - "加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构并跨维提交"
-          - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability），跨维报 issue 用 dimension 指定目标维度"
+          - "加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构后提交"
+          - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
           - "工具检查覆盖全量代码；非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃"
           - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
           - "提交 opx_agent_submit，必带 verdict 参数（passed / failed）"
         constraints:
-          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（自愈失效时提请用户）；可 bash 运行工具但不得 edit/write 任何文件"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行工具但不得 edit/write 任何文件"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
       - id: verify_task
@@ -102,12 +102,12 @@ phases:
           on_fail: implement
         instructions:
           - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）"
-          - "design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（用于准备测试数据、对照 API 合约）"
+          - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约"
           - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"
-          - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability），跨维报 issue 用 dimension 指定目标维度"
+          - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
           - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定"
-          - "按 opx_status 操作指引完成全部验证，提交前将各步骤执行结果填入 validation_steps 参数，不可跳过标注不可跳过的步骤"
+          - "按 opx_status 操作指引完成全部验证项，提交前将每项验证结果与证据填入 validation_steps 参数（未执行的项须填 skip_reason 注明原因），不得省略任何一项"
           - "提交 opx_agent_submit，必带 verdict 与 verified_tasks（覆盖全部待验证 task）"
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查，但不得 edit/write 业务代码"

@@ -288,18 +288,16 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     expect(output).toContain("# ✅ 当前轮到你执行")
     // 构建验证指引由配置 implement instructions 承载（P2 去双源），developer 视图仍渲染
     expect(output).toContain("提交前按已加载的质量门类 skill 完成本地构建验证并核对覆盖率门禁达标后再提交")
-    // 执行边界渲染
-    expect(output).toContain("## 执行边界")
-    expect(output).toContain("- **允许目录**:")
-    expect(output).toContain("`src`")
-    expect(output).toContain("- **允许包**:")
-    expect(output).toContain("`com.t`")
+    // 约束区块占位符插值（执行边界信息承载，逗号拼接无反引号）
+    expect(output).toContain("## 约束")
+    expect(output).toContain("允许变更目录范围：src")
+    expect(output).toContain("允许引用包范围：com.t")
     // children 待修复清单
     expect(output).toContain("Issue (待修复 · Low 及以上，必办)")
     expect(output).toContain("issue 1 描述")
     expect(output).toContain("驳回原因：修复不完整")
     expect(output).toContain("修复未过次数：2")
-    expect(output).toContain("待处理")
+    expect(output).toContain("Issue #1")
     // Info 级单独分栏
     expect(output).toContain("Issue (待修复 · Info，建议修复，不阻塞提交)")
     expect(output).toContain("Info 级问题")
@@ -474,7 +472,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     expect(output).toContain("Issue (待修复 · Low 及以上，必办)")
     // todo 态 issue 仍在待修复清单
     expect(output).toContain("issue 1 描述")
-    expect(output).toContain("待处理")
+    expect(output).toContain("Issue #1")
     // review 态 issue 由对应 reviewer 复核，dev 视图不展示
     expect(output).not.toContain("issue 2 描述")
 

@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — 审核人（Task 维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。验证 task 产出完整性、启动服务并检查健康、独立执行 API 测试并审查质量、审查测试代码质量（断言放水/Mock 过度/覆盖不足等）。使用统一严重级别。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
+description: OpenSpec 编排流程专用 — 审核人（Task 维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。验证 task 产出完整性、启动服务并检查健康、独立执行 API 测试并审查质量、审查测试代码质量（断言放水/Mock 过度/覆盖不足等）。使用统一严重级别。调用 opx_status 自查上下文 + 看本层既有 issue 不重复报。
 mode: subagent
 hidden: true
 steps: 200

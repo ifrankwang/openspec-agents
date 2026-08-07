@@ -140,7 +140,7 @@ describe("renderStepContext step.id 路由", () => {
     expect(out).toContain("blocker_updates")
   })
 
-  test("implement（step.id=implement）：渲染执行边界 + 待修复 children", () => {
+  test("implement（step.id=implement）：渲染约束区块 + 待修复 children", () => {
     const item = makeItem({
       phase: "in_progress",
       currentStep: "implement",
@@ -148,7 +148,8 @@ describe("renderStepContext step.id 路由", () => {
       children: [makeIssue("1", { severity: "Medium" })],
     })
     const out = renderWorking(item, "implement", "openspec-developer")
-    expect(out).toContain("## 执行边界")
+    expect(out).toContain("## 约束")
+    expect(out).toContain("允许变更目录范围：src")
     expect(out).toContain("Issue (待修复 · Low 及以上，必办)")
   })
 
@@ -296,13 +297,13 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("git -C /wt diff --name-only")
   })
 
-  test("analyze：逐维审查 / 用户确认模式 / 工具调用边界 / 只审当前任务组范围", () => {
+  test("analyze：按评估维度审查 / 用户确认模式 / 工具调用边界 / 只审当前任务组范围", () => {
     const item = makeItem({ phase: "todo", currentStep: "analyze" })
     const out = renderWorking(item, "analyze", "openspec-architect")
-    expect(out).toContain("对视图列出的各评估维度逐项审查并给出结论（无问题也需简要确认），不以假设替代确认")
-    expect(out).toContain("需用户确认时正常模式先 question 工具向用户确认，无人值守模式自行推断决策后标记 resolved")
+    expect(out).toContain("按评估维度逐项审查 design.md 并给出结论：architecture / api-design / db-design（无问题也需简要确认），不以假设替代确认")
+    expect(out).toContain("需用户确认的缺口以 blocker 提交（正常模式由编排者向用户确认，无人值守模式由编排者自动裁决）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status 与 opx_agent_submit")
-    expect(out).toContain("只审当前任务组范围：除任务排列合理性需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节")
+    expect(out).toContain("只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节")
     // notes 规范展开
     expect(out).toContain("notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空")
   })
@@ -333,7 +334,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）")
     expect(out).toContain("非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
-    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（自愈失效时提请用户）")
+    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）")
     expect(out).not.toContain("；禁止 opx_orch_*")
     expect(out).toContain("即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）")
     expect(out).toContain("Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）")
@@ -342,11 +343,11 @@ describe("step 操作层指引补全", () => {
   test("verify_task：四项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_task" })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
-    expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行 API 测试并审查质量 ④审查测试代码质量")
+    expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量")
     expect(out).toContain("有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定")
     expect(out).toContain("design.md 的 API 定义（请求/响应结构、数据模型）")
-    expect(out).toContain("specs/ 下相关 spec.md（用于准备测试数据、对照 API 合约）")
+    expect(out).toContain("specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查，但不得 edit/write 业务代码")
     // 严重级别判例归属 agent.md，约束中不重复
     expect(out).not.toContain("缺少验证所需真实资源时最低记 Low")

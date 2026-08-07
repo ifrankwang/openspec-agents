@@ -27,7 +27,7 @@ export interface WorkflowStatusViewOptions {
  * - suspended / blocked / terminal：分别呈现暂停原因 / 阻塞原因 / step 已通过
  * - recommend：
  *   - orchestrator → 分派视图（阶段进展 + children 统计 + blocker 汇总 + 下一步分派）
- *   - 调用者 ∈ 推荐 agents → ✅ 执行视图（skill 加载清单 + 按 step 渲染 children/blocker/执行边界/会话摘要 + 操作指引）
+ *   - 调用者 ∈ 推荐 agents → ✅ 执行视图（skill 加载清单 + 按 step 渲染 children/blocker/会话摘要 + 操作指引）
  *   - 否则 → ⛔ 阶段门禁（复用既有 gate 文案）
  */
 export function renderWorkflowStatusView(
@@ -486,7 +486,6 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       lines.push(...renderAnalyzeBlockers(item))
       break
     case "implement":
-      lines.push(...renderExecutionBoundary(item))
       lines.push(...renderDeveloperChildren(item, ctxAgent))
       break
     case "review_tool":
@@ -515,7 +514,7 @@ function renderStepSemantics(step: StepConfig | null, common: WorkflowCommon | u
   return lines
 }
 
-// ─── children / blockers / 执行边界 渲染 ───
+// ─── children / blockers 渲染 ───
 
 function readBlockers(item: WorkItem): BlockerItem[] {
   const raw = item.metadata["blockers"]
@@ -556,20 +555,6 @@ function renderAnalyzeBlockers(item: WorkItem): string[] {
   if (blockers.some((b) => b.status !== "resolved")) {
     lines.push("> 存在未解决 blocker：analyze step 无法以 passed 提交。请先通过 `opx_agent_submit` 的 blocker_updates 逐条置 resolved（附用户答复）后再提交。", "")
   }
-  return lines
-}
-
-/** implement step：执行边界（allowed_directories / allowed_packages）。 */
-function renderExecutionBoundary(item: WorkItem): string[] {
-  const b = readExecutionBoundary(item)
-  if (!b) return []
-  const lines = ["## 执行边界", ""]
-  lines.push("- **允许目录**:")
-  for (const d of b.allowed_directories) lines.push(`  - \`${d}\``)
-  lines.push("- **允许包**:")
-  for (const p of b.allowed_packages) lines.push(`  - \`${p}\``)
-  if (b.notes) lines.push(`- **实施前请注意遵守**: ${b.notes}`)
-  lines.push("")
   return lines
 }
 
@@ -695,15 +680,13 @@ function renderChildrenSection(title: string, children: WorkItem[]): string[] {
   return lines
 }
 
-/** 单个 issue child 渲染（参考 views.renderIssueItem 风格，字段来自 WorkItem.metadata）。
- *  [报源层] 标签为 source 反推的 issue 报源层（tool/task/quality），非显式归因参数。 */
+/** 单个 issue child 渲染（参考 views.renderIssueItem 风格，字段来自 WorkItem.metadata）。 */
 function renderChildIssue(child: WorkItem): string {
   const f = resolveChildIssueFields(child)
   const id = child.externalId ?? child.id.replace(/^issue:/, "")
-  const sev = child.severity ?? "Info"
   const rule = typeof child.metadata["rule"] === "string" ? ` | ${child.metadata["rule"]}` : ""
   const lines = [
-    `- Issue #${id} | ${formatSeverity(sev)} | ${f.dimension} | [${f.sourcePhase}]${rule} | ${childStateLabel(child)}`,
+    `- Issue #${id}${rule ? ` | ${rule}` : ""}`,
   ]
   if (f.file) lines.push(`  - 文件：${formatFilePath(f.file, f.line)}`)
   lines.push(`  - 描述：${child.description}`)
@@ -712,16 +695,4 @@ function renderChildIssue(child: WorkItem): string {
   if (typeof child.metadata["refix_count"] === "number") lines.push(`  - 修复未过次数：${child.metadata["refix_count"]}`)
   if (child.metadata["exempt_request"] !== undefined) lines.push("  - 豁免申请中：等待裁定")
   return lines.join("\n")
-}
-
-/** child 状态标签：todo=待处理、review=待复核、done=已验证、cancelled=已豁免；exempt_request 标记 → 豁免申请中。 */
-function childStateLabel(child: WorkItem): string {
-  if (child.metadata["exempt_request"] !== undefined) return "豁免申请中"
-  switch (child.phase) {
-    case "todo": return "待处理"
-    case "review": return "待复核"
-    case "done": return "已验证"
-    case "cancelled": return "已豁免"
-    default: return child.phase
-  }
 }
