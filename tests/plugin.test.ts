@@ -75,6 +75,8 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(paths).toBeDefined()
     expect(paths.length).toBeGreaterThanOrEqual(1)
     expect(paths[0]).toMatch(/assets\/skills$/)
+    expect(paths).not.toContain(expect.stringMatching(/\.agents\/skills$/))
+    expect(paths).not.toContain(expect.stringMatching(/\.opencode\/skills$/))
   })
 
   test("config hook preserves existing agents", async () => {
