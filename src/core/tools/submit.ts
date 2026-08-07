@@ -53,6 +53,32 @@ function isSupplementOnly(params: AgentSubmitParams): boolean {
   )
 }
 
+/**
+ * 统一裁定一致性守卫：任一裁定参数含「驳回（rejected）」时，提交级 verdict 必须为 failed。
+ * - exempt_adjudications 含 action==="rejected"（issue 回 todo 继续修复）→ verdict 必须为 failed
+ * - recheck_adjudications 含 verdict==="rejected"（issue 回 todo + refix_count 递增 + 写 reject_reason）→ verdict 必须为 failed
+ * 驳回意味着该 issue 需修复，审查不能判定通过：rejected+passed 会让 review 态 issue 以非终态滞留，
+ * 门禁要求本层 blocking issue 终态（stepCanPass=false 且无补交推导），形成静默死锁。
+ * dismissed/passed 是合法组合（裁定完成且维度通过），不受此守卫限制。
+ * 零副作用：守卫在一切裁定写入（adjudicateExempt/adjudicateRecheck）与 submitForStep 应用 verdict 之前调用，
+ * 拒绝时保证零状态变更（含混合裁定清单）。
+ */
+function assertRejectedAdjudicationNotPassed(params: AgentSubmitParams): void {
+  if (params.verdict !== "passed") return
+  const rejectedExempt = params.exempt_adjudications?.find((adj) => adj.action === "rejected")
+  if (rejectedExempt) {
+    throw new Error(
+      `豁免裁定失败：issue "${rejectedExempt.issue_id}" 被驳回（rejected），该 issue 需修复，verdict 必须为 failed，不能以 passed 提交。`
+    )
+  }
+  const rejectedRecheck = params.recheck_adjudications?.find((adj) => adj.verdict === "rejected")
+  if (rejectedRecheck) {
+    throw new Error(
+      `复核失败：issue "${rejectedRecheck.issue_id}" 被驳回（rejected），该 issue 需修复，verdict 必须为 failed，不能以 passed 提交。`
+    )
+  }
+}
+
 /** 以 tg.issue 原始 id 解析 child（externalId 优先，兜底 issue: 前缀），供豁免裁定定位。
  *  issue child 优先匹配（与 childById 语义对称）：task child 短数字 id 可能与 issue externalId 撞车，
  *  fixed/exempt 归因解析须命中 issue child，未命中再兜底 task child。 */
@@ -508,18 +534,10 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
     }
 
-    // 豁免驳回（rejected）与 passed 组合守卫：rejected 的 issue 回 todo（非终态），verify_quality 门禁要求
-    // 本层 blocking issue 终态，rejected+passed 会静默死锁（stepCanPass=false 且无补交推导）。驳回意味着该
-    // issue 需修复，审查不能判定通过，verdict 必须为 failed。dismissed+passed 是合法组合（裁定完成且维度通过），
-    // 不受此守卫限制。守卫在一切裁定（adjudicateExempt）之前执行，保证拒绝时零副作用（含混合裁定清单）。
-    if (params.verdict === "passed") {
-      const rejected = params.exempt_adjudications?.find((adj) => adj.action === "rejected")
-      if (rejected) {
-        throw new Error(
-          `豁免裁定失败：issue "${rejected.issue_id}" 被驳回（rejected），该 issue 需修复，verdict 必须为 failed，不能以 passed 提交。`
-        )
-      }
-    }
+    // 裁定一致性守卫（统一判定 exempt/recheck 驳回组合）：任一裁定参数含 rejected 且提交级 verdict=passed
+    // 即抛错（驳回 issue 需修复，审查不能判定通过）。守卫在一切裁定（adjudicateExempt/adjudicateRecheck）写入
+    // 与 submitForStep 应用 verdict 之前执行，拒绝时零副作用（含混合裁定清单）。
+    assertRejectedAdjudicationNotPassed(params)
 
     // 先裁定豁免申请（越权/不可路由/跨维抛错）：submitForStep 尚未执行，保证越权裁定零副作用。
     for (const adj of params.exempt_adjudications ?? []) {

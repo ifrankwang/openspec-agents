@@ -85,6 +85,38 @@ async function expectError(p: Promise<unknown>, pattern: RegExp): Promise<Error>
   return err
 }
 
+/** 注入一个 review 态（已修复待复核）issue child（metadata.source 承载报源，供谁提谁裁定）。 */
+function injectReviewIssue(wt: string, issue: Record<string, unknown>): void {
+  const p = statePath(wt)
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  const item = state.workItems.find((w: any) => w.id === "task:1")
+  item.children.push({
+    id: `issue:${issue.id}`,
+    source: "openspec",
+    externalId: String(issue.id),
+    type: "issue",
+    title: (issue.description as string) ?? "",
+    description: (issue.description as string) ?? "",
+    phase: "review",
+    suspended: false,
+    currentStep: null,
+    tags: {},
+    metadata: {
+      source: (issue.source as string) ?? "openspec-reviewer-style",
+      source_phase: (issue.sourcePhase as string) ?? "quality",
+      dimension: (issue.dimension as string) ?? "style",
+      file: issue.file ?? "",
+      line: issue.line ?? 0,
+      suggestion: issue.suggestion ?? "",
+      ...(typeof issue.refixCount === "number" ? { refix_count: issue.refixCount } : {}),
+    },
+    children: [],
+    labels: [],
+    severity: (issue.severity as string) ?? "Low",
+  })
+  writeFileSync(p, JSON.stringify(state, null, 2))
+}
+
 /**
  * 构造「verify_quality 阶段存在 style 维度豁免申请」前置：
  * style 报 Low issue（其余维度通过后聚合回退）→ 回 implement → dev 申请豁免（exempt_request 标记）→ 手动移回 verify_quality。
@@ -467,6 +499,79 @@ describe("G9.2. 豁免裁定组合守卫", () => {
       const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
       expect(child.phase).toBe("todo")
       expect(child.metadata["exempt_request"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+})
+
+// ── G9.3: 裁定一致性统一守卫（exempt/recheck 驳回 + passed 禁止，一次覆盖两个裁定参数）──
+
+describe("G9.3. 裁定驳回一致性守卫", () => {
+  test("recheck_adjudications 含 rejected + verdict=passed → 抛错且零状态变更（child 保持 review 态、refix_count 不变、reject_reason 未写入）", async () => {
+    const { wt, root } = fresh()
+    try {
+      await driveToQuality(wt, CID)
+      injectReviewIssue(wt, { id: "9", source: "openspec-reviewer-style", sourcePhase: "quality", dimension: "style" })
+      const before = JSON.stringify(readItem(wt, CID).children)
+      await expectError(
+        agent_submit.execute(
+          { change_id: CID, step_id: "verify_quality", verdict: "passed", recheck_adjudications: [{ issue_id: "9", verdict: "rejected", reject_reason: "修复不达标" }] },
+          makeCtx("openspec-reviewer-style", wt)
+        ),
+        /复核失败[\s\S]*被驳回（rejected）[\s\S]*该 issue 需修复[\s\S]*verdict 必须为 failed/
+      )
+      expect(JSON.stringify(readItem(wt, CID).children)).toBe(before)
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "9")
+      expect(child.phase).toBe("review")
+      expect(child.metadata["refix_count"]).toBeUndefined()
+      expect(child.metadata["reject_reason"]).toBeUndefined()
+    } finally { teardown(root) }
+  })
+
+  test("混合清单（exempt rejected + recheck rejected + verdict=passed）→ 抛错且零状态变更（统一守卫先于一切裁定写入）", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupExemptRequest(wt)
+      const before = JSON.stringify(readItem(wt, CID).children)
+      await expectError(
+        agent_submit.execute(
+          {
+            change_id: CID, step_id: "verify_quality", verdict: "passed",
+            exempt_adjudications: [{ issue_id: "7", action: "rejected" }],
+            recheck_adjudications: [{ issue_id: "7", verdict: "rejected", reject_reason: "修复不达标" }],
+          },
+          makeCtx("openspec-reviewer-style", wt)
+        ),
+        /豁免裁定失败[\s\S]*该 issue 需修复[\s\S]*verdict 必须为 failed/
+      )
+      expect(JSON.stringify(readItem(wt, CID).children)).toBe(before)
+      const child = readItem(wt, CID).children.find((c: any) => c.externalId === "7")
+      expect(child.phase).toBe("review")
+      expect(child.metadata["exempt_request"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("混合合法清单（exempt dismissed + recheck passed + verdict=passed）→ 正常裁定（cancelled/done）并推进 done", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupExemptRequest(wt)
+      injectReviewIssue(wt, { id: "9", source: "openspec-reviewer-style", sourcePhase: "quality", dimension: "style" })
+      const r = await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "passed",
+          exempt_adjudications: [{ issue_id: "7", action: "dismissed" }],
+          recheck_adjudications: [{ issue_id: "9", verdict: "passed" }],
+        },
+        makeCtx("openspec-reviewer-style", wt)
+      )
+      expect(r).toContain("提交成功")
+      const item = readItem(wt, CID)
+      const child7 = item.children.find((c: any) => c.externalId === "7")
+      expect(child7.phase).toBe("cancelled")
+      expect(child7.metadata["exempt_request"]).toBeUndefined()
+      const child9 = item.children.find((c: any) => c.externalId === "9")
+      expect(child9.phase).toBe("done")
+      expect(item.phase).toBe("done")
+      expect(item.currentStep).toBeNull()
     } finally { teardown(root) }
   })
 })
