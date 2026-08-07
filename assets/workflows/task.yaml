@@ -129,7 +129,7 @@ phases:
           on_fail: implement
         instructions:
           - "加载匹配维度 skill，以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）；顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃"
-          - "审查新 issue 前先查看视图「待处理/待复核」区块中的既有 issue（含 tool review 阶段工具产生的本维度 issue），避免语义重复"
+          - "审查新 issue 前先查看视图「待复核」区块中的既有 issue（仅本维度报源），避免语义重复"
           - "报本维度新 issue 前先判断该问题能否通过调整确定性质量扫描工具配置（规则收紧/新增规则/配置增强）统一收敛：可工具化 → 双报业务 issue（file=违规现场）与工具改进 issue（file=规则/配置文件，suggestion 含规则草案+验证命令，末尾标 [tool_eligible]，且与业务 issue 同维度），两条 file 不同、方案不同，不构成语义重复，必须双报；工具改进 issue 目标文件在执行边界外时附 boundary_expansion（仅 verdict=failed 时可附）；不可工具化 → 仅报业务 issue。工具化判断细节与规则草案模板遵循已加载的工具改进类 skill，未加载工具改进类 skill 时仅报业务 issue、跳过工具改进环节；提交时在 validation_steps 中记录工具化判断结论"
           - "复核自己报的本维度已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"

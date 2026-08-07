@@ -138,21 +138,7 @@ function renderBlocked(rec: EngineRecommendation, item: WorkItem, workflow: Load
   if (isCurrentAgent) {
     const layer = step ? REVIEW_STEP_TO_LAYER[step.id] : undefined
     const pendingRecheck = layer
-      ? issueChildrenOf(item).filter((c) => {
-          if (!(c.phase === "review" && isBlockingSeverity(c.severity) && resolveChildIssueFields(c).sourcePhase === layer)) {
-            return false
-          }
-          // verify_quality 为多 agent step：按调用者维度过滤，只展示调用者复核不会越权的待复核 issue。
-          // 谁提谁裁定：报源为 quality reviewer 的 issue 收敛到报源自己维度；tool/task 跨维报 issue 的
-          // 待复核项由报源层裁定，不在本维复核权内（不展示，避免自助恢复指引误导）。
-          if (layer === "quality") {
-            const dim = agentToReviewDimension(ctxAgent)
-            if (!dim) return false
-            const source = readIssueSource(c) ?? ""
-            return agentToReviewDimension(source) === dim
-          }
-          return true
-        })
+      ? issueChildrenOf(item).filter((c) => isAgentOwnedIssue(c, ctxAgent) && isBlockingSeverity(c.severity))
       : []
     const lines = [
       "# ⛔ 当前 step 阻塞中，等待编排处理",
@@ -499,13 +485,13 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       break
     case "implement":
       lines.push(...renderExecutionBoundary(item))
-      lines.push(...renderDeveloperChildren(item))
+      lines.push(...renderDeveloperChildren(item, ctxAgent))
       break
     case "review_tool":
-      lines.push(...renderToolChildren(item))
+      lines.push(...renderToolChildren(item, ctxAgent))
       break
     case "review_task":
-      lines.push(...renderTaskChildren(item))
+      lines.push(...renderTaskChildren(item, ctxAgent))
       break
     case "review_quality":
       lines.push(...renderQualityChildren(item, ctxAgent))
@@ -585,13 +571,11 @@ function renderExecutionBoundary(item: WorkItem): string[] {
   return lines
 }
 
-/** implement step：developer 待修复 children（Low+ 必办 / Info 建议，均带 reject_reason/refix_count 提示）。 */
-function renderDeveloperChildren(item: WorkItem): string[] {
+/** implement step：developer 待修复 children（仅 todo 态：review 态由对应 reviewer 复核、豁免申请走待裁定区块）。 */
+function renderDeveloperChildren(item: WorkItem, ctxAgent: string): string[] {
   const lines: string[] = []
   // 仅 issue child 进入修复清单（task child 不得混入 issue 渲染）
-  const toFix = issueChildrenOf(item).filter(
-    (c) => !isTerminalPhase(c.phase) && c.metadata["exempt_request"] === undefined
-  )
+  const toFix = issueChildrenOf(item).filter((c) => isAgentOwnedIssue(c, ctxAgent))
   if (toFix.length === 0) return lines
   const blocking = toFix.filter((c) => isBlockingSeverity(c.severity))
   const info = toFix.filter((c) => !isBlockingSeverity(c.severity))
@@ -629,19 +613,41 @@ function isQualityAdjudicable(child: WorkItem, dimension: Dimension | undefined)
   return agentToReviewDimension(readIssueSource(child) ?? "") === dimension
 }
 
-/** verify_tool step：reviewer-tool 视角全部非终态 issue + 调用者可裁定的豁免申请（待裁定）。 */
-function renderToolChildren(item: WorkItem): string[] {
+/** issue 主区块归属判定（单一事实源）：某 agent 该看到哪些 issue。
+ *  - developer（implement step）：仅 todo 态（排除已交复核的 review 态与豁免申请 exempt_request）
+ *  - reviewer-tool / reviewer-task（verify_tool / verify_task step）：仅本层报源（sourcePhase）的 review 态
+ *  - reviewer-{dim}（verify_quality step）：quality 报源且报源维度与调用者维度一致，仅 review 态
+ * 层归属一律经 resolveChildIssueFields(sourcePhase) 推导（内部含 source_phase 历史兜底），不裸用报源反推。
+ * exempt_request issue 归「待裁定」区块管，主区块收紧为 review-only 后天然不重复展示。 */
+function isAgentOwnedIssue(child: WorkItem, ctxAgent: string): boolean {
+  const f = resolveChildIssueFields(child)
+  const layer = agentToReviewLayer(ctxAgent)
+  if (!layer) {
+    return child.phase === "todo" && child.metadata["exempt_request"] === undefined
+  }
+  if (child.phase !== "review") return false
+  if (f.sourcePhase !== layer) return false
+  if (layer === "quality") {
+    const dim = agentToReviewDimension(ctxAgent)
+    if (!dim) return false
+    return agentToReviewDimension(readIssueSource(child) ?? "") === dim
+  }
+  return true
+}
+
+/** verify_tool step：reviewer-tool 视角本层报源 review 态 issue + 调用者可裁定的豁免申请（待裁定）。 */
+function renderToolChildren(item: WorkItem, ctxAgent: string): string[] {
   const lines: string[] = []
   const issues = issueChildrenOf(item)
-  const active = issues.filter((c) => !isTerminalPhase(c.phase))
-  lines.push(...renderChildrenSection("Issue (待处理/待复核)", active))
+  const active = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
+  lines.push(...renderChildrenSection("Issue (待复核)", active))
   const pending = issues.filter((c) => isToolAdjudicable(c))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines
 }
 
 /** verify_task step：task children 待验证列表 + task 层 issue 主区块 + 调用者可裁定的豁免申请（待裁定）。 */
-function renderTaskChildren(item: WorkItem): string[] {
+function renderTaskChildren(item: WorkItem, ctxAgent: string): string[] {
   const lines: string[] = []
   const pendingTasks = readTasks(item).filter((t) => t.status === "submitted")
   if (pendingTasks.length > 0) {
@@ -650,24 +656,22 @@ function renderTaskChildren(item: WorkItem): string[] {
     lines.push("")
   }
   const issues = issueChildrenOf(item)
-  const own = issues.filter((c) => !isTerminalPhase(c.phase) && resolveChildIssueFields(c).sourcePhase === "task")
-  lines.push(...renderChildrenSection("Issue (待处理/待复核)", own))
+  const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
+  lines.push(...renderChildrenSection("Issue (待复核)", own))
   const pending = issues.filter((c) => isTaskAdjudicable(c))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines
 }
 
-/** verify_quality step：各维度 reviewer 渲染本维度非终态 issue + 本维度豁免申请（待裁定）。 */
+/** verify_quality step：各维度 reviewer 渲染本维度报源 review 态 issue + 本维度豁免申请（待裁定）。 */
 function renderQualityChildren(item: WorkItem, ctxAgent: string): string[] {
   const dimension = agentToDimension(ctxAgent)
   if (!dimension) return []
   // task child 无 dimension 归因（resolveChildIssueFields 缺省 style），必须按 type 排除
   const issues = issueChildrenOf(item)
-  const own = issues
-    .filter((c) => resolveChildIssueFields(c).dimension === dimension)
-    .filter((c) => !isTerminalPhase(c.phase))
+  const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
   const lines: string[] = []
-  lines.push(...renderChildrenSection("Issue (待处理/待复核)", own))
+  lines.push(...renderChildrenSection("Issue (待复核)", own))
   const pending = issues.filter((c) => isQualityAdjudicable(c, dimension))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines

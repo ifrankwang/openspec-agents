@@ -156,10 +156,13 @@ describe("renderStepContext step.id 路由", () => {
     const item = makeItem({
       phase: "review",
       currentStep: "verify_tool",
-      children: [makeIssue("1", { metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "developer" } } })],
+      children: [
+        makeIssue("1", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+        makeIssue("2", { metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "developer" } } }),
+      ],
     })
     const out = renderWorking(item, "verify_tool", "openspec-reviewer-tool")
-    expect(out).toContain("Issue (待处理/待复核)")
+    expect(out).toContain("Issue (待复核)")
     expect(out).toContain("Issue (待裁定是否可豁免)")
   })
 
@@ -169,13 +172,13 @@ describe("renderStepContext step.id 路由", () => {
       currentStep: "verify_task",
       children: [
         makeTask("1", "Task one"),
-        makeIssue("2", { metadata: { source: "openspec-reviewer-task", source_phase: "task", dimension: "style" } }),
+        makeIssue("2", { phase: "review", metadata: { source: "openspec-reviewer-task", source_phase: "task", dimension: "style" } }),
       ],
     })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("Task (待验证)")
     expect(out).toContain("Task one")
-    expect(out).toContain("## Issue (待处理/待复核)")
+    expect(out).toContain("## Issue (待复核)")
     expect(out).toContain("issue 2 描述")
   })
 
@@ -184,12 +187,12 @@ describe("renderStepContext step.id 路由", () => {
       phase: "review",
       currentStep: "verify_quality",
       children: [
-        makeIssue("1", { metadata: { source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
-        makeIssue("2", { severity: "Critical", metadata: { source_phase: "quality", dimension: "architecture" } }),
+        makeIssue("1", { phase: "review", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
+        makeIssue("2", { phase: "review", severity: "Critical", metadata: { source: "openspec-reviewer-architecture", source_phase: "quality", dimension: "architecture" } }),
       ],
     })
     const out = renderWorking(item, "verify_quality", "openspec-reviewer-style")
-    expect(out).toContain("## Issue (待处理/待复核)")
+    expect(out).toContain("## Issue (待复核)")
     expect(out).toContain("issue 1 描述")
     // architecture 维度 child 不可见
     expect(out).not.toContain("issue 2 描述")
@@ -362,7 +365,7 @@ describe("step 操作层指引补全", () => {
     const out = renderWorking(item, "verify_quality", "openspec-reviewer-style")
     expect(out).toContain("以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）")
     expect(out).toContain("顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃")
-    expect(out).toContain("审查新 issue 前先查看视图「待处理/待复核」区块中的既有 issue（含 tool review 阶段工具产生的本维度 issue），避免语义重复")
+    expect(out).toContain("审查新 issue 前先查看视图「待复核」区块中的既有 issue（仅本维度报源），避免语义重复")
     // 豁免裁定指引：verify_quality 新增与 tool/task 同口径
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     // 工具化反思步骤：报 issue 前先判断能否经确定性扫描工具配置收敛

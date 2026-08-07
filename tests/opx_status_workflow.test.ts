@@ -310,7 +310,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("verify_tool 视角：全部非终态 issue + 待裁定（豁免申请中）", async () => {
+  test("verify_tool 视角：仅 tool 报源 review 态 issue + 待裁定（豁免申请中）", async () => {
     const root = `/tmp/wf-m1d-b-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -319,7 +319,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const state = readStateSync(wt)
     const item = taskItemOf(state)
     item.children = [
-      makeIssueChild("1", { phase: "todo", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9, exempt_request: { requestedBy: "openspec-developer" } } }),
+      makeIssueChild("1", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9 } }),
       makeIssueChild("2", { metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", exempt_request: { requestedBy: "openspec-developer" }, exempt_reason: "设计如此" } }),
     ]
     writeStateSync(wt, state)
@@ -327,11 +327,12 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     const output = await status.execute({ change_id: CID }, toolR)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("Issue (待处理/待复核)")
+    // tool 报源 review 态 issue → 主区块（待复核）
+    expect(output).toContain("Issue (待复核)")
+    expect(output).toContain("issue 1 描述")
+    expect(output).toContain("待复核")
     // 带 exempt_request 标记的 child → 待裁定区块
     expect(output).toContain("Issue (待裁定是否可豁免)")
-    expect(output).toContain("issue 1 描述")
-    expect(output).toContain("豁免申请中")
     // 无标记 review 态 child 不再进入待裁定（新语义仅豁免申请可裁定）——防回归：上一版本旧标题「待裁定 (豁免申请中)」不应出现
     expect(output).not.toContain("待裁定 (豁免申请中)")
     // exempt_request child → 豁免申请中
@@ -351,15 +352,15 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const item = taskItemOf(state)
     item.children = [
       makeIssueChild("1", { phase: "cancelled", metadata: { source_phase: "tool", dimension: "architecture", file: "src/b.ts", line: 9 } }),
-      makeIssueChild("2", { phase: "todo", metadata: { source_phase: "tool", dimension: "style", file: "src/c.ts", line: 3 } }),
+      makeIssueChild("2", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style", file: "src/c.ts", line: 3 } }),
     ]
     writeStateSync(wt, state)
 
     const output = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-tool", wt))
     // 无豁免申请 → 不渲染待裁定区块（cancelled/todo 无标记均不进入）
     expect(output).not.toContain("Issue (待裁定是否可豁免)")
-    // 全量区块仅渲染非终态 issue：todo child 2 仍在，cancelled child 1 不再出现
-    expect(output).toContain("Issue (待处理/待复核)")
+    // 主区块仅渲染 tool 报源 review 态 issue：review 态 child 2 仍在，cancelled child 1 不再出现
+    expect(output).toContain("Issue (待复核)")
     expect(output).toContain("issue 2 描述")
     expect(output).not.toContain("issue 1 描述")
 
@@ -385,7 +386,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     // tool 报源豁免 → 待裁定区块
     expect(output).toContain("## Issue (待裁定是否可豁免)")
     expect(output).toContain("issue 1 描述")
-    // quality 报源豁免 → 调用者（tool）无权裁定，不进入待裁定区块（仅出现在主区块）
+    // quality 报源豁免 → 调用者（tool）无权裁定，不进入待裁定区块（todo 态也不进入主区块）
     const pendingIdx = output.indexOf("待裁定是否可豁免")
     expect(pendingIdx).toBeGreaterThan(-1)
     expect(output.slice(pendingIdx)).not.toContain("issue 2 描述")
@@ -427,6 +428,125 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  test("dev 视图：仅显示 todo 态 issue，不含已交复核（review 态）issue", async () => {
+    const root = `/tmp/wf-dev-review-hide-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    const d = await driveToImplement(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.children = [
+      makeIssueChild("1", { severity: "Medium", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+      makeIssueChild("2", { phase: "review", severity: "High", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+    ]
+    writeStateSync(wt, state)
+
+    const output = await status.execute({ change_id: CID }, d)
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).toContain("Issue (待修复 · Low 及以上，必办)")
+    // todo 态 issue 仍在待修复清单
+    expect(output).toContain("issue 1 描述")
+    expect(output).toContain("待处理")
+    // review 态 issue 由对应 reviewer 复核，dev 视图不展示
+    expect(output).not.toContain("issue 2 描述")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("reviewer-tool 主区块：不含 task/quality 报源 issue（谁提谁裁定收敛到报源层）", async () => {
+    const root = `/tmp/wf-tool-own-only-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.children = [
+      makeIssueChild("1", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+      makeIssueChild("2", { phase: "review", metadata: { source: "openspec-reviewer-task", source_phase: "task", dimension: "style" } }),
+      makeIssueChild("3", { phase: "review", metadata: { source: "openspec-reviewer-architecture", source_phase: "quality", dimension: "architecture" } }),
+    ]
+    writeStateSync(wt, state)
+
+    const toolR = makeCtx("openspec-reviewer-tool", wt)
+    const output = await status.execute({ change_id: CID }, toolR)
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    // 仅 tool 报源 review 态 issue 进入主区块
+    expect(output).toContain("Issue (待复核)")
+    expect(output).toContain("issue 1 描述")
+    expect(output).not.toContain("issue 2 描述")
+    expect(output).not.toContain("issue 3 描述")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("verify_quality：主区块不含 tool/task 跨维报源 issue（即使 dimension 指向本维）", async () => {
+    const root = `/tmp/wf-quality-no-cross-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.currentStep = "verify_quality"
+    item.tags = {
+      "analyze:openspec-architect": "passed",
+      "implement:openspec-developer": "passed",
+      "verify_tool:openspec-reviewer-tool": "passed",
+      "verify_task:openspec-reviewer-task": "passed",
+    }
+    item.children = [
+      // tool 层报源、dimension 指向 style：报源层为 tool，style reviewer 无权裁定 → 不展示
+      makeIssueChild("1", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+      // task 层报源、dimension 指向 style：同上
+      makeIssueChild("2", { phase: "review", metadata: { source: "openspec-reviewer-task", source_phase: "task", dimension: "style" } }),
+      // 本维 quality 报源 review 态 → 展示
+      makeIssueChild("3", { phase: "review", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style" } }),
+    ]
+    writeStateSync(wt, state)
+
+    const styleR = makeCtx("openspec-reviewer-style", wt)
+    const output = await status.execute({ change_id: CID }, styleR)
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).toContain("## Issue (待复核)")
+    // tool/task 跨维报源 issue 不进入主区块
+    expect(output).not.toContain("issue 1 描述")
+    expect(output).not.toContain("issue 2 描述")
+    // 本维报源 issue 正常展示
+    expect(output).toContain("issue 3 描述")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("reviewer 主区块：不再显示 todo 态 issue（仅 review 态）", async () => {
+    const root = `/tmp/wf-review-no-todo-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.children = [
+      makeIssueChild("1", { phase: "todo", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+      makeIssueChild("2", { phase: "review", metadata: { source: "openspec-reviewer-tool", source_phase: "tool", dimension: "style" } }),
+    ]
+    writeStateSync(wt, state)
+
+    const toolR = makeCtx("openspec-reviewer-tool", wt)
+    const output = await status.execute({ change_id: CID }, toolR)
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).toContain("## Issue (待复核)")
+    // todo 态 issue 不进入 reviewer 主区块（由 dev 修复）
+    expect(output).not.toContain("issue 1 描述")
+    expect(output).not.toContain("待处理")
+    // review 态 issue 正常展示
+    expect(output).toContain("issue 2 描述")
+    expect(output).toContain("待复核")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("verify_quality style 维度：仅渲染 style 维度 children（其他维度不可见）", async () => {
     const root = `/tmp/wf-m1d-c-${Date.now()}`
     const wt = freshWt(root)
@@ -443,15 +563,15 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
       "verify_task:openspec-reviewer-task": "passed",
     }
     item.children = [
-      makeIssueChild("1", { metadata: { source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
-      makeIssueChild("2", { severity: "Critical", metadata: { source_phase: "quality", dimension: "architecture", file: "src/d.ts", line: 7 } }),
+      makeIssueChild("1", { phase: "review", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
+      makeIssueChild("2", { phase: "review", severity: "Critical", metadata: { source: "openspec-reviewer-architecture", source_phase: "quality", dimension: "architecture", file: "src/d.ts", line: 7 } }),
     ]
     writeStateSync(wt, state)
 
     const styleR = makeCtx("openspec-reviewer-style", wt)
     const output = await status.execute({ change_id: CID }, styleR)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("## Issue (待处理/待复核)")
+    expect(output).toContain("## Issue (待复核)")
     expect(output).toContain("issue 1 描述")
     // architecture 维度 child 不可见（描述与 child id 均不出现）
     expect(output).not.toContain("issue 2 描述")
@@ -460,7 +580,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("verify_quality 视角：终态（done/cancelled）维度 child 不再出现在 Issue (待处理/待复核) 区块", async () => {
+  test("verify_quality 视角：终态（done/cancelled）维度 child 不再出现在 Issue (待复核) 区块", async () => {
     const root = `/tmp/wf-m1d-c-terminal-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
@@ -476,16 +596,16 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
       "verify_task:openspec-reviewer-task": "passed",
     }
     item.children = [
-      makeIssueChild("1", { metadata: { source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
-      makeIssueChild("2", { phase: "done", metadata: { source_phase: "quality", dimension: "style", file: "src/d.ts", line: 7 } }),
-      makeIssueChild("3", { phase: "cancelled", metadata: { source_phase: "quality", dimension: "style", file: "src/e.ts", line: 9 } }),
+      makeIssueChild("1", { phase: "review", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", file: "src/c.ts", line: 5 } }),
+      makeIssueChild("2", { phase: "done", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", file: "src/d.ts", line: 7 } }),
+      makeIssueChild("3", { phase: "cancelled", metadata: { source: "openspec-reviewer-style", source_phase: "quality", dimension: "style", file: "src/e.ts", line: 9 } }),
     ]
     writeStateSync(wt, state)
 
     const styleR = makeCtx("openspec-reviewer-style", wt)
     const output = await status.execute({ change_id: CID }, styleR)
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("## Issue (待处理/待复核)")
+    expect(output).toContain("## Issue (待复核)")
     // 非终态维度 child 仍渲染
     expect(output).toContain("issue 1 描述")
     // 终态维度 child 不再出现在本维度区块
