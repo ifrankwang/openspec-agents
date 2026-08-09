@@ -5,3 +5,4 @@ dist
 .worktree/
 .worktrees/
 .codegraph
+.opencode/.orchestrate_state/

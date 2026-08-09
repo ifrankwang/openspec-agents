@@ -280,6 +280,8 @@ curl -sf -u <token>: "http://localhost:9000/api/hotspots/search?projectKey=<项�
 
 MUST 携带 `inNewCodePeriod=true` 限定 new code 期、`status=TO_REVIEW` 限定待评审热点，否则返回全项目历史存量热点。仅报告待评审热点，已审 SAFE/FIXED 不纳入。
 
+Security Hotspot 不可用 NOSONAR 注释抑制，须在平台标注 SAFE 或走编排豁免流程；命中项目级豁免清单的存量热点按 Info 提报，不重新豁免。
+
 热点无 BLOCKER/CRITICAL 分级体系，按 `vulnerabilityProbability` 映射 issue severity：HIGH → High、MEDIUM → Medium、LOW → Low；TO_REVIEW 表示待评审而非已确认缺陷。违规映射沿用第 8 节映射表 `SECURITY_HOTSPOT → security`。
 
 ### 质量门禁与代码规模指标
@@ -337,7 +339,7 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 
 降级处理：
 - 优先复用本次已 ANALYSIS SUCCESSFUL 的全量扫描结果，禁止为修复 SCM 无限重扫（SCM 覆盖尝试最多 1 次）
-- 全量扫描结果按第 8 节 dimension 映射表统一提交，按原始严重级别，不区分是否本轮引入
+- 全量扫描结果按第 8 节 dimension 映射表统一提交，按原始严重级别，不区分是否本轮引入；命中项目级豁免清单的存量问题除外（按 Info 提报，不重新豁免，清单命中由视图标注，无需在此探测）
 - 状态过滤独立于期界过滤，new code 查询与降级全量查询两条路径均须带 `statuses=OPEN,CONFIRMED,REOPENED`
 
 ## 7. 质量工具配置检查

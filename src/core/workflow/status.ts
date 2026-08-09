@@ -1,6 +1,7 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
+import { EXEMPTED_HIT_KEY } from "../exemptions.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import type { DetectChangesResult } from "../git.js"
@@ -21,6 +22,8 @@ export interface WorkflowStatusViewOptions {
   mainPollution?: { repoRoot: string; files: string[] } | null
   /** verify_tool 的 reviewer-tool 工作视图变更检测结果（检查点增量检测，A4）；缺省 undefined 走全量。 */
   toolChanges?: DetectChangesResult
+  /** 本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时统计，供视图汇总提示）。 */
+  exemptedHits?: number
 }
 
 /**
@@ -73,7 +76,7 @@ export function renderWorkflowStatusView(
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, options.toolChanges)
+    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, options.toolChanges, options.exemptedHits)
   }
   return renderGate(rec, item, ctxAgent)
 }
@@ -419,6 +422,7 @@ function renderAgentWorking(
   state: OrchestrateState,
   tg: TaskGroupState,
   toolChanges?: DetectChangesResult,
+  exemptedHits?: number,
 ): string {
   // worktree 就绪阻断（置于顶部）：未就绪时拒绝执行，渲染 ⛔ 视图，不输出 ✅ 执行视图内容
   if (!isWorktreeReady(tg)) {
@@ -438,10 +442,10 @@ function renderAgentWorking(
   if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges) {
     const { active, pending } = toolPendingChildren(item, ctxAgent)
     if (!toolChanges.hasNonDocChange && active.length === 0 && pending.length === 0) {
-      return renderToolDirectSubmit()
+      return renderToolDirectSubmit(exemptedHits)
     }
     if (!toolChanges.hasNonDocChange) {
-      return renderToolAdjudicateOnly(item, rec, ctxAgent)
+      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptedHits)
     }
   }
   // skill 加载清单按当前调用者 agent 声明的 capability_tags 过滤（step 内各 agent 独立声明，互不相同）
@@ -474,6 +478,12 @@ function renderAgentWorking(
     `**阶段**: ${item.phase} | **step**: \`${rec.stepId ?? "(无)"}\``,
     "",
   ]
+  if ((exemptedHits ?? 0) > 0) {
+    lines.push(
+      `> **存量豁免提示**：本 change 存在 ${exemptedHits} 个命中项目级跨 change 豁免清单的存量问题（已按 Info 处理，不阻塞、无需重复豁免）。`,
+      "",
+    )
+  }
   lines.push(...renderStepSemantics(step, common, stepCtx))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
@@ -713,28 +723,42 @@ function renderToolChildren(item: WorkItem, ctxAgent: string): string[] {
 /** verify_tool 三分支①（直提）：自上次工具检查后无代码/配置变更且本层无待复核/待裁定项。
  *  替换式最小视图：不渲染 worktree/变更范围区块（避免与既有 baseRef..HEAD 累计口径提示冲突），
  *  文案只给结论，不展示检查点 hash。 */
-function renderToolDirectSubmit(): string {
-  return [
+function renderToolDirectSubmit(exemptedHits?: number): string {
+  const lines = [
     "# ✅ 当前轮到你执行",
     "",
     "自上次工具检查后，worktree 无代码/配置变更（仅 openspec 文档变更或无变更），本层亦无待复核/待裁定 issue。",
     "",
+  ]
+  if ((exemptedHits ?? 0) > 0) {
+    lines.push(
+      `> **存量豁免提示**：本 change 存在 ${exemptedHits} 个命中项目级跨 change 豁免清单的存量问题（已按 Info 处理，不阻塞、无需重复豁免）。`,
+      "",
+    )
+  }
+  lines.push(
     "无需运行全量工具检查，直接调用 `opx_agent_submit({ step_id: \"verify_tool\", verdict: \"passed\" })` 提交通过后结束会话。",
     "",
-  ].join("\n")
+  )
+  return lines.join("\n")
 }
 
 /** verify_tool 三分支②（仅处理待复核项）：无代码/配置变更但有本层待复核/待裁定项 →
  *  仅复核/裁定待处理项，不跑全量工具扫描，处理完成后提交。 */
-function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string): string {
+function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string, exemptedHits?: number): string {
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
     "自上次工具检查后，worktree 无代码/配置变更，无需运行全量工具检查。",
     "",
-    "仅处理以下本层待复核 / 待裁定项，处理完成后提交：",
-    "",
   ]
+  if ((exemptedHits ?? 0) > 0) {
+    lines.push(
+      `> **存量豁免提示**：本 change 存在 ${exemptedHits} 个命中项目级跨 change 豁免清单的存量问题（已按 Info 处理，不阻塞、无需重复豁免）。`,
+      "",
+    )
+  }
+  lines.push("仅处理以下本层待复核 / 待裁定项，处理完成后提交：", "")
   lines.push(...renderToolChildren(item, ctxAgent))
   lines.push("## 操作指引", "")
   lines.push(
@@ -800,6 +824,10 @@ function renderChildIssue(child: WorkItem): string {
   ]
   if (f.file) lines.push(`  - 文件：${formatFilePath(f.file, f.line)}`)
   lines.push(`  - 描述：${child.description}`)
+  if (child.metadata[EXEMPTED_HIT_KEY] !== undefined) {
+    const rule = typeof child.metadata[EXEMPTED_HIT_KEY] === "string" ? child.metadata[EXEMPTED_HIT_KEY] : ""
+    lines.push(`  - ⚠️ 命中项目级豁免清单${rule ? `（rule=${rule}）` : ""}的存量问题，已按 Info 处理，无需重复豁免`)
+  }
   if (typeof child.metadata["suggestion"] === "string") lines.push(`  - 建议：${child.metadata["suggestion"]}`)
   if (typeof child.metadata["reject_reason"] === "string") lines.push(`  - 驳回原因：${child.metadata["reject_reason"]}`)
   if (typeof child.metadata["refix_count"] === "number") lines.push(`  - 修复未过次数：${child.metadata["refix_count"]}`)

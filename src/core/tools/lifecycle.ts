@@ -559,7 +559,9 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
       toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
     }
   }
-  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution, toolChanges })
+  // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
+  const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
+  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution, toolChanges, exemptedHits })
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {

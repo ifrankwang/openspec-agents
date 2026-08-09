@@ -20,6 +20,7 @@ import { assertIssueFilesWithin } from "../paths.js"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
 } from "../state.js"
+import { readExemptions, applyExemptionDowngrade, writeDismissedExemption } from "../exemptions.js"
 
 /** 读取 task workflow 配置（assets/workflows/task.yaml），进程内缓存。 */
 const loadTaskWorkflow = () => loadWorkflowFile(TASK_WORKFLOW_PATH)
@@ -539,6 +540,11 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     // 与 submitForStep 应用 verdict 之前执行，拒绝时零副作用（含混合裁定清单）。
     assertRejectedAdjudicationNotPassed(params)
 
+    // 本次提交待写入项目级跨 change 豁免清单的 issue child（仅 dismissed 收集）。
+    // 只收集不落盘：submitForStep 成功后再统一写入，保证同批后续校验（路由 / new_children /
+    // assertFailedHasReason 等）抛错时清单与内存状态同步零变更。
+    const pendingExemptions: WorkItem[] = []
+
     // 先裁定豁免申请（越权/不可路由/跨维抛错）：submitForStep 尚未执行，保证越权裁定零副作用。
     for (const adj of params.exempt_adjudications ?? []) {
       const child = resolveChildByIssueId(item, adj.issue_id)
@@ -546,6 +552,13 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         throw new Error(`豁免裁定失败：issue "${adj.issue_id}" 不存在于 item "${item.id}" 的 children 中。`)
       }
       adjudicateExempt(item, workflow, { issueId: child.id, agentKey: ctx.agent, action: adj.action })
+      // dismissed 且携带 rule 时记入待落盘豁免清单（后续 change 同 rule+file+line 命中按 Info
+      // 处理，避免 worktree 全量扫描把存量已豁免问题反复报为阻塞）。此处仅收集，submitForStep
+      // 成功后再统一调用 writeDismissedExemption 落盘——同批后续校验抛错时清单不落盘（零状态变更
+      // 一致性）。giveup 走 applyCheckpointGiveup，不经此路径，天然排除。
+      if (adj.action === "dismissed") {
+        pendingExemptions.push(child)
+      }
     }
 
     // 复核已修复待复核（review 态）issue：passed→done，rejected→todo + refix_count + reject_reason。
@@ -631,6 +644,14 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     const { accepted } = dedupeNewChildren(item, newChildren)
 
+    // 命中项目级跨 change 豁免清单降级（顺序敏感：必须在 assertFailedHasReason 之前）：
+    // 存量已裁定豁免的 (rule+file+line) 本轮再报时降为 Info 级，不阻塞、无需再次豁免；
+    // 否则仅含存量豁免问题的 change 中 reviewer 能 failed 却无真实待办，形成死锁。
+    if (stepPhase === "review" && accepted.length > 0) {
+      const store = await readExemptions(ctx.worktree)
+      applyExemptionDowngrade(accepted, store)
+    }
+
     // verdict=failed 必须有具体不通过理由：理由判定在去重之后，仅依据实际接受的 new_children——
     // 重复新报（或与既有 child 同 key 被去重）不构成不通过理由，避免守卫放行但实际零新增 issue。
     if (stepPhase === "review" && params.verdict === "failed") {
@@ -687,6 +708,13 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     if (params.step_id === "verify_tool" && agentToReviewLayer(ctx.agent) === "tool") {
       const head = await getCurrentHead(wtPath)
       if (head) item.metadata["_tool_review_checkpoint"] = head
+    }
+
+    // 项目级豁免清单统一落盘（submitForStep 成功之后、writeState 之前，与 checkpoint 写入同一位次）：
+    // 任何前置校验（路由 / new_children / dimension / assertFailedHasReason）抛错均不落盘。
+    // 写入失败仅告警，不阻断主流程（writeDismissedExemption 内部容错）。
+    for (const child of pendingExemptions) {
+      await writeDismissedExemption(ctx.worktree, child, { changeId: state.changeId, exemptedBy: ctx.agent })
     }
 
     await writeState(ctx.worktree, state)
