@@ -319,11 +319,13 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("存在时读取 clarify.md（架构方向结论）")
     expect(out).toContain("环境/基础设施问题（schema 缺失、DDL 未执行、依赖未安装）应通过 migration/初始化脚本等代码层面解决")
     expect(out).toContain("仅生产级凭据、真实第三方资源、人工运维才走 blocker/豁免")
-    expect(out).toContain("issue 指向文件的目录已并入执行边界，修复这些文件（含回归引入问题）不算越界")
+    expect(out).toContain("issue 指向文件的目录已并入执行边界，修复这些文件（含回归引入问题）不算越界；issue 的 file 字段指向 openspec/changes/ 下文档时，按该 issue 要求修复对应文档同样不算越界（仅限该 issue 指定文件，不得扩大范围）")
     expect(out).toContain("reviewer 的 boundary_expansion 已并入边界")
     expect(out).toContain("以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）")
-    // 禁改设计文档（step 级仅保留该专属约束，opx_orch_* 禁令已在 common）
+    // 禁改设计文档（step 级仅保留该专属约束，opx_orch_* 禁令已在 common）；唯一例外：issue 指向 openspec/changes/ 下文档
     expect(out).toContain("禁用 edit/write 修改 `/wt/openspec/changes/` 下任何文档（spec/design/tasks/clarify）")
+    expect(out).toContain("唯一例外：所提交 fixed_issue_ids 中某 issue 的 file 字段指向该目录下文档时，仅允许按该 issue 的要求修改对应文档，不得扩大范围")
+    expect(out).toContain("本约束为提示词级约束，工具层不校验实际改动的文件")
     expect(out).not.toContain("禁止调用任何 opx_orch_* 工具（编排者专属）；禁用")
   })
 
@@ -332,6 +334,7 @@ describe("step 操作层指引补全", () => {
     const out = renderWorking(item, "verify_tool", "openspec-reviewer-tool")
     expect(out).toContain("顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描）")
     expect(out).toContain("报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）")
+    expect(out).toContain("当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档")
     expect(out).toContain("非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）")
@@ -345,6 +348,7 @@ describe("step 操作层指引补全", () => {
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量")
     expect(out).toContain("有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks")
+    expect(out).toContain("当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定")
     expect(out).toContain("design.md 的 API 定义（请求/响应结构、数据模型）")
     expect(out).toContain("specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约")
@@ -367,6 +371,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）")
     expect(out).toContain("顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃")
     expect(out).toContain("审查新 issue 前先查看视图「待复核」区块中的既有 issue（仅本维度报源），避免语义重复")
+    expect(out).toContain("当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档")
     // 豁免裁定指引：verify_quality 新增与 tool/task 同口径
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     // 工具化反思步骤：报 issue 前先判断能否经确定性扫描工具配置收敛
