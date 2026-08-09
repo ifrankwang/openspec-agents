@@ -99,4 +99,59 @@ describe("tool review 检查点增量端到端", () => {
       expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBe("cp-4")
     } finally { teardown(root) }
   })
+
+  test("failed → dev 只改文档 → 重进 verify_tool 走分支②（仅处理待复核项，不直提、不跑全量）", async () => {
+    const { wt, root, fakeGit } = fresh()
+    try {
+      fakeGit.headShas = ["cp-1", "cp-2"]
+      const { ctx } = await driveToVerifyTool(wt, CID)
+
+      // 首次进入 verify_tool：无检查点 → base_ref 兜底，区间含代码 → 全量
+      fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
+      const firstView = await status.execute({ change_id: CID }, ctx.toolR)
+      expect(firstView).toContain("顺序运行全部确定性工具检查")
+
+      // ── failed：报 issue（new_children），检查点已写 cp-1，回退 implement ──
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "failed",
+          new_children: [{ id: "9", title: "Tool issue", description: "d", severity: "Low", dimension: "style" }],
+        },
+        ctx.toolR
+      )
+      const afterFail = readItem(wt, CID)
+      expect(afterFail.metadata["_tool_review_checkpoint"]).toBe("cp-1")
+      expect(afterFail.currentStep).toBe("implement")
+
+      // ── dev 只修改 openspec 文档并修复 issue 9 → 重进 verify_tool（issue 9 置 review 待复核）──
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: [], fixed_issue_ids: ["9"] },
+        ctx.dev
+      )
+      expect(readItem(wt, CID).currentStep).toBe("verify_tool")
+
+      // 检查点区间仅 openspec 文档变更 + 本层存在 review 态待复核 issue → 分支②
+      fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "openspec/changes/cid/design.md")
+      const branch2View = await status.execute({ change_id: CID }, ctx.toolR)
+      // 含待处理项清单与「不跑全量」语义指引
+      expect(branch2View).toContain("无需运行全量工具检查")
+      expect(branch2View).toContain("仅处理以下本层待复核 / 待裁定项")
+      expect(branch2View).toContain("Issue (待复核)")
+      expect(branch2View).toContain("Issue #9")
+      expect(branch2View).toContain("描述：d")
+      // 不含直提分支文案
+      expect(branch2View).not.toContain("无需运行全量工具检查，直接调用")
+      // 不含全量工具检查指令
+      expect(branch2View).not.toContain("顺序运行全部确定性工具检查")
+
+      // ── 提交复核结果：issue 9 done，检查点推进到 cp-2 ──
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", recheck_adjudications: [{ issue_id: "9", verdict: "passed" }] },
+        ctx.toolR
+      )
+      const afterRecheck = readItem(wt, CID)
+      expect(afterRecheck.metadata["_tool_review_checkpoint"]).toBe("cp-2")
+      expect(afterRecheck.children.find((c: any) => c.externalId === "9")?.phase).toBe("done")
+    } finally { teardown(root) }
+  })
 })

@@ -97,6 +97,62 @@ describe("detectChanges 未提交变更", () => {
   })
 })
 
+describe("detectChanges 已提交 + 未提交变更混合合并", () => {
+  test("已提交含代码 + 未提交仅 openspec → files 取已提交来源、hasNonDocChange=true", async () => {
+    const fake = fresh()
+    fake.diffNameOnlyByRange.set("cp1..HEAD", "src/a.ts")
+    fake.statusPorcelainOutput.set("/wt", " M openspec/changes/cid/tasks.md")
+    const r = await detectChanges("/wt", { checkpoint: "cp1", baseRef: BASE_REF })
+    expect(r.files).toEqual(["src/a.ts"])
+    expect(r.hasNonDocChange).toBe(true)
+  })
+
+  test("已提交仅 openspec + 未提交含代码 → files 合并两来源路径、hasNonDocChange=true", async () => {
+    const fake = fresh()
+    fake.diffNameOnlyByRange.set("cp1..HEAD", "openspec/changes/cid/design.md")
+    fake.statusPorcelainOutput.set("/wt", " M src/foo.ts")
+    const r = await detectChanges("/wt", { checkpoint: "cp1", baseRef: BASE_REF })
+    expect(r.files).toEqual(["openspec/changes/cid/design.md", "src/foo.ts"])
+    expect(r.hasNonDocChange).toBe(true)
+  })
+
+  test("两来源均仅 openspec 文档 → hasNonDocChange=false", async () => {
+    const fake = fresh()
+    fake.diffNameOnlyByRange.set("cp1..HEAD", "openspec/changes/cid/design.md")
+    fake.statusPorcelainOutput.set("/wt", " M openspec/changes/cid/tasks.md")
+    const r = await detectChanges("/wt", { checkpoint: "cp1", baseRef: BASE_REF })
+    expect(r.files).toEqual(["openspec/changes/cid/design.md"])
+    expect(r.hasNonDocChange).toBe(false)
+  })
+
+  test("两来源均无变更（diff 空 + status 空）→ hasNonDocChange=false", async () => {
+    const fake = fresh()
+    fake.diffNameOnlyByRange.set("cp1..HEAD", "")
+    fake.statusPorcelainOutput.set("/wt", "")
+    const r = await detectChanges("/wt", { checkpoint: "cp1", baseRef: BASE_REF })
+    expect(r.files).toEqual([])
+    expect(r.hasNonDocChange).toBe(false)
+  })
+})
+
+describe("detectChanges status --porcelain rename 条目", () => {
+  test("rename 目标在 openspec/ 下 → 过滤为文档（不误判为变更）", async () => {
+    const fake = fresh()
+    fake.statusPorcelainOutput.set("/wt", "R  openspec/changes/cid/old.md -> openspec/changes/cid/new.md")
+    const r = await detectChanges("/wt", { checkpoint: "cp1", baseRef: BASE_REF })
+    expect(r.files).toEqual([])
+    expect(r.hasNonDocChange).toBe(false)
+  })
+
+  test("rename 目标在代码路径 → 解析为变更、hasNonDocChange=true", async () => {
+    const fake = fresh()
+    fake.statusPorcelainOutput.set("/wt", "R  openspec/changes/cid/old.md -> src/main/java/com/t/App.java")
+    const r = await detectChanges("/wt", { checkpoint: "cp1", baseRef: BASE_REF })
+    expect(r.files).toEqual(["src/main/java/com/t/App.java"])
+    expect(r.hasNonDocChange).toBe(true)
+  })
+})
+
 describe("detectChanges git 不可用降级", () => {
   test("diff 失败（如仓库损坏/非 git 目录）→ 降级 hasNonDocChange=true", async () => {
     const fake = fresh()

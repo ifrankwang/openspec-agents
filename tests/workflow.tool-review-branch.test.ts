@@ -91,6 +91,25 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).not.toContain("顺序运行全部确定性工具检查")
   })
 
+  test("分支② 不分 severity 守卫：本层 Info 级 review 待复核 issue 也挡直提（走仅处理待复核项）", () => {
+    const item = makeItem({
+      children: [makeIssue("1", { phase: "review", severity: "Info" })],
+    })
+    const out = renderWorkingView(item, "verify_tool", "openspec-reviewer-tool", {
+      toolChanges: { files: [], hasNonDocChange: false },
+    })
+    // 本层待复核判定不分 severity：Info 也算 active → 不触发直提分支
+    expect(out).toContain("无需运行全量工具检查")
+    expect(out).toContain("仅处理以下本层待复核 / 待裁定项")
+    expect(out).toContain("Issue (待复核)")
+    expect(out).toContain("issue 1 描述")
+    expect(out).toContain("recheck_adjudications")
+    // 不渲染直提分支文案（无待复核项时才直提）
+    expect(out).not.toContain("无需运行全量工具检查，直接调用")
+    // 不渲染全量工具检查指引
+    expect(out).not.toContain("顺序运行全部确定性工具检查")
+  })
+
   test("分支③ 全量：有变更 → 维持现状全量指引（含 worktree/变更范围区块与全量检查指令）", () => {
     const item = makeItem()
     const out = renderWorkingView(item, "verify_tool", "openspec-reviewer-tool", {
