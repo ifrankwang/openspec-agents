@@ -104,6 +104,10 @@ describe("S4: verify_tool step", () => {
   test("reviewer-tool 视角输出 ✅ 视图 + skill 名（quality-gate/code-efficiency/api-test）", async () => {
     const { wt, root } = fresh()
     try {
+      // 检查点增量检测下 reviewer-tool 视图会按「检查点→HEAD」变更分流；配置代码变更使该用例走全量分支
+      const fake = new FakeGitRunner()
+      fake.diffNameOnlyDefault = "src/main.ts"
+      __setGitRunner(fake)
       const { ctx } = await driveToVerifyTool(wt, CID)
       const out = await status.execute({ change_id: CID }, ctx.toolR)
       expect(out).toContain("# ✅ 当前轮到你执行")

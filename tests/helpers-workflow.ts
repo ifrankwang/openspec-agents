@@ -16,6 +16,10 @@
  */
 import type { ToolContext } from "@opencode-ai/plugin"
 import type { WorkItem } from "../src/core/workflow/types"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { loadWorkflow } from "../src/core/workflow/loader"
+import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { taskListOf as projectTaskList } from "../src/core/task-children"
 import { init, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
 import { makeCtx, readState } from "./helpers"
@@ -84,6 +88,23 @@ export function readItem(wt: string, cid: string, groupId = "1"): any {
 /** task 清单的 id 列表（供 completed_task_ids / verified_tasks 默认值）。 */
 export function taskIdsOf(item: any): string[] {
   return taskListOf(item).map((t: any) => t.id)
+}
+
+/** 直接渲染 working 视图（读取仓库 task.yaml，聚焦 status 渲染逻辑；options 透传给 WorkflowStatusViewOptions）。 */
+export function renderWorkingView(item: any, stepId: string, agent: string, options: Record<string, unknown> = {}): string {
+  const workflow = loadWorkflow(readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8"))
+  const state = {
+    changeId: "cid", isolationNamespace: "ns", taskGroupId: "1", baseBranch: "main",
+    workItems: [item], createdAt: "", updatedAt: "",
+  }
+  const tg = { worktreePath: "/wt", branchName: "b", baseRef: "base" }
+  return renderWorkflowStatusView(
+    item,
+    workflow,
+    { status: "recommend", stepId, agents: [agent] },
+    agent,
+    { state, tg, ...options } as any,
+  )
 }
 
 // ─── 阶段驱动助手 ───

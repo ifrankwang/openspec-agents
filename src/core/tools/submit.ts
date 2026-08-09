@@ -11,11 +11,11 @@ import {
   getStepVerdict, clearStepTags, isBlockingSeverity, isInfoSeverity, isTerminalPhase,
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
-import { agentToReviewDimension, readIssueSource } from "../constants.js"
+import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.js"
 import { REVIEW_DIMENSIONS } from "../types.js"
 import type { Dimension } from "../types.js"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.js"
-import { markTaskGroupCheckboxesComplete, reconcileMainPollution } from "../git.js"
+import { markTaskGroupCheckboxesComplete, reconcileMainPollution, getCurrentHead } from "../git.js"
 import { assertIssueFilesWithin } from "../paths.js"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
@@ -679,6 +679,14 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       const worktreePath =
         typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : ctx.worktree
       await markTaskGroupCheckboxesComplete(worktreePath, params.change_id, state.taskGroupId)
+    }
+
+    // tool review 检查点增量检测（A3）：verify_tool 的 reviewer-tool 提交成功后记录当前 HEAD，
+    // 供下次重进 verify_tool 时仅对比「检查点 → 当前 HEAD」区间的变更（无代码/配置变更时直提 passed，
+    // 省去全量工具扫描）。写入位于 submitForStep 成功与 writeState 之间，任何异常路径均不落盘（零状态变更）。
+    if (params.step_id === "verify_tool" && agentToReviewLayer(ctx.agent) === "tool") {
+      const head = await getCurrentHead(wtPath)
+      if (head) item.metadata["_tool_review_checkpoint"] = head
     }
 
     await writeState(ctx.worktree, state)

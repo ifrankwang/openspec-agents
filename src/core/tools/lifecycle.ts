@@ -1,8 +1,8 @@
 import path from "path"
 import type { TaskItem, TaskStatus } from "../types.js"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.js"
-import { ORCHESTRATOR_AGENT } from "../constants.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution } from "../git.js"
+import { ORCHESTRATOR_AGENT, agentToReviewLayer } from "../constants.js"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.js"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
 import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
@@ -541,7 +541,25 @@ export async function statusExecute(params: { change_id: string }, ctx: ToolCont
   const tg = findTaskGroup(state, state.taskGroupId)
   // 主仓库 openspec 污染诊断（56ddfe9 意图）：orchestrator 分派视图展示主仓库污染，供编排者人工核对
   const mainPollution = agent === ORCHESTRATOR_AGENT ? await detectMainRepoPollution(ctx.worktree) : null
-  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution })
+  // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
+  // 变更分流（直提 / 仅处理待复核项 / 全量）。渲染层为同步函数，此处预计算后经 WorkflowStatusViewOptions 传入。
+  // 仅在推荐分派该 agent 时计算，其余角色/step 不产生额外 git 调用。
+  let toolChanges: DetectChangesResult | undefined
+  if (
+    agentToReviewLayer(agent) === "tool" &&
+    rec.status === "recommend" &&
+    rec.stepId === "verify_tool" &&
+    rec.agents.includes(agent)
+  ) {
+    const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
+    if (wtPath) {
+      const checkpoint =
+        typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
+      const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : undefined
+      toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
+    }
+  }
+  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution, toolChanges })
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {

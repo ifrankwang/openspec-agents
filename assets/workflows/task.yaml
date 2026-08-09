@@ -83,9 +83,9 @@ phases:
           on_pass: verify_task
           on_fail: implement
         instructions:
-          - "加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构后提交"
+          - "依据 opx_status 提供的变更检测结果分流：无代码/配置变更且本层无待复核/待裁定项 → 直接提交 passed，不运行全量工具检查；无变更但有本层待复核/待裁定项 → 仅复核/裁定待处理项后提交，不跑全量工具扫描；有变更 → 加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构后提交"
           - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
-          - "工具检查覆盖全量代码；非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃"
+          - "无变更直提分支不执行全量工具扫描，该分支下存量工具违规不重复扫描；有变更时按全量覆盖：工具检查覆盖全量代码，非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃"
           - "当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档"
           - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"

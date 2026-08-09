@@ -105,7 +105,11 @@ describe("P6-B 新流动态视图", () => {
   test("review 阶段 reviewer-tool → 动态 ✅ 视图：skill 名来自 capability_tags", async () => {
     const root = `/tmp/wf-status-a-${Date.now()}`
     const wt = freshWt(root)
-    __setGitRunner(new FakeGitRunner())
+    const fake = new FakeGitRunner()
+    // 检查点增量检测下 reviewer-tool 视图会按「检查点→HEAD」变更分流；配置代码变更使该用例走全量分支，
+    // 验证既有全量工作视图（skill 清单 / 操作指引）渲染不受影响
+    fake.diffNameOnlyDefault = "src/main.ts"
+    __setGitRunner(fake)
     await driveToReview(wt)
 
     const state = readStateSync(wt)
