@@ -216,6 +216,76 @@ export async function detectMainRepoPollution(worktreePath: string): Promise<{ r
   return { repoRoot, files }
 }
 
+export interface DetectChangesResult {
+  files: string[]
+  hasNonDocChange: boolean
+}
+
+/**
+ * 工具层检查点增量检测（A1）：比较「上次工具检查点 → 当前 HEAD」区间的变更，供 verify_tool step
+ * 判断是否需要运行全量工具检查。
+ *
+ * 两个来源合并判定：
+ * 1. 已提交变更：`git diff --name-only <检查点>..HEAD`；无检查点时用 base_ref（worktree 创建时存的
+ *    merge-base）；base_ref 缺失或 git 调用失败 → 降级 hasNonDocChange=true（安全侧，走全量）。
+ * 2. 未提交变更：`git status --porcelain`，过滤 `openspec/` 目录下的路径后仍有剩余 → 视为有变更。
+ *
+ * hasNonDocChange 仅按「变更文件是否在 openspec/ 文档目录以外」判定：openspec/ 下文件算文档（不算变更），
+ * 其余一律算变更。本函数不做流转方向判定（不推断"应直提/应全量"），也不对工具配置文件做分类——该语义由
+ * reviewer 结合已加载 skill 判断，工具层不硬编码技术栈文件类型。
+ *
+ * @param worktreePath worktree 路径
+ * @param opts.checkpoint 上次工具检查点的 commit sha；undefined/null 视为无检查点
+ * @param opts.baseRef 无检查点时的兜底基准 ref（worktree 创建时的 merge-base）
+ */
+export async function detectChanges(
+  worktreePath: string,
+  opts: { checkpoint?: string | null; baseRef?: string | null },
+): Promise<DetectChangesResult> {
+  const files: string[] = []
+  let gitFailed = false
+  const range = opts.checkpoint || opts.baseRef || undefined
+
+  // 已提交变更：diff --name-only <range>..HEAD。diff 输出无状态码前缀，直接整行取路径。
+  if (range) {
+    try {
+      const res = await runGitChecked(worktreePath, ["diff", "--name-only", `${range}..HEAD`])
+      if (res.success) {
+        for (const line of res.stdout.split("\n")) {
+          const f = line.trim()
+          if (f) files.push(f)
+        }
+      } else {
+        gitFailed = true
+      }
+    } catch {
+      gitFailed = true
+    }
+  } else {
+    // 无检查点也无 base_ref：无法界定变更区间，安全侧降级为全量
+    gitFailed = true
+  }
+
+  // 未提交变更：status --porcelain，过滤 openspec/ 文档目录下的路径
+  const uncommitted: string[] = []
+  try {
+    const res = await runGitChecked(worktreePath, ["status", "--porcelain"])
+    if (res.success) {
+      for (const f of parsePorcelainPaths(res.stdout)) {
+        if (!f.startsWith("openspec/")) uncommitted.push(f)
+      }
+    } else {
+      gitFailed = true
+    }
+  } catch {
+    gitFailed = true
+  }
+
+  const all = [...files, ...uncommitted]
+  const hasNonDocChange = gitFailed || all.some((f) => !f.startsWith("openspec/"))
+  return { files: all, hasNonDocChange }
+}
+
 /**
  * 将主仓库 `openspec/changes/<changeId>/` 下的未提交污染文档并入 worktree 分支，并清理主仓库工作树。
  *

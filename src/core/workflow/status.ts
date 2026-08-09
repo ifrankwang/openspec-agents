@@ -3,6 +3,7 @@ import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
+import type { DetectChangesResult } from "../git.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.js"
 import { ORCHESTRATOR_AGENT, agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.js"
 import { resolveChildIssueFields } from "./reset.js"
@@ -18,6 +19,8 @@ export interface WorkflowStatusViewOptions {
   tg: TaskGroupState
   /** 主仓库 openspec 污染诊断结果（56ddfe9 意图），orchestrator 分派视图渲染。 */
   mainPollution?: { repoRoot: string; files: string[] } | null
+  /** verify_tool 的 reviewer-tool 工作视图变更检测结果（检查点增量检测，A4）；缺省 undefined 走全量。 */
+  toolChanges?: DetectChangesResult
 }
 
 /**
@@ -70,7 +73,7 @@ export function renderWorkflowStatusView(
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg)
+    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, options.toolChanges)
   }
   return renderGate(rec, item, ctxAgent)
 }
@@ -415,6 +418,7 @@ function renderAgentWorking(
   ctxAgent: string,
   state: OrchestrateState,
   tg: TaskGroupState,
+  toolChanges?: DetectChangesResult,
 ): string {
   // worktree 就绪阻断（置于顶部）：未就绪时拒绝执行，渲染 ⛔ 视图，不输出 ✅ 执行视图内容
   if (!isWorktreeReady(tg)) {
@@ -427,6 +431,18 @@ function renderAgentWorking(
       "报告编排者先调用 `opx_orch_set_worktree`，就绪后再回来执行。",
       "",
     ].join("\n")
+  }
+
+  // tool review 检查点增量三分支（A4）：仅 verify_tool 的 reviewer-tool 且提供了变更检测结果时生效；
+  // toolChanges 缺省（未预计算）时维持既有全量渲染，不误伤其他 agent/step 的通用渲染。
+  if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges) {
+    const { active, pending } = toolPendingChildren(item, ctxAgent)
+    if (!toolChanges.hasNonDocChange && active.length === 0 && pending.length === 0) {
+      return renderToolDirectSubmit()
+    }
+    if (!toolChanges.hasNonDocChange) {
+      return renderToolAdjudicateOnly(item, rec, ctxAgent)
+    }
   }
   // skill 加载清单按当前调用者 agent 声明的 capability_tags 过滤（step 内各 agent 独立声明，互不相同）
   const caps = step?.agents.find((a) => a.id === ctxAgent)?.capability_tags ?? []
@@ -674,15 +690,59 @@ function isAgentOwnedIssue(child: WorkItem, ctxAgent: string): boolean {
   return true
 }
 
+/** verify_tool 的 reviewer-tool 视角 children 收敛（单一事实源）：active=本层待复核主区块、
+ *  pending=本层待裁定豁免，二者口径均不分 severity（与 renderBlockedAdjudicationBlock 一致）。
+ *  三分支判定（A4）与 renderToolChildren 共用本函数，避免口径分叉。 */
+function toolPendingChildren(item: WorkItem, ctxAgent: string): { active: WorkItem[]; pending: WorkItem[] } {
+  const issues = issueChildrenOf(item)
+  return {
+    active: issues.filter((c) => isAgentOwnedIssue(c, ctxAgent)),
+    pending: issues.filter((c) => isToolAdjudicable(c)),
+  }
+}
+
 /** verify_tool step：reviewer-tool 视角本层报源 review 态 issue + 调用者可裁定的豁免申请（待裁定）。 */
 function renderToolChildren(item: WorkItem, ctxAgent: string): string[] {
+  const { active, pending } = toolPendingChildren(item, ctxAgent)
   const lines: string[] = []
-  const issues = issueChildrenOf(item)
-  const active = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
   lines.push(...renderChildrenSection("Issue (待复核)", active))
-  const pending = issues.filter((c) => isToolAdjudicable(c))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
   return lines
+}
+
+/** verify_tool 三分支①（直提）：自上次工具检查后无代码/配置变更且本层无待复核/待裁定项。
+ *  替换式最小视图：不渲染 worktree/变更范围区块（避免与既有 baseRef..HEAD 累计口径提示冲突），
+ *  文案只给结论，不展示检查点 hash。 */
+function renderToolDirectSubmit(): string {
+  return [
+    "# ✅ 当前轮到你执行",
+    "",
+    "自上次工具检查后，worktree 无代码/配置变更（仅 openspec 文档变更或无变更），本层亦无待复核/待裁定 issue。",
+    "",
+    "无需运行全量工具检查，直接调用 `opx_agent_submit({ step_id: \"verify_tool\", verdict: \"passed\" })` 提交通过后结束会话。",
+    "",
+  ].join("\n")
+}
+
+/** verify_tool 三分支②（仅处理待复核项）：无代码/配置变更但有本层待复核/待裁定项 →
+ *  仅复核/裁定待处理项，不跑全量工具扫描，处理完成后提交。 */
+function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string): string {
+  const lines = [
+    "# ✅ 当前轮到你执行",
+    "",
+    "自上次工具检查后，worktree 无代码/配置变更，无需运行全量工具检查。",
+    "",
+    "仅处理以下本层待复核 / 待裁定项，处理完成后提交：",
+    "",
+  ]
+  lines.push(...renderToolChildren(item, ctxAgent))
+  lines.push("## 操作指引", "")
+  lines.push(
+    "1. 逐项复核/裁定上方各项：待复核 issue 经 `recheck_adjudications` 复核（通过置 done、不通过驳回并附驳回原因）；待裁定豁免经 `exempt_adjudications` 裁定（dismissed/rejected）",
+  )
+  lines.push(`2. 全部处理完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed" })\``)
+  lines.push("")
+  return lines.join("\n")
 }
 
 /** verify_task step：task children 待验证列表 + task 层 issue 主区块 + 调用者可裁定的豁免申请（待裁定）。 */

@@ -19,7 +19,7 @@ capabilities: ["quality-gate", "tech-stack-java"]
 | 2-6 | 全量生命周期：编译 + 格式 + 架构 + PMD + UT + 覆盖率 | 第 1～5 节 — `mvn verify -q` | 报告 BUILD SUCCESS/FAILURE、格式违规数、架构违规数、PMD 违规数和严重级别、测试通过率与覆盖率 |
 | 7 | SonarQube 深度扫描 | 第 6 节 | 报告执行结果或降级理由 |
 | 8 | 质量工具配置检查 | 第 7 节 | 报告通过或配置削弱清单 |
-| 9 | 汇总与提交 | 第 9 节 | 提交检查结果 |
+| 9 | 汇总与产出 | 第 9 节 | 产出检查结果与 issue 清单 |
 
 ## 0. 工具环境检查
 
@@ -393,11 +393,11 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 | **ArchUnit** | 所有架构约束违规 | `architecture` |
 | **UT 编译/运行失败** | 测试失败 | `maintainability` |
 
-## 9. 汇总与提交
+## 9. 汇总与产出
 
-所有工具检查完成后，汇总检查结果并提交：
+所有工具检查完成后，汇总检查结果并产出检查结果与 issue 清单：
+- 通过/不通过结论：不通过须有至少一个 Low 及以上 issue 作为理由
 - issues：统一 issue 结构列表（每条携带 dimension）
-- passed：true/false
-- fixed_issue_ids / exempt_issue_ids：酌情传入
+- 修复/豁免归属：已修复条目与申请豁免条目按需列出对应 issue id
 
 完成后清理隔离环境：`docker compose -p <namespace> down`（不影响其他 change 的容器）。

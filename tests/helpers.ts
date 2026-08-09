@@ -24,6 +24,19 @@ export class FakeGitRunner implements GitRunner {
   mainAheadCount = 0
   private treeCount = 0
   private commitCount = 0
+  /** rev-parse HEAD 的可配置 sha 序列（工具检查点增量检测用）：非空时按调用顺序逐次返回，耗尽后停留末位。 */
+  headShas: string[] = []
+  private headIdx = 0
+  /** diff --name-only <range>..HEAD 按 range 配置输出（key 为完整 "<range>..HEAD" 字符串）。 */
+  diffNameOnlyByRange = new Map<string, string>()
+  /** diff --name-only 未按 range 命中时的缺省输出。 */
+  diffNameOnlyDefault = ""
+  /** 强制 diff 失败（git 不可用降级测试用）。 */
+  failDiff = false
+  /** status --porcelain 按 worktree 配置输出（detectChanges 未提交变更测试用）。 */
+  statusPorcelainOutput = new Map<string, string>()
+  /** 强制 status 失败（git 不可用降级测试用）。 */
+  failStatus = false
 
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
@@ -64,6 +77,11 @@ export class FakeGitRunner implements GitRunner {
     }
     if (cmd === "rev-parse") {
       if (rest[0] === "--abbrev-ref" && rest[1] === "HEAD") return this.currentBranch
+      if (rest[0] === "HEAD" && this.headShas.length > 0) {
+        const sha = this.headShas[Math.min(this.headIdx, this.headShas.length - 1)]
+        this.headIdx++
+        return sha
+      }
       return "abc123def456"
     }
 
@@ -110,6 +128,23 @@ export class FakeGitRunner implements GitRunner {
   ): Promise<{ success: boolean; stdout: string; stderr: string }> {
     this.callLog.push(`checked:${args.join(" ")}`)
     const cmd = args[0]
+
+    if (cmd === "diff") {
+      if (this.failDiff) return { success: false, stdout: "", stderr: "fatal: diff 失败" }
+      // 工具检查点增量检测（detectChanges）走 `<range>..HEAD` 形态；避免误撞既有 diffOut 恒返回逻辑
+      const rangeArg = args.find((a) => a.endsWith("..HEAD"))
+      if (args.includes("--name-only") && rangeArg) {
+        const out = this.diffNameOnlyByRange.get(rangeArg) ?? this.diffNameOnlyDefault
+        return { success: true, stdout: out, stderr: "" }
+      }
+      return { success: true, stdout: this.diffOut, stderr: "" }
+    }
+    if (cmd === "status" && args.includes("--porcelain")) {
+      if (this.failStatus) return { success: false, stdout: "", stderr: "fatal: status 失败" }
+      if (this.statusPorcelainOutput.has(worktree)) {
+        return { success: true, stdout: this.statusPorcelainOutput.get(worktree), stderr: "" }
+      }
+    }
 
     if (cmd === "check-ref-format") {
       // 支持两种形态：`check-ref-format refs/heads/<name>` 与 `check-ref-format --branch <name>`。
