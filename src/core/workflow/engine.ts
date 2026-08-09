@@ -5,7 +5,7 @@ import type {
   StepConfig,
   StepAdjudication,
 } from "./types.js"
-import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds } from "./types.js"
+import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import { tagKey } from "./types.js"
 import { reviewLayerFromMetadata, readIssueSource } from "../constants.js"
@@ -111,8 +111,52 @@ export function getStepVerdict(item: WorkItem, stepId: string, agentKey: string)
   return item.tags[tagKey(stepId, agentKey)] ?? "pending"
 }
 
+/** 存在在途豁免申请（issue 带 exempt_request 标记且未终态）的报源 agent 集合。
+ *  豁免申请由报源 reviewer 裁定（谁提谁裁定）：维度名下有未裁定豁免申请时必须被唤起履行裁定权（D1），
+ *  且该维度不得被「issue 全终态 → 翻 passed」自愈误翻（D2 前提排除）。
+ *  终态 issue 上的残留标记视为已裁定（adjudicateExempt 裁定即删标记），不计入在途。 */
+export function agentsWithPendingExempt(item: WorkItem): string[] {
+  const agents = new Set<string>()
+  for (const child of item.children) {
+    if (child.metadata[EXEMPT_REQUEST_KEY] === undefined) continue
+    if (isTerminalPhase(child.phase)) continue
+    const source = readIssueSource(child)
+    if (source) agents.add(source)
+  }
+  return [...agents]
+}
+
+/** 限定到 step.agents 的在途豁免申请报源（recommendAgents 多 agent 分支唤起用）。 */
+export function stepAgentsWithPendingExempt(item: WorkItem, step: StepConfig): string[] {
+  const stepAgentSet = new Set(stepAgentIds(step))
+  return agentsWithPendingExempt(item).filter((a) => stepAgentSet.has(a))
+}
+
+/** D2 维度翻盘前提：agent 名下存在 blocking 级 issue 且全部终态（done/cancelled）、无在途豁免申请。
+ *  不自动取消/裁定 issue（谁提谁裁定不变），仅收敛维度结论。报源维度归因按 source 反推
+ *  （谁提谁裁定：维度 verdict 只反映其自身报源 issue 的状态）。
+ *  要求「至少一个 blocking issue」而非空集全称：failed 维度名下必有其报的 blocking issue
+ *  （verify_quality failed 提交由 assertFailedHasReason 强制理由），空集是合成/异常态，
+ *  保持 failed 交由聚合自愈重派收敛，不做翻盘。 */
+function agentBlockingResolved(item: WorkItem, agent: string): boolean {
+  if (agentsWithPendingExempt(item).includes(agent)) return false
+  const owned = item.children.filter(
+    (c) => c.type === "issue" && readIssueSource(c) === agent && isBlockingSeverity(c.severity),
+  )
+  if (owned.length === 0) return false
+  return owned.every((c) => isTerminalPhase(c.phase))
+}
+
 export function adjudicateStep(item: WorkItem, step: StepConfig): StepAdjudication {
-  const verdicts = step.agents.map((agent) => getStepVerdict(item, step.id, agent.id))
+  const verdicts = step.agents.map((agent) => {
+    const v = getStepVerdict(item, step.id, agent.id)
+    // D2：仅多 agent step（verify_quality 5 维并行）做维度翻盘——维度 failed 但名下 blocking issue
+    // 全部终态且无在途豁免申请时视为 passed，打破「failed 且无待办」的不可收敛死状态。
+    // 单 agent step 不翻盘：failed 维度由 recommendAgents 单 agent 分支重派重提收敛，翻盘会使
+    // 已提交的 step 呈现 passed 却无后续提交触发推进，造成新的静默死锁。
+    if (v === "failed" && step.agents.length > 1 && agentBlockingResolved(item, agent.id)) return "passed"
+    return v
+  })
   if (verdicts.length > 0 && verdicts.every((v) => v === "passed")) return "passed"
   if (verdicts.some((v) => v === "failed")) return "failed"
   return "pending"
@@ -121,12 +165,20 @@ export function adjudicateStep(item: WorkItem, step: StepConfig): StepAdjudicati
 export function recommendAgents(item: WorkItem, step: StepConfig): string[] {
   if (step.always_run) return stepAgentIds(step)
   // 多 agent step（verify_quality 5 维并行）：
-  // - 存在 pending → 聚合等待期仅重派 pending（已 failed 维度不重复分派，避免单维失败过早重派）
+  // - 存在 pending → 聚合等待期仅重派 pending（已 failed 维度不重复分派，避免单维失败过早重派）；
+  //   D1：维度名下有在途豁免申请（报源 reviewer 尚未裁定）时必须一并唤起——「谁提谁裁定」要求
+  //   报源 reviewer 履行裁定权，否则豁免申请滞留、维度恒 failed 且永不重派（聚合等待期死锁）。
   // - 无任何 pending → 引擎级自愈：回退返回 failed 维度（failed tag 残留如历史 state
-  //   归因无法反推到对应维导致的重派，静默死锁转为可见循环并被既有机制收敛；语义与 main 分支非 passed 全重派收敛）
+  //   归因无法反推到对应维导致的重派，静默死锁转为可见循环并被既有机制收敛；语义与 main 分支非 passed 全重派收敛）。
+  //   该分支已覆盖 failed 维（含带在途豁免申请的 failed 维），无需再叠加 D1。
   if (step.agents.length > 1) {
     const pending = step.agents.filter((agent) => getStepVerdict(item, step.id, agent.id) === "pending")
-    if (pending.length > 0) return pending.map((a) => a.id)
+    if (pending.length > 0) {
+      const exemptPending = stepAgentsWithPendingExempt(item, step)
+      const dispatch = new Set(pending.map((a) => a.id))
+      for (const id of exemptPending) dispatch.add(id)
+      return [...dispatch]
+    }
     return step.agents.filter((agent) => getStepVerdict(item, step.id, agent.id) === "failed").map((a) => a.id)
   }
   // 单 agent step：返回非 passed 的 agent（analyze 同 phase 回退不清 tag，必须返回 failed 的 architect 重审）。
@@ -200,10 +252,18 @@ export function rollbackChildren(item: WorkItem): void {
 }
 
 export function hasUnresolvedChildren(item: WorkItem): boolean {
-  return item.children.some((child) => !isTerminalPhase(child.phase))
+  return item.children.some((child) => {
+    // Info 级 issue 不阻塞任何门禁（stepCanPass/forwardGatePassed/complete 均按 blocking 过滤），
+    // 常驻不应触发检查点：仅 task child 与 Low 及以上级别 issue 参与判定。
+    if (child.type === "issue" && isInfoSeverity(child.severity)) return false
+    return !isTerminalPhase(child.phase)
+  })
 }
 
 export function checkpointTriggered(item: WorkItem, workflow: LoadedWorkflow, step: StepConfig): boolean {
+  // A1 窄短路：step 已全部通过（adjudicateStep 返回 passed，含 D2 维度翻盘）时跳过检查点判定，
+  // 避免已通过的 step 在重试边界被打断；always_run 的 step 不享受短路（口径与 recommendForItem 一致）。
+  if (adjudicateStep(item, step) === "passed" && !step.always_run) return false
   const retryCount = readInternalCount(item, "_retryCount")
   if (retryCount <= 0) return false
   if (retryCount % effectiveMaxRetries(workflow, step) !== 0) return false
@@ -404,7 +464,7 @@ export function blockedSupplementAgents(item: WorkItem, step: StepConfig): strin
   const agents = new Set<string>()
   const stepAgentSet = new Set(stepAgentIds(step))
   for (const child of blockingStepChildren(item, step)) {
-    if (child.metadata["exempt_request"] === undefined && child.phase !== "review") continue
+    if (child.metadata[EXEMPT_REQUEST_KEY] === undefined && child.phase !== "review") continue
     const source = readIssueSource(child)
     if (!source || !stepAgentSet.has(source)) continue
     agents.add(source)
@@ -468,9 +528,9 @@ export function recommendForItem(item: WorkItem, workflow: LoadedWorkflow): Engi
       // 补交裁定无意义，保持 agents=[] 走诊断清单。
       const blockingChildren = blockingStepChildren(item, current.step)
       const recheckCount = blockingChildren.filter(
-        (c) => c.phase === "review" && c.metadata["exempt_request"] === undefined,
+        (c) => c.phase === "review" && c.metadata[EXEMPT_REQUEST_KEY] === undefined,
       ).length
-      const exemptCount = blockingChildren.filter((c) => c.metadata["exempt_request"] !== undefined).length
+      const exemptCount = blockingChildren.filter((c) => c.metadata[EXEMPT_REQUEST_KEY] !== undefined).length
       const todoCount = blockingChildren.length - recheckCount - exemptCount
       const isReviewStep = REVIEW_STEP_TO_LAYER[current.step.id] !== undefined
       const agents = isReviewStep ? blockedSupplementAgents(item, current.step) : []

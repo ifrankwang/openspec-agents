@@ -3,12 +3,12 @@ import type { ToolContext, AgentSubmitParams } from "./types.js"
 import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
 import {
-  submitForStep, adjudicateExempt, adjudicateRecheck, assertSubmitRouting,
+  submitForStep, adjudicateExempt, adjudicateRecheck, assertSubmitRouting, chainPassAdvance,
 } from "../workflow/submit.js"
 import {
   createInitialWorkItem, checkpointTriggered,
   applyCheckpointContinue, applyCheckpointGiveup,
-  getStepVerdict, clearStepTags, isBlockingSeverity, isInfoSeverity, isTerminalPhase,
+  getStepVerdict, clearStepTags, isBlockingSeverity, isInfoSeverity, isTerminalPhase, applyTransition,
 } from "../workflow/engine.js"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
 import { agentToReviewDimension, readIssueSource } from "../constants.js"
@@ -712,6 +712,27 @@ async function applyCheckpointDecision(
     applyCheckpointContinue(item, step)
   } else {
     applyCheckpointGiveup(item, step)
+    // giveup 留痕：写来源元数据供审计，避免「放弃」变成无痕放行。
+    item.metadata["_giveup"] = true
+    // B3：giveup 同步处理 blockers——未 resolved 条目随放弃置 resolved（记录原因），
+    // 与收尾门禁（lifecycle.ts 的 unresolved blockers 拦截）对齐，避免 giveup 后无法收尾。
+    for (const blocker of itemBlockers(item)) {
+      if (blocker.status !== "resolved") {
+        blocker.status = "resolved"
+        blocker.architectConclusion = "随放弃处理"
+      }
+    }
+    // B1：giveup 应用后沿 on_pass 链式推进（末位 giveup → done 可收尾；非末位 → 落下一个待执行 step），
+    // 复用 submitForStep 的推进路径（chainPassAdvance）。giveup 已把所有未解决 children 置 cancelled、
+    // 当前 step 全 passed，applyTransition 的 done 拦截（task children 终态检查）应恒通过；
+    // 若仍被拦截（异常态），原因写 _advance_block_reason 供 opx_status 视图诊断。
+    const advance = applyTransition(item, workflow, "pass")
+    if (advance.advanced) {
+      delete item.metadata["_advance_block_reason"]
+      chainPassAdvance(item, workflow, advance.target)
+    } else {
+      item.metadata["_advance_block_reason"] = advance.reason
+    }
   }
   await writeState(ctx.worktree, state)
   return renderCheckpointDecisionResult(decision, item, step)
@@ -729,12 +750,20 @@ function renderCheckpointDecisionResult(decision: "continue" | "giveup", item: W
     ].join("\n")
   }
   const cancelled = item.children.filter((c) => c.phase === "cancelled").map((c) => c.id)
-  return [
+  const blockReason = typeof item.metadata["_advance_block_reason"] === "string"
+    ? item.metadata["_advance_block_reason"]
+    : null
+  const lines = [
     "## ✅ 检查点决策已应用：giveup",
     "",
     `- **step**: \`${step.id}\` 已标记 completed（所有 agent 视为 passed）。`,
     `- **未解决 children**（${cancelled.length} 个）已置 cancelled：${cancelled.join("、") || "(无)"}`,
-    `- **当前 phase**: ${item.phase}`,
-    "",
-  ].join("\n")
+    `- **当前 phase**: ${item.phase}${item.currentStep ? `（step \`${item.currentStep}\`）` : ""}`,
+  ]
+  if (blockReason) {
+    lines.push(`- **⚠️ 推进被拦截**: ${blockReason}`)
+    lines.push(`- 请用 \`opx_status\` 查看诊断，必要时 \`opx_orch_init(recovery=...)\` 恢复。`)
+  }
+  lines.push("")
+  return lines.join("\n")
 }

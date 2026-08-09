@@ -1,6 +1,6 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
-import { stepAgentIds } from "./types.js"
+import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import type { EngineRecommendation } from "./engine.js"
 import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.js"
@@ -313,7 +313,7 @@ function renderBlockedChildrenDiagnostic(item: WorkItem, workflow: LoadedWorkflo
     const f = resolveChildIssueFields(c)
     const source = readIssueSource(c) ?? "(报源缺失)"
     const state =
-      c.metadata["exempt_request"] !== undefined ? "豁免申请中" : c.phase === "review" ? "待复核" : `待处理(${c.phase})`
+      c.metadata[EXEMPT_REQUEST_KEY] !== undefined ? "豁免申请中" : c.phase === "review" ? "待复核" : `待处理(${c.phase})`
     lines.push(`- Issue #${id} | ${formatSeverity(c.severity ?? "Info")} | 归属:${f.dimension} | 报源:${source} | ${state}`)
   }
   lines.push("")
@@ -351,7 +351,7 @@ function childStatusCounts(item: WorkItem): { todo: number; review: number; done
   const counts = { todo: 0, review: 0, done: 0, cancelled: 0, exempt: 0 }
   // 仅统计 issue child（task child 不计入——子任务进度由 task 语义承载）
   for (const c of issueChildrenOf(item)) {
-    const isExemptRequest = c.metadata["exempt_request"] !== undefined
+    const isExemptRequest = c.metadata[EXEMPT_REQUEST_KEY] !== undefined
     if (isExemptRequest) counts.exempt++
     switch (c.phase) {
       case "todo": if (!isExemptRequest) counts.todo++; break
@@ -626,17 +626,17 @@ function renderDeveloperChildren(item: WorkItem, ctxAgent: string): string[] {
 
 /** 调用者可裁定的豁免申请（谁提谁裁定）：tool 层由报源反推层命中 tool。 */
 function isToolAdjudicable(child: WorkItem): boolean {
-  return child.metadata["exempt_request"] !== undefined && agentToReviewLayer(readIssueSource(child)) === "tool"
+  return child.metadata[EXEMPT_REQUEST_KEY] !== undefined && agentToReviewLayer(readIssueSource(child)) === "tool"
 }
 
 /** 调用者可裁定的豁免申请（谁提谁裁定）：task 层由报源反推层命中 task。 */
 function isTaskAdjudicable(child: WorkItem): boolean {
-  return child.metadata["exempt_request"] !== undefined && agentToReviewLayer(readIssueSource(child)) === "task"
+  return child.metadata[EXEMPT_REQUEST_KEY] !== undefined && agentToReviewLayer(readIssueSource(child)) === "task"
 }
 
 /** 调用者可裁定的豁免申请（谁提谁裁定）：quality 层报源维度等于调用者维度。 */
 function isQualityAdjudicable(child: WorkItem, dimension: Dimension | undefined): boolean {
-  if (child.metadata["exempt_request"] === undefined || !dimension) return false
+  if (child.metadata[EXEMPT_REQUEST_KEY] === undefined || !dimension) return false
   return agentToReviewDimension(readIssueSource(child) ?? "") === dimension
 }
 
@@ -660,11 +660,11 @@ function isAgentOwnedIssue(child: WorkItem, ctxAgent: string): boolean {
   const f = resolveChildIssueFields(child)
   const layer = agentToReviewLayer(ctxAgent)
   if (!layer) {
-    return child.phase === "todo" && child.metadata["exempt_request"] === undefined
+    return child.phase === "todo" && child.metadata[EXEMPT_REQUEST_KEY] === undefined
   }
   // 待裁定豁免项（exempt_request 标记）归「待裁定」区块管：即使已进入 review 态也排除出主区块，
   // 避免与待裁定区块重复展示；recheck 复核带标记项亦被工具层守卫拒绝（须走 exempt_adjudications 裁定）。
-  if (child.phase !== "review" || child.metadata["exempt_request"] !== undefined) return false
+  if (child.phase !== "review" || child.metadata[EXEMPT_REQUEST_KEY] !== undefined) return false
   if (f.sourcePhase !== layer) return false
   if (layer === "quality") {
     const dim = agentToReviewDimension(ctxAgent)
@@ -743,6 +743,6 @@ function renderChildIssue(child: WorkItem): string {
   if (typeof child.metadata["suggestion"] === "string") lines.push(`  - 建议：${child.metadata["suggestion"]}`)
   if (typeof child.metadata["reject_reason"] === "string") lines.push(`  - 驳回原因：${child.metadata["reject_reason"]}`)
   if (typeof child.metadata["refix_count"] === "number") lines.push(`  - 修复未过次数：${child.metadata["refix_count"]}`)
-  if (child.metadata["exempt_request"] !== undefined) lines.push("  - 豁免申请中：等待裁定")
+  if (child.metadata[EXEMPT_REQUEST_KEY] !== undefined) lines.push("  - 豁免申请中：等待裁定")
   return lines.join("\n")
 }

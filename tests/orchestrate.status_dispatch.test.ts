@@ -113,7 +113,7 @@ describe("gap2 找不到活跃 WorkItem", () => {
 // ════════════════════════════════════════════════════════════════
 
 describe("gap3+4 checkpoint giveup 后查 status", () => {
-  test("giveup 后 child 置 cancelled、子代理见 step 已通过、orchestrator 分派视图不含检查点", async () => {
+  test("giveup 后 child 置 cancelled、step 标记 passed 并自动推进到下一 step、分派视图不含检查点", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
@@ -122,7 +122,8 @@ describe("gap3+4 checkpoint giveup 后查 status", () => {
         item.metadata["_checkpoint"] = true
         item.children.push(makeIssueChild("7"))
       })
-      // 检查点决策 giveup（submit.ts applyCheckpointGiveup：未解决 children 置 cancelled + step 全 passed）
+      // 检查点决策 giveup（submit.ts giveup 分支：未解决 children 置 cancelled + step 全 passed +
+      // 沿 on_pass 自动推进——B1：非末位 giveup 落下一个待执行 step）
       await agent_submit.execute(
         { change_id: CID, step_id: "verify_tool", verdict: "passed", checkpoint_decision: "giveup" },
         ctx.toolR
@@ -130,13 +131,18 @@ describe("gap3+4 checkpoint giveup 后查 status", () => {
       const item = readItem(wt, CID)
       expect(item.children.find((c: any) => c.id === "issue:7").phase).toBe("cancelled")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
-      // 子代理视图：# 🏁 当前 step 已通过（status.ts:153 renderTerminal）
+      // B1：giveup 后自动推进，verify_tool → verify_task（非末位 step 落下一个待执行 step）
+      expect(item.currentStep).toBe("verify_task")
+      expect(item.metadata["_giveup"]).toBe(true)
+      // verify_tool reviewer 已非当前 step 角色：子代理视图为阶段门禁（当前预期 verify_task reviewer）
       const toolRView = await status.execute({ change_id: CID }, ctx.toolR)
-      expect(toolRView).toContain("# 🏁 当前 step 已通过")
-      // orchestrator 分派视图：含当前阶段、不再含"检查点"（terminal → 防御出口分支）
+      expect(toolRView).toContain("阶段门禁")
+      expect(toolRView).toContain("openspec-reviewer-task")
+      // orchestrator 分派视图：下一步分派 verify_task reviewer，不再含"检查点"
       const orchView = await status.execute({ change_id: CID }, ctx.orch)
       expect(orchView).toContain("# 编排进度")
       expect(orchView).toContain("**当前阶段**: review")
+      expect(orchView).toContain("分派子代理：`openspec-reviewer-task`")
       expect(orchView).not.toContain("检查点")
       expect(orchView).not.toContain("checkpoint_decision")
     } finally { teardown(root) }

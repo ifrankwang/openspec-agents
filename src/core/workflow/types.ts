@@ -38,6 +38,10 @@ export interface WorkItem {
 
 export const INTERNAL_METADATA_PREFIX = "_"
 
+/** 豁免申请标记键（非内部下划线前缀，属于业务语义字段）。定义在本模块使 engine 与 submit 均可
+ *  免循环引用（submit 依赖 engine，engine 依赖本模块，不产生新环）。 */
+export const EXEMPT_REQUEST_KEY = "exempt_request"
+
 export function isInternalMetadataKey(key: string): boolean {
   return key.startsWith(INTERNAL_METADATA_PREFIX)
 }

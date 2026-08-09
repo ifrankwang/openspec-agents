@@ -21,7 +21,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
-import { init, status, agent_submit } from "../src/adapters/opencode/tools"
+import { init, status, agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
@@ -1006,6 +1006,241 @@ describe("B12. new_children rule 透传", () => {
       const view = await status.execute({ change_id: CID }, ctx.dev)
       expect(view).toContain("PMD.AvoidLiteralsInIfCondition")
       expect(view).toContain("魔法数字")
+    } finally { teardown(root) }
+  })
+})
+
+describe("D2. failed 维度 issue 全终态且无在途豁免 → 自动翻 passed（verify_quality 聚合通过）", () => {
+  test("style 维 failed 名下 blocking issue 已终态、其余 4 维 pending → 全部提交后聚合通过进入 done", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 构造死状态：style 维 failed（其报源 blocking issue 已被裁定为 done），其余 4 维 pending
+      rewriteItem(wt, (item) => {
+        item.tags["verify_quality:openspec-reviewer-style"] = "failed"
+        item.children.push({
+          id: "issue:7", source: "openspec-reviewer-style", externalId: "7", type: "issue",
+          title: "遗留 issue", description: "d", phase: "done", suspended: false,
+          currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-style", dimension: "style" },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      // 其余 4 维提交 passed → 聚合判定时 style 翻盘为 passed，全部非 pending → 推进到 done
+      for (const d of DIMENSION_AGENTS) {
+        if (d === "style") continue
+        await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
+      }
+      const done = readItem(wt, CID)
+      expect(done.phase).toBe("done")
+      expect(done.currentStep).toBeNull()
+    } finally { teardown(root) }
+  })
+
+  test("failed 维度 issue 已终态 + retry 达上限 + 存在非本层未终态 issue → D2 翻盘 + A1 短路，不触发检查点", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 5 维全部非 pending（style failed 但其 issue 已终态、其余 passed）+ 一个 tool 报源未终态 issue
+      rewriteItem(wt, (item) => {
+        item.tags = {
+          ...item.tags,
+          "verify_quality:openspec-reviewer-style": "failed",
+        }
+        for (const d of DIMENSION_AGENTS) {
+          if (d === "style") continue
+          item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
+        }
+        item.children.push({
+          id: "issue:7", source: "openspec-reviewer-style", externalId: "7", type: "issue",
+          title: "遗留 issue", description: "d", phase: "done", suspended: false,
+          currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-style", dimension: "style" },
+          children: [], labels: [], severity: "Low",
+        })
+        // tool 报源未终态 issue：不阻塞 verify_quality 门禁，但会让 hasUnresolvedChildren 成立
+        item.children.push({
+          id: "issue:8", source: "openspec-reviewer-tool", externalId: "8", type: "issue",
+          title: "tool issue", description: "d", phase: "todo", suspended: false,
+          currentStep: null, tags: {}, metadata: { source: "openspec-reviewer-tool", dimension: "style" },
+          children: [], labels: [], severity: "Low",
+        })
+        item.metadata["_retryCount"] = 10
+      })
+      const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+      const step = workflow.stepMap.get("verify_quality")!.step
+      const item0 = readItem(wt, CID)
+      // D2 翻盘使 step 全部 passed → A1 窄短路：即使 _retryCount=10 且有未终态 issue 也不触发检查点
+      expect(checkpointTriggered(item0, workflow, step)).toBe(false)
+      const rec = recommendForItem(item0, workflow)
+      expect(rec.status).toBe("terminal")
+      expect(rec.agents).toEqual([])
+    } finally { teardown(root) }
+  })
+})
+
+describe("D1. 维度名下有在途豁免申请 → 聚合等待期重新唤起报源 reviewer（豁免裁定通道不被守卫误拦）", () => {
+  test("style 维 failed + 在途豁免申请 → orchestrator 分派视图含 style；style 补交豁免裁定不被重复提交守卫误拦", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 构造：style 维 failed，其报源 issue 带在途豁免申请（review 态 + exempt_request 标记），其余 4 维 pending
+      rewriteItem(wt, (item) => {
+        item.tags["verify_quality:openspec-reviewer-style"] = "failed"
+        item.children.push({
+          id: "issue:7", source: "openspec-reviewer-style", externalId: "7", type: "issue",
+          title: "豁免申请 issue", description: "d", phase: "review", suspended: false,
+          currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-style", dimension: "style", exempt_request: { requestedBy: "developer" } },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      // D1：聚合等待期（其余 4 维 pending）仍唤起 style 履行裁定权
+      const out = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out).toContain("分派子代理：")
+      expect(out).toContain("`openspec-reviewer-style`")
+      // style 补交豁免裁定（verdict passed + exempt_adjudications）：不被重复提交守卫误拦，
+      // dismissed → issue 置 cancelled + style 维度翻 passed
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "passed",
+          exempt_adjudications: [{ issue_id: "7", action: "dismissed" }],
+        },
+        ctx.dims["style"]
+      )
+      const item = readItem(wt, CID)
+      expect(item.children.find((c: any) => c.id === "issue:7").phase).toBe("cancelled")
+      expect(item.children.find((c: any) => c.id === "issue:7").metadata["exempt_request"]).toBeUndefined()
+      expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
+    } finally { teardown(root) }
+  })
+
+  test("D1+D2 混合：豁免维被唤起裁定、failed 全终态维翻盘、pending 维提交后整体聚合推进 done", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 构造混合态：
+      // - style 维 failed + 报源 issue 在途豁免申请（review 态 + exempt_request）→ 走 D1 唤起裁定
+      // - architecture 维 failed + 报源 blocking issue 已终态（done）→ 走 D2 翻盘
+      // - performance 维 pending；security/maintainability 已 passed
+      rewriteItem(wt, (item) => {
+        item.tags = {
+          ...item.tags,
+          "verify_quality:openspec-reviewer-style": "failed",
+          "verify_quality:openspec-reviewer-architecture": "failed",
+          "verify_quality:openspec-reviewer-security": "passed",
+          "verify_quality:openspec-reviewer-maintainability": "passed",
+        }
+        item.children.push({
+          id: "issue:7", source: "openspec-reviewer-style", externalId: "7", type: "issue",
+          title: "豁免 issue", description: "d", phase: "review", suspended: false,
+          currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-style", dimension: "style", exempt_request: { requestedBy: "developer" } },
+          children: [], labels: [], severity: "Low",
+        })
+        item.children.push({
+          id: "issue:8", source: "openspec-reviewer-architecture", externalId: "8", type: "issue",
+          title: "已裁定 issue", description: "d", phase: "done", suspended: false,
+          currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-architecture", dimension: "architecture" },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      // 聚合等待期分派：pending(performance) + 在途豁免维(style)；architecture 不派（D2 翻盘无需动作）
+      const out = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out).toContain("`openspec-reviewer-performance`")
+      expect(out).toContain("`openspec-reviewer-style`")
+      // style 裁定豁免（dismissed）→ 置 passed
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "passed",
+          exempt_adjudications: [{ issue_id: "7", action: "dismissed" }],
+        },
+        ctx.dims["style"]
+      )
+      // performance 提交 → 全部非 pending，聚合判定含 architecture 翻盘 → 整体推进 done
+      await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["performance"])
+      const done = readItem(wt, CID)
+      expect(done.phase).toBe("done")
+      expect(done.currentStep).toBeNull()
+      expect(done.children.find((c: any) => c.id === "issue:7").phase).toBe("cancelled")
+      expect(done.children.find((c: any) => c.id === "issue:8").phase).toBe("done")
+    } finally { teardown(root) }
+  })
+})
+
+describe("B1/B3. giveup 自动推进与 blockers 处理", () => {
+  test("末位 step（verify_quality）giveup → 自动推进 done 可收尾 + blockers 置 resolved", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.metadata["_checkpoint"] = true
+        item.metadata["_retryCount"] = 10
+        item.metadata["blockers"] = [{ id: "b1", status: "awaiting_user", description: "外部依赖未就绪" }]
+      })
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_quality", verdict: "passed", checkpoint_decision: "giveup" },
+        ctx.orch
+      )
+      expect(r).toContain("giveup")
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("done")
+      expect(item.currentStep).toBeNull()
+      expect(item.metadata["_giveup"]).toBe(true)
+      // B3：giveup 把未 resolved blockers 置 resolved（随放弃处理），与收尾门禁对齐
+      expect(metaOf(item, "blockers")[0].status).toBe("resolved")
+      // 末位 giveup 后 phase=done → 可直接收尾（此前 giveup 后停留原地无法收尾的死锁）
+      const cr = await complete_task_group.execute({ change_id: CID }, ctx.orch)
+      expect(cr).toContain("任务组已完成并合并到")
+      expect(readItem(wt, CID).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("非末位 step（verify_tool）giveup → 自动推进到下一 step（verify_task），留痕 _giveup", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      rewriteItem(wt, (item) => {
+        item.metadata["_checkpoint"] = true
+      })
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", checkpoint_decision: "giveup" },
+        ctx.orch
+      )
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_task")
+      expect(item.metadata["_giveup"]).toBe(true)
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+    } finally { teardown(root) }
+  })
+
+  test("giveup 纯重算路径：无 _checkpoint 标记，走 checkpointTriggered 重算判定 → 自动推进到下一 step", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID)
+      // 产线从不置 _checkpoint 标记：走 checkpointTriggered 重算路径（_retryCount=10 达上限 + 未终态 children）
+      rewriteItem(wt, (item) => {
+        item.metadata["_retryCount"] = 10
+        delete item.metadata["_checkpoint"]
+        item.tags["verify_tool:openspec-reviewer-tool"] = "failed"
+      })
+      const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+      const step = workflow.stepMap.get("verify_tool")!.step
+      const item0 = readItem(wt, CID)
+      expect(item0.metadata["_checkpoint"]).toBeUndefined()
+      expect(checkpointTriggered(item0, workflow, step)).toBe(true)
+      expect(recommendForItem(item0, workflow).status).toBe("checkpoint")
+      // 不带 _checkpoint 标记：atCheckpoint 由 checkpointTriggered 重算成立，giveup 可执行
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", checkpoint_decision: "giveup" },
+        ctx.toolR
+      )
+      expect(r).toContain("giveup")
+      const item = readItem(wt, CID)
+      expect(metaOf(item, "_retryCount")).toBe(0)
+      expect(item.metadata["_giveup"]).toBe(true)
+      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
+      expect(item.currentStep).toBe("verify_task")
     } finally { teardown(root) }
   })
 })

@@ -1,12 +1,12 @@
 import type { WorkItem, WorkItemPhase, StepConfig, StepAdjudication } from "./types.js"
-import { stepAgentIds } from "./types.js"
+import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
 import type { LoadedWorkflow } from "./loader.js"
 import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase, isInfoSeverity } from "./engine.js"
 import { issueChildrenOf, taskChildrenOf } from "../task-children.js"
 import { readIssueSource } from "../constants.js"
 
-/** 豁免申请标记键（非内部下划线前缀，属于业务语义字段） */
-export const EXEMPT_REQUEST_KEY = "exempt_request"
+/** 豁免申请标记键单一事实源在 types.ts（engine 与 submit 共用免循环引用）；本模块 re-export 兼容既有消费方。 */
+export { EXEMPT_REQUEST_KEY } from "./types.js"
 
 export interface SubmitInput {
   stepId: string
@@ -108,7 +108,7 @@ export function assertSubmitRouting(workflow: LoadedWorkflow, item: WorkItem, st
  * 有限性：每轮推进都改变 currentStep（终态置 null）且 on_pass 构成无环 DAG，
  * 另加 stepMap 规模上限防护，不可能无限循环。
  */
-function chainPassAdvance(item: WorkItem, workflow: LoadedWorkflow, initialTarget: string | undefined): string | undefined {
+export function chainPassAdvance(item: WorkItem, workflow: LoadedWorkflow, initialTarget: string | undefined): string | undefined {
   let target = initialTarget
   const maxIterations = workflow.stepMap.size * 2 + 1
   for (let i = 0; i < maxIterations; i++) {

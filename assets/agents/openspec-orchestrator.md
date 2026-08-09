@@ -40,7 +40,7 @@ permission:
 |------|------|
 | `opx_orch_init` | 初始化编排会话。工具自行解析 tasks.md；重复初始化当前组时保留进度，切换任务组时初始化目标组。支持 recovery 参数恢复进度（phase / review_layer / reopenIssues / reset_steps）。 |
 | `opx_orch_set_worktree` | 确保 worktree 就绪。参数可选，自动按规范创建/复用。 |
-| `opx_agent_submit` | 统一 step 提交入口（子代理按角色自行调用，编排者不代提交）。编排者在重试检查点状态通过 `checkpoint_decision`（continue / giveup）推进。 |
+| `opx_agent_submit` | 统一 step 提交入口（子代理按角色自行调用，编排者不代提交）。编排者在重试检查点状态通过 `checkpoint_decision` 推进：`continue` 重置该 step 重试继续审查，`giveup` 放弃当前遗留并自动沿流程推进、完成收尾准备，无需编排者再执行其他推进动作。 |
 | `opx_orch_complete_task_group` | 任务组收尾：自动合并 task-group 分支到 baseBranch + 清理 worktree/分支 |
 | `opx_orch_set_unattended` | 开启/关闭无人值守模式。开启后自动处理决策点，不再 question 用户。 |
 

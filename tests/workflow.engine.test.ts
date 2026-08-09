@@ -626,6 +626,195 @@ describe("5. 重试检查点", () => {
     expect(rec.status).toBe("checkpoint")
     expect(rec.checkpoint?.retryCount).toBe(3)
   })
+
+  test("A2a：仅 Info 级未终态 issue → 不触发检查点（Info 不阻塞任何门禁）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.metadata["_retryCount"] = 3
+    item.children.push(child({ id: "c-info", phase: "todo", severity: "Info" }))
+    expect(hasUnresolvedChildren(item)).toBe(false)
+    expect(checkpointTriggered(item, wf, step)).toBe(false)
+  })
+
+  test("A2a：Info 未终态 + Low 未终态 → 触发检查点（Low 参与判定）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.metadata["_retryCount"] = 3
+    item.children.push(child({ id: "c-info", phase: "todo", severity: "Info" }))
+    item.children.push(child({ id: "c-low", phase: "todo", severity: "Low" }))
+    expect(checkpointTriggered(item, wf, step)).toBe(true)
+  })
+
+  test("A2a：task child 未终态仍参与判定（task child 无 severity，不得被 Info 过滤误伤）", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    item.metadata["_retryCount"] = 3
+    item.children.push(makeItem({ id: "task-1", type: "task", title: "T", description: "d", phase: "todo" }))
+    expect(checkpointTriggered(item, wf, step)).toBe(true)
+  })
+
+  test("A1：step 已全部通过 → 窄短路，retry 达上限也不触发检查点", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item, "implement", "developer", "passed")
+    item.metadata["_retryCount"] = 3
+    item.children.push(child({ phase: "todo" }))
+    expect(checkpointTriggered(item, wf, step)).toBe(false)
+  })
+
+  test("A1：step 未全部通过（含 failed）→ 窄短路不生效，仍触发检查点", () => {
+    const item = makeItem({ phase: "in_progress", currentStep: "implement" })
+    applyAgentVerdict(item, "implement", "developer", "failed")
+    item.metadata["_retryCount"] = 3
+    item.children.push(child({ phase: "todo" }))
+    expect(checkpointTriggered(item, wf, step)).toBe(true)
+  })
+
+  test("A1：always_run step 不享受窄短路（口径与 recommendForItem 一致）", () => {
+    const wfAlways = loadWorkflow(`
+id: x
+max_retries: 3
+phases:
+  - name: review
+    steps:
+      - id: s1
+        always_run: true
+        agents:
+          - id: a
+            capability_tags: [quality-gate]
+        transitions:
+          on_pass: done
+          on_fail: s1
+`)
+    const alwaysStep = wfAlways.stepMap.get("s1")!.step
+    const item = makeItem({ phase: "review", currentStep: "s1" })
+    applyAgentVerdict(item, "s1", "a", "passed")
+    item.metadata["_retryCount"] = 3
+    item.children.push(child({ phase: "todo" }))
+    expect(checkpointTriggered(item, wfAlways, alwaysStep)).toBe(true)
+  })
+})
+
+describe("9. D1/D2 多 agent step 维度唤起与翻盘", () => {
+  const MULTI_YAML = `
+id: multi-flow
+max_retries: 3
+phases:
+  - name: review
+    steps:
+      - id: multi
+        agents:
+          - id: openspec-reviewer-style
+            capability_tags: [quality-gate]
+          - id: openspec-reviewer-architecture
+            capability_tags: [quality-gate]
+          - id: openspec-reviewer-performance
+            capability_tags: [quality-gate]
+        transitions:
+          on_pass: done
+          on_fail: multi
+`
+  const wf = loadWorkflow(MULTI_YAML)
+  const step = wf.stepMap.get("multi")!.step
+  const STYLE = "openspec-reviewer-style"
+  const ARCH = "openspec-reviewer-architecture"
+  const PERF = "openspec-reviewer-performance"
+
+  function styleIssue(overrides: Partial<WorkItem> = {}): WorkItem {
+    return makeItem({
+      id: "issue:7",
+      type: "issue",
+      severity: "Low",
+      phase: "todo",
+      metadata: { source: STYLE },
+      ...overrides,
+    })
+  }
+
+  test("D1：维度名下有在途豁免申请 → 聚合等待期重新唤起报源维度（连同 pending 维度）", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    item.children.push(styleIssue({
+      phase: "review",
+      metadata: { source: STYLE, exempt_request: { requestedBy: "developer" } },
+    }))
+    const agents = recommendAgents(item, step)
+    expect(agents).toContain(STYLE)
+    expect(agents).toContain(PERF)
+    expect(agents).not.toContain(ARCH)
+  })
+
+  test("D1：无在途豁免申请 → 聚合等待期仅派 pending（failed 维不唤起）", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    expect(recommendAgents(item, step)).toEqual([PERF])
+  })
+
+  test("D1：在途豁免申请已裁定（标记删除）→ 不再唤起", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    item.children.push(styleIssue({ phase: "cancelled" }))
+    expect(recommendAgents(item, step)).toEqual([PERF])
+  })
+
+  test("D1：无 pending 时回退 failed 维度自愈（含带在途豁免的 failed 维，不被 D1 削弱）", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "failed")
+    applyAgentVerdict(item, "multi", PERF, "passed")
+    // style 带在途豁免申请，architecture 无——无 pending 时两者都应在自愈重派清单中
+    item.children.push(styleIssue({ phase: "review", metadata: { source: STYLE, exempt_request: {} } }))
+    const agents = recommendAgents(item, step)
+    expect(agents).toContain(STYLE)
+    expect(agents).toContain(ARCH)
+    expect(agents).not.toContain(PERF)
+  })
+
+  test("D2：failed 维度名下 blocking issue 全部终态且无在途豁免 → 视为 passed，step 聚合通过", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    applyAgentVerdict(item, "multi", PERF, "passed")
+    item.children.push(styleIssue({ phase: "done" }))
+    expect(adjudicateStep(item, step)).toBe("passed")
+  })
+
+  test("D2：failed 维度名下仍有非终态 blocking issue → 不翻盘，保持 failed", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    applyAgentVerdict(item, "multi", PERF, "passed")
+    item.children.push(styleIssue({ phase: "todo" }))
+    expect(adjudicateStep(item, step)).toBe("failed")
+  })
+
+  test("D2：failed 维度名下有在途豁免申请 → 不翻盘（须报源 reviewer 裁定，谁提谁裁定）", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    applyAgentVerdict(item, "multi", PERF, "passed")
+    item.children.push(styleIssue({ phase: "review", metadata: { source: STYLE, exempt_request: {} } }))
+    item.children.push(styleIssue({ id: "issue:8", phase: "done" }))
+    expect(adjudicateStep(item, step)).toBe("failed")
+  })
+
+  test("D2：failed 维度名下无 blocking issue（空集）→ 不翻盘（合成态保持 failed 由自愈重派收敛）", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    applyAgentVerdict(item, "multi", PERF, "passed")
+    expect(adjudicateStep(item, step)).toBe("failed")
+  })
+
+  test("D2：非本维度报源 issue 不计入翻盘判定（不阻断本维度）", () => {
+    const item = makeItem({ phase: "review", currentStep: "multi" })
+    applyAgentVerdict(item, "multi", STYLE, "failed")
+    applyAgentVerdict(item, "multi", ARCH, "passed")
+    applyAgentVerdict(item, "multi", PERF, "passed")
+    // style 名下 issue 已终态；另一维（architecture 报源）issue 未终态
+    item.children.push(styleIssue({ phase: "done" }))
+    item.children.push(makeItem({ id: "issue:8", type: "issue", severity: "Low", phase: "todo", metadata: { source: ARCH } }))
+    expect(adjudicateStep(item, step)).toBe("passed")
+  })
 })
 
 describe("6. suspended 调度跳过", () => {

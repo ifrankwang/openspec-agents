@@ -1,6 +1,7 @@
 import type { TaskGroupState, IssueItem, OrchestrateState, Phase, QualityLayerProgress, ExecutionBoundary, BlockerItem } from "./types.js"
 import { BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT } from "./constants.js"
 import type { WorkItem, WorkItemPhase } from "./workflow/types.js"
+import { EXEMPT_REQUEST_KEY } from "./workflow/types.js"
 import { resolveChildIssueFields } from "./workflow/reset.js"
 import { taskListOf, issueChildrenOf } from "./task-children.js"
 
@@ -77,7 +78,7 @@ function childPhaseToIssueStatus(phase: WorkItemPhase): IssueItem["status"] {
 function projectIssueFromChild(child: WorkItem): IssueItem {
   const f = resolveChildIssueFields(child)
   const baseStatus = childPhaseToIssueStatus(child.phase)
-  const hasExemptRequest = child.metadata["exempt_request"] !== undefined
+  const hasExemptRequest = child.metadata[EXEMPT_REQUEST_KEY] !== undefined
   return {
     id: child.externalId ?? child.id.replace(/^issue:/, ""),
     dimension: f.dimension,

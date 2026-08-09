@@ -24,9 +24,9 @@ OpenCode 编排插件。提供 OpenSpec change 编排、workflow 引擎驱动的
 
 编排者只分派子代理，不编写代码、不审查、不测试。每次子代理返回后，编排者调用 `opx_status`；该工具是下一步调度的唯一事实源。
 
-Review 阶段依次执行 tool、task、quality 三层门禁；任一 step 裁决 failed 回退 implement 修复（analyze 失败回退 analyze 重查）。需用户拍板的需求/设计问题由架构师在 analyze step 直接向用户确认（有人值守）或自行裁决（无人值守），确认/裁决后当场继续、不留档；确属阻塞的缺口由架构师上报 blocker，同环节继续复核至完成。quality reviewer 对可工具化的 pattern 在报业务 issue 的同时须报工具改进 issue，通过调整确定性质量扫描工具配置（规则收紧/新增规则）统一收敛同类问题，减少人工重复审查。
+Review 阶段依次执行 tool、task、quality 三层门禁；任一 step 裁决 failed 回退 implement 修复（analyze 失败回退 analyze 重查）。某 step 重试次数达到上限（默认 10 次）且仍存在未解决 children 时引擎进入检查点态，由编排者经 `opx_agent_submit` 的 `checkpoint_decision` 决策：`continue` 重置该 step 重试继续，`giveup` 放弃遗留 issue（置 cancelled）并将该 step 标记完成，随后自动沿状态机推进——末位 step 直接落 done 可收尾，非末位 step 落下一个待执行 step，同时把未解决 blockers 置为已解决，避免放弃后无法收尾。需用户拍板的需求/设计问题由架构师在 analyze step 直接向用户确认（有人值守）或自行裁决（无人值守），确认/裁决后当场继续、不留档；确属阻塞的缺口由架构师上报 blocker，同环节继续复核至完成。quality reviewer 对可工具化的 pattern 在报业务 issue 的同时须报工具改进 issue，通过调整确定性质量扫描工具配置（规则收紧/新增规则）统一收敛同类问题，减少人工重复审查。
 
-issue 与任务共享 phase 体系：reviewer 提报 → todo → developer 修复并经 `fixed_issue_ids` 上报 → review（待复核）→ 报 issue 的 reviewer 复核裁定（谁提谁裁定）：通过置 done，驳回回 todo 并累计修复未过次数（≥2 须先 5-Why 根因分析）。done/cancelled 终态仅由复核（verify_* 各层）或豁免裁定置入；developer 提交修复只进入 review 待复核，不直接置终态。
+issue 与任务共享 phase 体系：reviewer 提报 → todo → developer 修复并经 `fixed_issue_ids` 上报 → review（待复核）→ 报 issue 的 reviewer 复核裁定（谁提谁裁定）：通过置 done，驳回回 todo 并累计修复未过次数（≥2 须先 5-Why 根因分析）。done/cancelled 终态由复核（verify_* 各层）、豁免裁定或检查点 giveup 置入；developer 提交修复只进入 review 待复核，不直接置终态。多 agent 聚合 step（verify_quality 5 维并行）中，维度名下有未裁定豁免申请时会在聚合等待期重新唤起报源 reviewer 履行裁定权；维度名下 blocking issue 已全部终态且无在途豁免申请时该维度自动视为通过，避免 failed 维度永不重派导致聚合无法收敛。
 
 具体阶段流转、工具参数、状态与门禁规则以 `src/core/` 与 `assets/workflows/` 实现为准。README 不重复这些细节，避免文档与代码漂移。
 
