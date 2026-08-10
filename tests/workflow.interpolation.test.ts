@@ -151,6 +151,7 @@ describe("renderStepContext step.id 路由", () => {
     expect(out).toContain("## 约束")
     expect(out).toContain("允许变更目录范围：src")
     expect(out).toContain("Issue (待修复 · Low 及以上，必办)")
+    expect(out).toContain("实施前识别 spec 描述的一并操作行为组")
   })
 
   test("verify_tool（step.id=verify_tool → review_tool）：渲染 tool 层 children 清单", () => {
@@ -343,10 +344,11 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）")
   })
 
-  test("verify_task：四项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
+  test("verify_task：五项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_task" })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量")
+    expect(out).toContain("⑤业务行为真实性")
     // 仅测试代码变更豁免②③：instructions 追加的豁免 bullet 正常渲染
     expect(out).toContain("本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并在 skip_reason 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据")
     expect(out).toContain("有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks")
