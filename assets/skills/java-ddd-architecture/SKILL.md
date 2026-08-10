@@ -1,6 +1,6 @@
 ---
 name: java-ddd-architecture
-description: 仅限 Java 后端开发场景。DDD 四层架构 Java 实现——Java 代码实现规范、Spring DI、MapStruct、ArchUnit 规则。DDD 方法论见 ddd-architecture。适用场景同前。
+description: 仅限 Java 后端开发场景。DDD 四层分层与六边形（Hexagonal）两种架构风格 Java 实现——Java 代码实现规范、Spring DI、MapStruct、ArchUnit 规则。DDD 方法论见 ddd-architecture。适用场景同前。
 capabilities: ["architecture", "tech-stack-java"]
 ---
 
@@ -43,6 +43,17 @@ capabilities: ["architecture", "tech-stack-java"]
     └── assembler    ← DTO ↔ Domain 转换器
 ```
 
+**六边形（Hexagonal）包组织**
+
+内核保留 `domain` + `application` 两个包共同构成应用内核；`interfaces` 包承担 **driving adapter（入站适配器）** 角色，`infrastructure` 包承担 **driven adapter（出站适配器）** 角色。包结构沿用上表，仅角色语义调整：
+
+| 包 | 六边形角色 | 说明 |
+|----|-----------|------|
+| `domain` | 内核 | driven port 定义处（Repository、EventPublisher、OrderGenerationPort 等接口） |
+| `application` | 内核 | driving port 定义处（ApplicationService 接口） |
+| `interfaces` | driving adapter（入站） | Controller 等外部入口调用 application 定义的端口接口 |
+| `infrastructure` | driven adapter（出站） | 实现 domain 定义的 Port 接口（持久化、LLM、外部集成等） |
+
 ## 层间依赖
 
 > 概念见 ddd-architecture，以下为 Java 实现示例。
@@ -52,6 +63,8 @@ interfaces → application → domain ← infrastructure
 ```
 
 箭头方向即依赖方向：interfaces 依赖 application，application 依赖 domain，infrastructure 依赖 domain（实现 domain 定义的 Port/Repository 接口）。infrastructure 不依赖 interfaces，interfaces 不直接依赖 infrastructure。
+
+**六边形**：依赖规则不变，仅换角色表述——driving adapter（interfaces）依赖 application 定义的 driving port（ApplicationService 接口）；driven adapter（infrastructure）实现 domain 定义的 driven port（Repository、EventPublisher、OrderGenerationPort 等接口）。adapter 之间无依赖，内核不依赖 adapter。
 
 ## 各层职责
 
@@ -63,6 +76,8 @@ interfaces → application → domain ← infrastructure
 | application | 编排业务用例、事务边界、协调 domain service | 技术实现细节（SQL、HTTP、LLM 调用） |
 | domain | 核心领域逻辑、聚合根行为、领域服务 | 任何框架依赖（Spring/MyBatis/Spring AI） |
 | infrastructure | 技术实现：持久化、外部集成、消息队列、ACL 转换 | 业务规则判断 |
+
+六边形视角下，interfaces 即 driving adapter（入站适配器），infrastructure 即 driven adapter（出站适配器），职责与禁止项对应不变。
 
 ## CQRS 读写分离
 
@@ -378,6 +393,8 @@ infrastructure/acl/
 - 输出方向：ACL 将领域模型转换为外部模型
 - 约束：领域模型不依赖外部模型，ACL 转换方向仅为 infrastructure → domain
 
+六边形视角下，ACL 属 driven adapter（出站适配器）中的转换组件，方向约束同"adapter → 内核"。
+
 ## 核心规则
 
 > 概念见 ddd-architecture，以下为 Java 实现示例。
@@ -403,24 +420,56 @@ infrastructure/acl/
 | 17 | Domain Event 在 domain 层定义（`domain/model/event`），infrastructure 层实现 handler | 领域层依赖事件框架 |
 | 18 | ACL 只允许 infrastructure → domain 方向，领域模型不依赖外部模型 | 外部模型污染领域层 |
 
+**声明**：上表同时适用于四层与六边形两种风格。六边形风格下"domain"指内核（domain + application 合并语义），多数规则表述不变——规则 1（内核零框架依赖）、规则 2（依赖方向不可逆）、规则 3、规则 8、规则 9、规则 16、规则 18 在两种风格下均一致。仅 Port 定义位置相关条目注明差异：规则 17 的领域事件契约仍在内核（domain/model/event）定义、事件 handler 实现仍在 infrastructure；Repository、EventPublisher、OrderGenerationPort 等 Port 接口在四层下固定定义于 domain，六边形下可为 domain（driven port）或 application（driving port），但全项目须一致。
+
 ## Port / Adapter 模式
 
 > 概念见 ddd-architecture，以下为 Java 实现示例。
 
-Domain 层定义 Port 接口（纯业务契约），Infrastructure 层实现 Adapter：
+Port 接口是内核（domain + application）定义的纯业务契约，Adapter 是技术适配组件，按方向分两类。
 
-```java
-// domain/service/OrderGenerationPort.java — 零框架依赖
+**driven port / driven adapter（出站）**：port 由 domain 定义，adapter 在 infrastructure 实现。
+
+\`\`\`java
+// domain/service/OrderGenerationPort.java — driven port，零框架依赖
 public interface OrderGenerationPort {
     OrderInfo generate(OrderData data);
 }
 
-// infrastructure/llm/LlmOrderGenAdapter.java — 实现
+// infrastructure/llm/LlmOrderGenAdapter.java — driven adapter（出站）实现
 @Component
 public class LlmOrderGenAdapter implements OrderGenerationPort {
     // 内部使用 Spring AI ChatModel
 }
-```
+\`\`\`
+
+**driving port / driving adapter（入站）**：port 由 application 定义，adapter 在 interfaces 实现。
+
+\`\`\`java
+// application/service/OrderService.java — driving port，用例入口
+public interface OrderService {
+    CommandResult createOrder(CreateOrderCommand cmd);
+}
+
+// driving port 由 application 层应用服务实现（use case，同 CQRS 章节 CreateOrderService 模式），经 Spring 注入到 driving adapter
+
+// interfaces/controller/OrderController.java — driving adapter（入站）调用端口
+@RestController
+public class OrderController {
+    private final OrderService orderService; // driving port，由 Spring 注入 application 层应用服务实现
+
+    public OrderController(OrderService orderService) {
+        this.orderService = orderService;
+    }
+
+    @PostMapping("/orders")
+    public CommandResult createOrder(@RequestBody CreateOrderCommand cmd) {
+        return orderService.createOrder(cmd);
+    }
+}
+\`\`\`
+
+四层分层下两类分别落在 interfaces 与 infrastructure；六边形下即 driving adapter 与 driven adapter。
 
 ## 共性能力基础设施化
 

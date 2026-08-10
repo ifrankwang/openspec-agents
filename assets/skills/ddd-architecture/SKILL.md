@@ -1,12 +1,16 @@
 ---
 name: ddd-architecture
-description: DDD 分层架构规范——四层结构、层间依赖、各层职责、CQRS、聚合设计、Repository 语义、领域事件、值对象、Port/Adapter。方法论本身语言无关。
+description: DDD 架构规范——四层分层与六边形（Hexagonal）两种包组织风格、层间依赖、各层职责、风格判定、CQRS、聚合设计、Repository 语义、领域事件、值对象、Port/Adapter。方法论本身语言无关。
 capabilities: ["architecture"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。
 
 ## 包结构（概念层）
+
+同一套依赖原则有两种包组织方式，均属合法实现，采用哪种由项目声明（见"架构风格判定"）。两者不是互斥架构，而是同一依赖方向的两种包组织视角。
+
+**方式一：四层分层**
 
 ```
 {basePackage}
@@ -24,13 +28,66 @@ capabilities: ["architecture"]
 └── interfaces      ← 外部访问入口（Controller、API 网关、消息监听）
 ```
 
+**方式二：六边形（Hexagonal）**
+
+六边形按"内核 ↔ 适配器"组织，内核承载全部领域与应用逻辑，外部依赖以适配器形式接入：
+
+```
+{basePackage}
+├── domain            ← 内核组成：核心领域逻辑、driven port 接口
+├── application       ← 内核组成：用例编排、driving port 接口
+├── driving adapter   ← 入站适配器：外部访问入口，调用 application 定义的 driving port
+└── driven adapter    ← 出站适配器：技术实现，实现 domain 定义的 driven port
+```
+
+- **内核** = domain + application：domain 承载核心领域逻辑（聚合根、实体、值对象、领域服务）并定义 driven port（持久化、外部集成等能力契约）；application 承载用例编排（Command/Query 入口、应用层服务）并定义 driving port（外部用例入口契约）
+- **driving adapter（入站）** 对应外部访问入口（API 网关、消息监听等），把外部调用翻译为内核用例
+- **driven adapter（出站）** 对应技术实现（持久化、外部集成、ACL 适配），把内核契约翻译为具体技术调用
+
+四层与六边形的对应关系见"两种风格的双向映射"。
+
 ## 层间依赖
+
+**四层分层**：
 
 ```
 interfaces → application → domain ← infrastructure
 ```
 
 箭头方向即依赖方向：interfaces 依赖 application，application 依赖 domain，infrastructure 实现 domain 定义的 Port/Repository 接口。infrastructure 不依赖 interfaces，interfaces 不直接依赖 infrastructure。
+
+**六边形**：
+
+```
+driving adapter → application → domain ← driven adapter
+```
+
+依赖一律指向内核（domain + application）：driving adapter 依赖 application 定义的 driving port（入站端口），driven adapter 实现 domain 定义的 driven port（出站端口）并依赖该接口。adapter 之间无依赖，内核不依赖任何 adapter。依赖倒置只发生在 driven 方向——driven adapter 依赖内核定义的 Port 接口，而非反向。
+
+## 两种风格的双向映射
+
+四层分层与六边形是同一套依赖原则（依赖一律指向内核）的两种包组织视角，对应关系如下：
+
+| 四层分层 | 六边形 | 说明 |
+|---------|--------|------|
+| domain + application | 应用内核 | 内核由领域与应用逻辑共同构成，domain 是内核的一部分 |
+| interfaces | driving adapter（入站适配器） | 外部访问入口，调用内核 |
+| infrastructure | driven adapter（出站适配器） | 技术实现，依赖内核定义的 Port 接口 |
+
+依赖方向在两种视角下完全一致：外部入口（interfaces / driving adapter）→ 内核（application → domain）← 技术实现（infrastructure / driven adapter）。
+
+## 架构风格判定
+
+两种风格不是互斥选择，判定项目采用哪种包组织视角，依据以下特征对照：
+
+| 识别特征 | 四层分层 | 六边形 |
+|---------|---------|--------|
+| 包组织方式 | 显式 interfaces / application / domain / infrastructure 四层 | 显式内核与适配器边界（adapter/in、adapter/out，或 interfaces/infrastructure 承担 adapter 语义） |
+| Port 接口定义位置 | domain 层 | 内核（domain 定义 driven port，application 定义 driving port） |
+| 外部访问入口定位 | interfaces 层 | driving adapter（入站） |
+| 技术实现定位 | infrastructure 层 | driven adapter（出站） |
+
+混杂场景兜底：项目 design/架构文档已声明架构风格的，以声明为准；未声明时按四层分层认定。Port 定义位置差异（domain 或 application）不单独构成问题；四层风格项目以 interfaces/infrastructure 承担 adapter 语义的组织方式不视为违规。
 
 ## 各层职责
 
@@ -40,6 +97,8 @@ interfaces → application → domain ← infrastructure
 | application | 编排业务用例、事务边界、协调 domain service | 技术实现细节（SQL、HTTP、LLM 调用） |
 | domain | 核心领域逻辑、聚合根行为、领域服务 | 任何框架依赖 |
 | infrastructure | 技术实现：持久化、外部集成、ACL 转换 | 业务规则判断 |
+
+六边形视角下，interfaces 即 driving adapter（入站适配器），infrastructure 即 driven adapter（出站适配器），职责与禁止项对应不变。
 
 ## 通用语言（Ubiquitous Language）
 
@@ -100,6 +159,8 @@ Domain 实体必须是充血模型——行为封装在实体内部，禁止仅 
 
 ## Repository 领域语义
 
+Repository 语义与架构风格无关，四层与六边形均适用：契约（接口）定义在核心（domain），实现落在基础设施/出站侧。
+
 Repository 对 domain 层暴露集合语义，不暴露持久化语义：
 
 - `findById` 返回 domain 实体，不存在则抛异常——领域层决定不存在语义
@@ -108,6 +169,8 @@ Repository 对 domain 层暴露集合语义，不暴露持久化语义：
 - 纯查询投影（非 domain 实体）走 CQRS Query 路径，不经过 Repository
 
 ## Domain Event
+
+Domain Event 语义与架构风格无关，四层与六边形均适用：事件契约定义在 domain/内核，事件处理实现落在 infrastructure/出站侧。
 
 - 领域事件定义在 domain 层，事件处理在 infrastructure 层
 - 事件定义为不可变值对象，命名 `{Entity}{PastParticiple}Event`
@@ -139,9 +202,16 @@ Specification 将业务规则封装为可组合的谓词对象，用于判定候
 - 输出方向：ACL 将领域模型转换为外部模型
 - 约束：领域模型不依赖外部模型，ACL 转换方向仅为 infrastructure → domain
 
+六边形视角下，ACL 属 driven adapter（出站适配器）中的转换组件，方向约束同"adapter → 内核"。
+
 ## Port / Adapter 模式
 
-Domain 层定义 Port 接口（纯业务契约），Infrastructure 层实现 Adapter。依赖方向：domain → infrastructure（通过接口反转）。
+Port 接口是内核（domain + application）定义的纯业务契约，Adapter 是实现契约的技术适配组件，按方向分两类：
+
+- **driving port / driving adapter（入站）**：driving port 由 application 定义（外部用例入口契约），由 application 层应用服务实现；driving adapter 在外部访问入口调用该端口。依赖方向：外部入口 → application。
+- **driven port / driven adapter（出站）**：driven port 由 domain 定义（持久化、外部集成等能力契约），driven adapter 在基础设施/出站侧实现。依赖方向：infrastructure 依赖 domain 的 Port 接口（依赖倒置）。
+
+四层分层下两类分别落在 interfaces 与 infrastructure；六边形下即 adapter/in 与 adapter/out（或由 interfaces/infrastructure 承担 adapter 角色）。
 
 ## 共性能力基础设施化
 
