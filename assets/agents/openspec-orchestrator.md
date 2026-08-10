@@ -14,6 +14,8 @@ permission:
   lsp: deny
   webfetch: deny
   websearch: deny
+  context7_*: deny
+  gitmcp_*: deny
   skill: deny
   todowrite: deny
   bash:

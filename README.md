@@ -91,6 +91,28 @@ tests/                        — Bun 测试，使用 FakeGitRunner
 - **状态异常防护**：`opx_status` 检测到 phase ↔ step 归属错位（含 currentStep 指向未声明 step）时，子代理一律收到 ⛔ 状态异常拒绝视图（禁止执行任何 opx_* 变更操作），orchestrator 收到 ⚠️ 诊断并指引 `opx_orch_init(recovery=...)` 恢复；`opx_agent_submit` 对错位态提交同样抛错拒绝，零状态变更
 - **资源隔离命名空间**：每个 change 分配稳定隔离标识（SHA256(changeId) 前 6 位 hex），Agent 通过 `opx_status` 视图获取；隔离标识派生 SonarQube projectKey 后缀、docker compose 项目名与应用端口，并发 change 在外部共享资源（扫描项目、应用端口、容器）上互不冲突。历史进行中 change 的状态读取时自动补全隔离标识，无需手动迁移；旧 key 产生的扫描数据不可追溯，但 issue 清单已固化在 state，不影响继续编排
 
+## 文档检索渠道
+
+子代理需要外部框架/工具的权威文档（规则语义、API 用法、配置说明）时，统一通过文档检索渠道获取，禁止为获取此类知识解析源码、jar 包或执行 AST dump。渠道分层与降级路径如下：
+
+| 层级 | 职责 | 说明 |
+|------|------|------|
+| 主渠道 | 按库名查任意框架的权威文档 | 免 key 起步，支持可选 API key 提升配额 |
+| 备选渠道 | 查任意公开 GitHub 仓库（文档与代码） | 动态端点，无需预选仓库 |
+| 兜底 | opencode 内置 websearch / webfetch | 前两者不可用时使用 |
+
+### 配置方式
+
+在用户级 `~/.config/opencode/opencode.json` 的 `mcp` 块声明上述远程 MCP server。主渠道可选：配置 `CONTEXT7_API_KEY` 环境变量并相应在 headers 中引用后，可获得更高免费配额。
+
+### 降级路径
+
+主渠道不可用（超时/配额耗尽/服务故障）时依次尝试备选渠道与兜底工具；仍不可获取时按阻塞流程上报，不以翻源码替代。
+
+### 免费配额与隐私
+
+主渠道免费额度 1000 次/月，调用仅上送库名与查询文本，不上送项目源码或其他上下文；备选渠道仅访问公开仓库内容。
+
 ## 关键技术约定
 
 - 工具前缀 `opx_`

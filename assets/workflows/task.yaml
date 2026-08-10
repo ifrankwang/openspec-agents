@@ -14,9 +14,11 @@ common:
     - "按 Skill 加载清单加载匹配的 skill 并遵循其全部规范"
     - "读取 `{{worktree_path}}/openspec/changes/{{change_id}}/` 下的相关文档：tasks.md（任务清单，按行内 `[spec:xxx]` 溯源定位 specs/ 下相关 spec.md）、design.md、proposal.md"
     - "阅读 `{{worktree_path}}/AGENTS.md` 项目规范"
+    - "需要外部框架/工具的权威文档（规则语义、API 用法、配置说明）时，优先通过文档检索渠道获取，禁止直接翻源码"
     - "完成后调用 opx_agent_submit 提交裁决或失败上报"
   constraints:
     - "所有 edit/write 操作限定在 {{worktree_path}} 内，严禁修改主仓库路径下的文件"
+    - "禁止为获取外部框架/工具的规则语义、API 用法等知识而解析其源码、jar 包或执行 AST dump；此类知识一律通过文档检索渠道获取"
     - "不跳步骤、不自行推断阶段流转，next-step 以 opx_status 为准"
     - "禁止调用任何 opx_orch_* 工具（编排者专属）"
     - "以视图「变更范围」命令产出的文件清单作为本次工作范围"
