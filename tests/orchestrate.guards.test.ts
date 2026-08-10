@@ -373,6 +373,32 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
       expect(metaOf(readItem(wt, CID), "validation_steps")[0].skip_reason).toBe("无 UI 变更")
     } finally { teardown(root) }
   })
+
+  test("仅测试代码变更豁免②③：skipped + skip_reason → passed 接受并推进到 verify_quality", async () => {
+    const { wt, root } = fresh()
+    try {
+      await driveToVerifyTask(wt, CID)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
+          validation_steps: [
+            { step: "①task 产出完整性", completed: true, evidence: "全部 task 验证通过" },
+            { step: "②启动服务并检查健康", completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" },
+            { step: "③独立执行全量 API 测试", completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" },
+            { step: "④审查测试代码质量", completed: true, evidence: "测试代码质量审查通过" },
+          ],
+        },
+        makeCtx("openspec-reviewer-task", wt)
+      )
+      const item = readItem(wt, CID)
+      const steps = metaOf(item, "validation_steps")
+      expect(steps).toHaveLength(4)
+      expect(steps[1]).toMatchObject({ completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" })
+      expect(steps[2]).toMatchObject({ completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" })
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_quality")
+    } finally { teardown(root) }
+  })
 })
 
 // ── G7: 非法 task id in failed_tasks ──
