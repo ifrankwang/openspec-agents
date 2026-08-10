@@ -347,6 +347,8 @@ describe("step 操作层指引补全", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_task" })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量")
+    // 仅测试代码变更豁免②③：instructions 追加的豁免 bullet 正常渲染
+    expect(out).toContain("本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并在 skip_reason 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据")
     expect(out).toContain("有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks")
     expect(out).toContain("当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定")
