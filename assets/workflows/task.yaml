@@ -18,7 +18,7 @@ common:
     - "完成后调用 opx_agent_submit 提交裁决或失败上报"
   constraints:
     - "所有 edit/write 操作限定在 {{worktree_path}} 内，严禁修改主仓库路径下的文件"
-    - "禁止为获取外部框架/工具的规则语义、API 用法等知识而解析其源码、jar 包或执行 AST dump；此类知识一律通过文档检索渠道获取"
+    - "禁止为获取外部框架/工具的规则语义、API 用法等知识而解析其源码、jar 包或执行 AST dump；此类知识一律通过文档检索渠道获取；声明式规则定义来源（规则定义 XML 直拉、工具官方 Web API 返回、官方文档页）属于文档检索渠道范畴"
     - "不跳步骤、不自行推断阶段流转，next-step 以 opx_status 为准"
     - "禁止调用任何 opx_orch_* 工具（编排者专属）"
     - "以视图「变更范围」命令产出的文件清单作为本次工作范围"
@@ -94,6 +94,8 @@ phases:
           - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
           - "提交 opx_agent_submit，必带 verdict 参数（passed / failed）"
+          - "报静态分析类 issue 时，rule 字段必填官方规则全名（命名格式遵循已加载的质量门类 skill 的规则导航索引），漏填将导致项目级豁免清单无法生效"
+          - "报静态分析类 issue 时，description 必须含：①复现命令（非静默形态，含必要开关）；②实测数据（命中类清单/计数）；③规则默认阈值与当前项目配置对比（引用可改的配置文件路径）"
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行工具但不得 edit/write 任何文件"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"

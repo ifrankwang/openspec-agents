@@ -101,6 +101,10 @@ tests/                        — Bun 测试，使用 FakeGitRunner
 | 备选渠道 | 查任意公开 GitHub 仓库（文档与代码） | 动态端点，无需预选仓库 |
 | 兜底 | opencode 内置 websearch / webfetch | 前两者不可用时使用 |
 
+### 规则定义权威源
+
+PMD 规则定义（category XML 声明式定义，GitHub raw 直拉）与官方文档锚点页、SonarQube Web API（`/api/rules/search`）返回的规则定义均属声明式规则定义来源，非规则实现源码，归入文档检索渠道，供技能方法论检索规则语义使用。
+
 ### 配置方式
 
 在用户级 `~/.config/opencode/opencode.json` 的 `mcp` 块声明上述远程 MCP server。主渠道可选：配置 `CONTEXT7_API_KEY` 环境变量并相应在 headers 中引用后，可获得更高免费配额。

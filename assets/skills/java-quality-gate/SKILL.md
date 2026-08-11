@@ -87,8 +87,7 @@ mvn pmd:check
 PMD 检查返回非 0（有违规）即阻塞 task 完成。以下 PMD 规则集启用：
 
 - `category/java/errorprone.xml`（错误模式：空 catch、compareToEquals 等）
-- `category/java/bestpractices.xml`（最佳实践：unused imports、System.out 等）
-- `category/java/bestpractices.xml` 中 `AvoidReassigningParameters`、`JUnitTestsShouldIncludeAssert` 等默认启用
+- `category/java/bestpractices.xml`（最佳实践：unused imports、System.out、AvoidReassigningParameters、JUnitTestsShouldIncludeAssert 等）
 - `category/java/design.xml`（设计：方法长度、圈复杂度、God class 等）
 - `category/java/performance.xml`（性能：String 拼接、冗余对象创建等）
 
@@ -105,6 +104,8 @@ PMD 检查返回非 0（有违规）即阻塞 task 完成。以下 PMD 规则集
 | 未关闭资源 | 3 | High | 未使用 try-with-resources |
 | 类级 @SuppressWarnings | 2 | Medium | 在类级别添加 @SuppressWarnings 抑制特定规则 |
 
+> 本表为高频示例（非穷举），规则为常见俗名；官方全名与分类见 `reference/pmd-rules.md`，未收录规则按「PMD 规则语义定位」方法论直拉官方源。
+
 ### 输出解析
 
 PMD 违规输出格式：
@@ -113,6 +114,36 @@ PMD 违规输出格式：
 ```
 
 从输出中逐行解析，提取 file / line / rule / message 字段。
+
+机器检索违规清单首选 `target/pmd.xml`（结构化、`<violation>` 一行一元素、rule 属性可直接 grep）。若 pom 未配置 `format=xml` 导致该文件不存在，先执行 `mvn pmd:pmd -Dpmd.format=xml` 生成。多模块项目到各模块 `target/` 目录查找。
+
+不解析 HTML 报告（`target/reports/pmd.html` 体积大、格式脆弱，仅适合人工阅读）。
+
+`target/pmd.xml` 被 `<suppressedviolation>` 污染（全量规则集 + 抑制配置时）时，改用自定义 ruleset 生成的干净报告，或读取 `mvn pmd:check` 非 -q 形态 console 输出中的 `[WARNING] PMD Failure` 行。
+
+### 测量与复现
+
+pom 中 maven-pmd-plugin 显式配置的 `<rulesets>` 会覆盖命令行 `-Dpmd.rulesets`，修改生效规则集须改 pom 配置，勿用命令行参数覆盖。
+
+生成干净报告：自定义 ruleset 运行 `mvn pmd:pmd`，生成的 `target/pmd.xml` 不含全量规则集 + 抑制配置产生的 `<suppressedviolation>` 污染，可直接 grep 按 rule 过滤。
+
+PMD CLI 手动运行需完整 classpath：用 `mvn dependency:build-classpath` 自动生成，禁止手工枚举 jar（classpath 缺 jar 是高频失败源）。
+
+改动规则/阈值前先在最小项目实测规则效果再落地。
+
+### PMD 规则语义定位（检索方法论）
+
+以工具输出为入口：`mvn pmd:check` 违规清单按 `rule` 字段去重，仅对命中规则做语义定位，不预置全量规则内容。
+
+确定项目实际 PMD 版本：读 `mvn dependency:tree -Dincludes=net.sourceforge.pmd` 实际解析的 pmd-core/pmd-java 版本，或 pom 显式配置的 PMD 版本；不得仅凭 maven-pmd-plugin 版本号推断（3.22.0 起默认 PMD 7，且 pom 可覆盖插件默认版本）。
+
+直拉官方规则定义（首选）：`https://raw.githubusercontent.com/pmd/pmd/pmd_releases/<实际版本>/pmd-java/src/main/resources/category/java/<分类>.xml`，从 `<rule name="...">` 节点读取默认阈值 property、判定逻辑（xpath 或规则类）、externalInfoUrl；版本无法确定时降级用 `main` 分支（注意 main 为开发分支，内容代表未来版本）。
+
+文档锚点核对：`https://docs.pmd-code.org/pmd-doc-<实际版本>/pmd_rules_java_<分类>.html#<规则全名小写>`（锚点即规则全名小写）。
+
+兜底：经文档检索渠道（定义见 README「文档检索渠道」）语义定位规则所属分类，结果与上述官方源交叉核对；注意区分同族易混规则（如 TooManyMethods / NcssCount / ExcessiveMethodLength）。
+
+外查结果（规则全名/默认阈值/语义）写入 issue 描述；需要规则索引时读取 `reference/pmd-rules.md`。
 
 ### CPD 重复代码检查
 
@@ -262,6 +293,16 @@ curl -sf -u <token>: "http://localhost:9000/api/issues/search?inNewCodePeriod=tr
 
 MUST 使用 `inNewCodePeriod=true` 限定 new code 期，`componentKeys` 传单个 project key。new code 期过滤仅 `inNewCodePeriod` 参数可用（SonarQube 10.0 已移除旧的 leak period 过滤参数）。查询须携带认证，token 复用本流程生成的一次性 token，以 Basic auth 形式经 `-u <token>:` 传入（token 作用户名、密码留空），否则默认开启 forceAuthentication 时返回 401。`inNewCodePeriod` 仅限定 new code 期，不含状态过滤，会返回期内所有状态的 issue（含已关闭 CLOSED FIXED）。MUST 追加 `statuses=OPEN,CONFIRMED,REOPENED` 限定未解决 issue；已关闭 issue 不属本轮待处理项，不得据此误判排除/抑制配置未生效或触发重扫。
 
+### 规则语义定位
+
+issue 的 `rule` 字段（如 `java:S106`）即 SonarSource 官方全名，作为反查入口。
+
+Web API 精确反查：`curl -u <token>:` 调 `/api/rules/search?rule_key=<rule 字段>`（可按需 `&f=` 限定字段），从响应的 `name` 取规则标题、`descriptionSections[].content`（HTML，9.5+ 标准字段）取语义、`severity`/`type` 取分类。
+
+认证与时序：复用「取 new code 期间 issue」生成的一次性 token（Basic auth，token 作用户名密码留空），反查须在 token 回收前完成（取 issue → 反查规则语义 → 回收 token）；匿名不可靠（实例默认强制认证，且 2026.2 起匿名用户拿到的描述字段被混淆）。
+
+外查结果（规则全名/语义/severity）写入 issue 描述。
+
 ### 安全热点（独立端点）
 
 `/api/issues/search` 不返回安全热点，热点属独立类别，须经专用端点获取。
@@ -381,11 +422,11 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 
 | 工具 | 原始分类/规则 | 映射 dimension |
 |------|--------------|---------------|
-| **PMD** | `Design` 规则 | `architecture` |
-| **PMD** | `CodeStyle` 规则 | `style` |
-| **PMD** | `ErrorProne` 规则 | `maintainability` |
-| **PMD** | `BestPractices` 规则 | `maintainability` |
-| **PMD** | `Performance` 规则 | `performance` |
+| **PMD** | `category/java/design.xml` 规则 | `architecture` |
+| **PMD** | `category/java/codestyle.xml` 规则 | `style` |
+| **PMD** | `category/java/errorprone.xml` 规则 | `maintainability` |
+| **PMD** | `category/java/bestpractices.xml` 规则 | `maintainability` |
+| **PMD** | `category/java/performance.xml` 规则 | `performance` |
 | **PMD** | CPD 重复代码 | `maintainability` |
 | **SonarQube** | `VULNERABILITY` / `SECURITY_HOTSPOT` | `security` |
 | **SonarQube** | `CODE_SMELL`（与可维护性相关） | `maintainability` |
