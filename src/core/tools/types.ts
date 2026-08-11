@@ -36,6 +36,13 @@ export interface UnattendedParams {
   enabled: boolean
 }
 
+export interface StatusParams {
+  change_id: string
+  /** 子代理返回后由编排者登记最近分派会话（agent → 子代理 session id），
+   *  供子代理空返回/取消时复用 task id 续派。不传则保持纯只读快路径。 */
+  resume_sessions?: Array<{ agent: string; session_id: string }>
+}
+
 export interface AgentSubmitParams {
   change_id: string
   step_id: string
@@ -52,6 +59,14 @@ export interface AgentSubmitParams {
     reject_reason?: string
   }>
   checkpoint_decision?: "continue" | "giveup"
+  /** giveup 决策配套：对当前 step 质量门必做清单（must_do）未覆盖项逐项提供的结构化降级理由
+   * （giveup 未覆盖项缺理由则拒绝 giveup）。adjudication 取值 user_response / unattended_auto / env_unavailable。 */
+  checkpoint_skip_reasons?: Array<{
+    item: string
+    category: string
+    adjudication: string
+    note?: string
+  }>
   new_children?: Array<{
     id: string
     title: string

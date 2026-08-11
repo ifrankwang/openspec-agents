@@ -37,7 +37,7 @@ describe("tool review 检查点增量端到端", () => {
       // ── 首次进入 verify_tool：无检查点 → base_ref 兜底，区间含代码 → 全量 ──
       fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
       const firstView = await status.execute({ change_id: CID }, ctx.toolR)
-      expect(firstView).toContain("顺序运行全部确定性工具检查")
+      expect(firstView).toContain("全部确定性工具检查")
       expect(firstView).not.toContain("无需运行全量工具检查")
       expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBeUndefined()
 
@@ -53,8 +53,9 @@ describe("tool review 检查点增量端到端", () => {
       fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "openspec/changes/cid/design.md")
       const docView = await status.execute({ change_id: CID }, ctx.toolR)
       expect(docView).toContain("无需运行全量工具检查")
-      expect(docView).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed" })')
-      expect(docView).not.toContain("顺序运行全部确定性工具检查")
+      expect(docView).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed", validation_steps: <必做清单申报结果> })')
+      expect(docView).toContain("no_change")
+      expect(docView).not.toContain("全部确定性工具检查")
       expect(docView).not.toContain("## Worktree")
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
       expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBe("cp-2")
@@ -66,7 +67,7 @@ describe("tool review 检查点增量端到端", () => {
       )
       fakeGit.diffNameOnlyByRange.set("cp-2..HEAD", "src/main/java/com/t/A.java\nsrc/main/java/com/t/B.java")
       const codeView = await status.execute({ change_id: CID }, ctx.toolR)
-      expect(codeView).toContain("顺序运行全部确定性工具检查")
+      expect(codeView).toContain("全部确定性工具检查")
       expect(codeView).not.toContain("无需运行全量工具检查")
 
       // ── failed → 写入检查点 cp-3 并回退 implement ──
@@ -89,7 +90,7 @@ describe("tool review 检查点增量端到端", () => {
       expect(readItem(wt, CID).currentStep).toBe("verify_tool")
       fakeGit.diffNameOnlyByRange.set("cp-3..HEAD", "src/main/java/com/t/App.java")
       const fixView = await status.execute({ change_id: CID }, ctx.toolR)
-      expect(fixView).toContain("顺序运行全部确定性工具检查")
+      expect(fixView).toContain("全部确定性工具检查")
       expect(fixView).not.toContain("无需运行全量工具检查")
 
       // reviewer 复核通过 → 检查点推进到 cp-4
@@ -110,7 +111,7 @@ describe("tool review 检查点增量端到端", () => {
       // 首次进入 verify_tool：无检查点 → base_ref 兜底，区间含代码 → 全量
       fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
       const firstView = await status.execute({ change_id: CID }, ctx.toolR)
-      expect(firstView).toContain("顺序运行全部确定性工具检查")
+      expect(firstView).toContain("全部确定性工具检查")
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
       expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBe("cp-1")
 
@@ -122,7 +123,7 @@ describe("tool review 检查点增量端到端", () => {
       fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "src/main/java/com/t/App.java")
       const discretionView = await status.execute({ change_id: CID }, ctx.toolR)
       // 分支③视图：全量指引保留（原句不删）+ 本次变更证据区块（增量口径文件清单 + 检查点区间 diff 命令）+ 裁量语义操作指引
-      expect(discretionView).toContain("顺序运行全部确定性工具检查")
+      expect(discretionView).toContain("全部确定性工具检查")
       expect(discretionView).toContain("本次变更证据（自上次工具检查）")
       expect(discretionView).toContain("`src/main/java/com/t/App.java`")
       expect(discretionView).toContain("git -C")
@@ -151,7 +152,7 @@ describe("tool review 检查点增量端到端", () => {
       // 首次进入 verify_tool：无检查点 → base_ref 兜底，区间含代码 → 全量
       fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
       const firstView = await status.execute({ change_id: CID }, ctx.toolR)
-      expect(firstView).toContain("顺序运行全部确定性工具检查")
+      expect(firstView).toContain("全部确定性工具检查")
 
       // ── failed：报 issue（new_children），检查点已写 cp-1，回退 implement ──
       await agent_submit.execute(
@@ -184,7 +185,7 @@ describe("tool review 检查点增量端到端", () => {
       // 不含直提分支文案
       expect(branch2View).not.toContain("无需运行全量工具检查，直接调用")
       // 不含全量工具检查指令
-      expect(branch2View).not.toContain("顺序运行全部确定性工具检查")
+      expect(branch2View).not.toContain("全部确定性工具检查")
 
       // ── 提交复核结果：issue 9 done，检查点推进到 cp-2 ──
       await agent_submit.execute(

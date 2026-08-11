@@ -12,6 +12,7 @@ import {
   scanSkillTags,
   resolveSkillsForCapabilities,
   getEfficiencySkills,
+  getSkillMustDo,
 } from "../src/skills/resolve"
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { stepAgentIds } from "../src/core/workflow/types"
@@ -86,6 +87,38 @@ describe("getEfficiencySkills", () => {
 
   test("不含 java-dev-practices（与 code-efficiency 解耦）", () => {
     expect(getEfficiencySkills()).not.toContain("java-dev-practices")
+  })
+})
+
+describe("must_do 必做清单（机器可读）", () => {
+  test("quality-gate 与 java-quality-gate 声明完整必做清单且与文档表格一一对应", () => {
+    const idx = scanSkillTags()
+    const expectMustDo = (name: string, expected: string[]) => {
+      expect(idx.skillMustDo.get(name)).toEqual(expected)
+      expect(getSkillMustDo(name)).toEqual(expected)
+    }
+    const items = ["env", "compile", "format", "architecture", "static_analysis", "unit_test", "coverage", "deep_scan", "config_check"]
+    expectMustDo("quality-gate", items)
+    // java 版第 7 行「SonarQube 深度扫描」对应 deep_scan；2-6 全量生命周期拆分为
+    // compile/format/architecture/static_analysis/unit_test/coverage
+    expectMustDo("java-quality-gate", items)
+  })
+
+  test("未声明 must_do 的 skill → getSkillMustDo 返回 null（不参与覆盖度门禁）", () => {
+    expect(getSkillMustDo("code-efficiency")).toBeNull()
+    expect(getSkillMustDo("api-test")).toBeNull()
+    expect(getSkillMustDo("no-such-skill")).toBeNull()
+  })
+
+  test("verify_tool capability 解析出质量门 skill 必做清单；verify_task 解析为空（不误伤）", () => {
+    const tool = resolveSkillsForCapabilities(["quality-gate", "efficiency", "api-testing"])
+    const toolMustDo = tool.skillNames.flatMap((n) => getSkillMustDo(n) ?? [])
+    expect(toolMustDo).toContain("deep_scan")
+    expect(toolMustDo).toContain("config_check")
+
+    const task = resolveSkillsForCapabilities(["api-testing", "efficiency", "dev-practices"])
+    const taskMustDo = task.skillNames.flatMap((n) => getSkillMustDo(n) ?? [])
+    expect(taskMustDo).toEqual([])
   })
 })
 

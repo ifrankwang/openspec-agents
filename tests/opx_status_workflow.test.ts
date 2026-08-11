@@ -15,6 +15,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
+import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
 import { init, status, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { loadWorkflow } from "../src/core/workflow/loader"
@@ -29,6 +30,8 @@ function freshWt(root: string): string {
   const wt = join(root, id, "w")
   mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
   writeFileSync(join(wt, "openspec", "changes", CID, "tasks.md"), "## 1. G1\n\n- [ ] 1.1 T1\n- [ ] 1.2 T2\n", "utf-8")
+  // 与 helpers.setupWorkspace 对齐：非质量门测试默认豁免必做清单门禁（gate 索引置空）
+  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
   return wt
 }
 

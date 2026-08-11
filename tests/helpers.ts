@@ -1,4 +1,5 @@
 import { __setGitRunner, type GitRunner } from "../src/core/git"
+import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
 import type { ToolContext } from "@opencode-ai/plugin"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
@@ -213,6 +214,10 @@ export function setupWorkspace(tmpRoot: string, changeId: string): string {
   const dir = join(tmpRoot, "workspace")
   mkdirSync(join(dir, "openspec", "changes", changeId), { recursive: true })
 
+  // 存量测试兼容：默认注入空 skill 索引使质量门必做清单门禁（gate.ts）豁免（解析不到质量门 skill）。
+  // 新增门禁用例在本文件或新测试中显式注入构造索引 / 真实索引（scanSkillTags()）验证门禁行为。
+  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+
   const tasksMd = `## 1. First Task Group
 
 - [ ] 1.1 Task one [spec:spec-a]
@@ -271,6 +276,7 @@ export function setupWithFakeGit(tmpRoot: string, changeId: string): { worktree:
 
 export function teardown(tmpRoot: string): void {
   __setGitRunner(null)
+  __setMustDoIndex(null)
   if (existsSync(tmpRoot)) {
     for (const entry of readdirSync(tmpRoot)) {
       try { rmSync(join(tmpRoot, entry), { recursive: true, force: true }) } catch {}

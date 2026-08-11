@@ -86,14 +86,15 @@ phases:
           on_pass: verify_task
           on_fail: implement
         instructions:
-          - "依据 opx_status 提供的变更检测结果分流：无代码/配置变更且本层无待复核/待裁定项 → 直接提交 passed，不运行全量工具检查；无变更但有本层待复核/待裁定项 → 仅复核/裁定待处理项后提交，不跑全量工具扫描；有变更 → 加载质量门类 skill 获取工具清单与映射规则，顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描），将工具输出映射为统一 issue 结构后提交"
-          - "「有变更」分支先审查上方「本次变更证据」区块的变更文件清单与区间 diff 内容后自行判断：若确认本次变更仅为注释/文档性且无逻辑影响（非注释掉代码、非结构性/格式化变更、非文件重命名），可自行决定跳过全量工具检查直接提交 passed；无法确认或含逻辑/结构变更，必须顺序运行全部确定性工具检查；裁量仅免除全量工具扫描，不免除复核/裁定——本层 blocking issue 仍须处理至终态后提交"
+          - "依据 opx_status 提供的变更检测结果分流：无代码/配置变更且本层无待复核/待裁定项 → 直接提交 passed，不运行全量工具检查，并以一条 step 名首段为 no_change 的 validation_steps 声明本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据）；无变更但有本层待复核/待裁定项 → 仅复核/裁定待处理项后提交，不跑全量工具扫描；有变更 → 加载质量门类 skill 获取工具清单与映射规则，按已加载质量门 skill 必做清单逐项执行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描——按必做清单中的对应项逐项执行并逐项申报），将工具输出映射为统一 issue 结构后提交"
+          - "「有变更」分支先审查上方「本次变更证据」区块的变更文件清单与区间 diff 内容后自行判断：若确认本次变更仅为注释/文档性且无逻辑影响（非注释掉代码、非结构性/格式化变更、非文件重命名），可自行决定跳过全量工具检查直接提交 passed（validation_steps 以 step=no_change 申报整体豁免必做清单）；无法确认或含逻辑/结构变更，必须顺序运行全部确定性工具检查；裁量仅免除全量工具扫描，不免除复核/裁定——本层 blocking issue 仍须处理至终态后提交"
           - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
           - "无变更直提分支不执行全量工具扫描，该分支下存量工具违规不重复扫描；实质代码/配置变更必须按全量覆盖：工具检查覆盖全量代码，非本轮变更文件的工具违规同样映射为 issue 提交，禁止因非本轮引入静默丢弃；仅注释/文档性变更（经审查确认）可免全量工具检查；命中项目级豁免清单（视图标注）的存量问题按 Info 提报，不重新豁免，其余非本轮引入问题仍按原严重级别上报"
           - "当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档"
           - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
           - "提交 opx_agent_submit，必带 verdict 参数（passed / failed）"
+          - "validation_steps 必须按已加载质量门 skill 必做清单逐项申报（completed=true 附执行结果；无法执行的必做项置 completed=false，并以结构化 skip_reason 申报降级理由，格式：{\"item\":\"<必做项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}）；遗漏必做项或缺结构化降级理由的 passed 提交会被提交门禁拒绝"
           - "报静态分析类 issue 时，rule 字段必填官方规则全名（命名格式遵循已加载的质量门类 skill 的规则导航索引），漏填将导致项目级豁免清单无法生效"
           - "报静态分析类 issue 时，description 必须含：①复现命令（非静默形态，含必要开关）；②实测数据（命中类清单/计数）；③规则默认阈值与当前项目配置对比（引用可改的配置文件路径）"
         constraints:
@@ -109,7 +110,7 @@ phases:
           on_fail: implement
         instructions:
           - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷"
-          - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并在 skip_reason 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
+          - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约"
           - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"
           - "当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档"

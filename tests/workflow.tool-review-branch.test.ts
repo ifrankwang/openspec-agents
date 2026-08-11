@@ -55,12 +55,15 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     })
     expect(out).toContain("# ✅ 当前轮到你执行")
     expect(out).toContain("无需运行全量工具检查")
-    expect(out).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed" })')
+    // 直提须以 no_change 声明整体豁免必做清单（或逐项申报），提交参数带 validation_steps
+    expect(out).toContain("no_change")
+    expect(out).toContain("validation_steps")
+    expect(out).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed", validation_steps: <必做清单申报结果> })')
     // 替换式最小视图：不渲染 worktree/变更范围区块（避免与既有 baseRef..HEAD 累计口径提示冲突）
     expect(out).not.toContain("## Worktree")
     expect(out).not.toContain("diff --name-only")
     // 不展示全量工具检查指引与 skill 清单
-    expect(out).not.toContain("顺序运行全部确定性工具检查")
+    expect(out).not.toContain("全部确定性工具检查")
     expect(out).not.toContain("## Skill 加载清单")
     // 不展示 hash
     expect(out).not.toContain("cp-1")
@@ -90,7 +93,10 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     // 操作指引聚焦复核/裁定
     expect(out).toContain("recheck_adjudications")
     expect(out).toContain("exempt_adjudications")
-    expect(out).not.toContain("顺序运行全部确定性工具检查")
+    // 仅复核分支同样须申报必做清单处理结果（no_change 整体豁免或逐项申报）
+    expect(out).toContain("no_change")
+    expect(out).toContain("validation_steps")
+    expect(out).not.toContain("全部确定性工具检查")
     // 分支③证据区块不注入（口径正确性：仅分支③渲染）
     expect(out).not.toContain("本次变更证据（自上次工具检查）")
   })
@@ -111,7 +117,7 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     // 不渲染直提分支文案（无待复核项时才直提）
     expect(out).not.toContain("无需运行全量工具检查，直接调用")
     // 不渲染全量工具检查指引
-    expect(out).not.toContain("顺序运行全部确定性工具检查")
+    expect(out).not.toContain("全部确定性工具检查")
     // 分支③证据区块不注入（口径正确性：仅分支③渲染）
     expect(out).not.toContain("本次变更证据（自上次工具检查）")
   })
@@ -123,7 +129,7 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     })
     expect(out).toContain("# ✅ 当前轮到你执行")
     expect(out).toContain("## Worktree")
-    expect(out).toContain("顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描）")
+    expect(out).toContain("全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描——按必做清单中的对应项逐项执行并逐项申报）")
     expect(out).toContain("## Skill 加载清单")
     expect(out).not.toContain("无需运行全量工具检查")
     // 分支③证据区块：本次（自上次工具检查）增量口径文件清单 + 检查点区间 diff 命令（与 baseRef..HEAD 累计口径区分）
@@ -159,7 +165,7 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     const item = makeItem()
     const out = renderWorkingView(item, "verify_tool", "openspec-reviewer-tool")
     expect(out).toContain("# ✅ 当前轮到你执行")
-    expect(out).toContain("顺序运行全部确定性工具检查")
+    expect(out).toContain("全部确定性工具检查")
     expect(out).toContain("## Worktree")
     // toolChanges 缺省时分支③证据区块不注入（避免无检测结果时展示空证据）
     expect(out).not.toContain("本次变更证据（自上次工具检查）")

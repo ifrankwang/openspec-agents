@@ -12,6 +12,7 @@ import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node
 import { join } from "node:path"
 
 import { __setGitRunner, detectMainRepoPollution, type GitRunner } from "../src/core/git"
+import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
 import { acquireLock, releaseLock, getLockPath, writeState } from "../src/core/state"
 import type { OrchestrateState } from "../src/core/types"
 import {
@@ -32,6 +33,8 @@ function freshWt(root: string): string {
     `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2 [spec:s2]\n\n## 2. G2\n\n- [ ] 2.1 T3\n`,
     "utf-8"
   )
+  // 与 helpers.setupWorkspace 对齐：非质量门测试默认豁免必做清单门禁（gate 索引置空）
+  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
   return wt
 }
 

@@ -1164,19 +1164,20 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/skip_reason/)
 
-      // completed=true + evidence 正常落盘
+      // completed=true + evidence 正常落盘；completed=false 带合法结构化 skip_reason 正常落盘
+      const reason = '{"item":"冒烟","category":"no_ui_change","adjudication":"user_response"}'
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed",
           verified_tasks: ["1", "2", "3"],
-          validation_steps: [{ step: "构建", completed: true, evidence: "BUILD SUCCESS" }, { step: "冒烟", completed: false, skip_reason: "无 UI 变更" }],
+          validation_steps: [{ step: "构建", completed: true, evidence: "BUILD SUCCESS" }, { step: "冒烟", completed: false, skip_reason: reason }],
         },
         makeCtx("openspec-reviewer-task", wt)
       )
       const steps = taskItemOf(wt).metadata["validation_steps"] as any[]
       expect(steps).toHaveLength(2)
       expect(steps[0].evidence).toBe("BUILD SUCCESS")
-      expect(steps[1].skip_reason).toBe("无 UI 变更")
+      expect(steps[1].skip_reason).toBe(reason)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

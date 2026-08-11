@@ -2,6 +2,10 @@
 name: quality-gate
 description: 确定性质量门框架——定义检查流程、统一 issue 结构、环境准备与降级。技术栈无关。
 capabilities: ["quality-gate"]
+# 机器可读必做清单：与下方「检查流程」表格 0~7 检查类别一一对应（8 降级口径、9 汇总产出属流程元项，不作为必做申报项）。
+# env=工具环境检查，compile=编译检查，format=代码格式检查，architecture=架构约束检查，
+# static_analysis=静态代码分析，unit_test=单元测试，coverage=覆盖率，deep_scan=深度扫描，config_check=质量工具配置检查。
+must_do: ["env", "compile", "format", "architecture", "static_analysis", "unit_test", "coverage", "deep_scan", "config_check"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

@@ -14,6 +14,7 @@ import {
   renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
   isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
 } from "../views.js"
+import { resolveMustDoForCaps, SKIP_REASON_FORMAT } from "../tools/gate.js"
 
 export interface WorkflowStatusViewOptions {
   state: OrchestrateState
@@ -51,7 +52,7 @@ export function renderWorkflowStatusView(
     }
   }
   if (item.metadata["_checkpoint"] === true || rec.status === "checkpoint") {
-    return renderCheckpoint(rec)
+    return renderCheckpoint(rec, workflow, item)
   }
   if (rec.status === "suspended") {
     return renderSuspended(item)
@@ -81,16 +82,27 @@ export function renderWorkflowStatusView(
   return renderGate(rec, item, ctxAgent)
 }
 
-function renderCheckpoint(rec: EngineRecommendation): string {
+function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, item: WorkItem): string {
   const round = rec.checkpoint?.retryCount ?? "?"
   const step = rec.stepId ?? "(无)"
-  return [
+  const lines = [
     `# ⛔ 审查重试达到检查点（第 ${round} 轮）`,
     "",
     "需要用户决策。",
     `唯一动作：调用 \`opx_agent_submit({ step_id: "${step}", checkpoint_decision: "continue" })\`（continue / giveup 二选一）推进。`,
     "",
-  ].join("\n")
+  ]
+  // 质量门类 step（当前 step 能力集解析出质量门必做清单）giveup 时，未覆盖必做项须经
+  // checkpoint_skip_reasons 逐项申报结构化降级理由（操作指引层面，不解释门禁内部实现）。
+  const entry = rec.stepId ? workflow.stepMap.get(rec.stepId) : undefined
+  const stepCaps = Array.from(new Set((entry?.step.agents ?? []).flatMap((a) => a.capability_tags)))
+  if (resolveMustDoForCaps(stepCaps).length > 0) {
+    lines.push(
+      `质量门类 step 的 giveup 决策：未覆盖必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），缺理由 giveup 不会被受理。`,
+      "",
+    )
+  }
+  return lines.join("\n")
 }
 
 function renderSuspended(item: WorkItem): string {
@@ -269,6 +281,24 @@ function renderOrchestratorDispatch(
       lines.push(`分派子代理：${agentList}。`)
       if (agents.length > 1) {
         lines.push("（多子代理相互独立，可在单条消息中并排分派，无需串行等待）")
+      }
+      // 空返回/取消续派提示：上次分派该 agent 未返回结果（_last_dispatch 有记录）且仍待分派（pending）
+      // 时，提示复用 task 工具 task_id 续派（保留上下文、避免全新重派重复消耗）。三条件缺一不提示。
+      const lastDispatch =
+        typeof item.metadata["_last_dispatch"] === "object" && item.metadata["_last_dispatch"] !== null
+          ? (item.metadata["_last_dispatch"] as Record<string, string>)
+          : {}
+      for (const a of agents) {
+        const sid = lastDispatch[a]
+        if (
+          typeof sid === "string" && sid !== "" &&
+          rec.stepId !== null &&
+          getStepVerdict(item, rec.stepId, a) === "pending"
+        ) {
+          lines.push(
+            `⚠️ 上次分派 \`${a}\`（会话 \`${sid}\`）未返回结果，建议用 task 工具 \`task_id="${sid}"\` 复用会话提醒继续执行，勿全新重派（可保留上下文、避免重复消耗）。`
+          )
+        }
       }
     }
   } else {
@@ -787,7 +817,13 @@ function renderToolDirectSubmit(exemptedHits?: number): string {
     )
   }
   lines.push(
-    "无需运行全量工具检查，直接调用 `opx_agent_submit({ step_id: \"verify_tool\", verdict: \"passed\" })` 提交通过后结束会话。",
+    "无需运行全量工具检查。",
+    "",
+    "## 操作指引",
+    "",
+    "1. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 validation_steps 条目声明本轮整体豁免必做清单（completed=false，并附结构化 skip_reason 注明判定依据），或按已加载质量门 skill 必做清单逐项申报（completed=true 附执行结果；无法执行项置 completed=false + 结构化 skip_reason）",
+    `2. 结构化 skip_reason 格式：\`${SKIP_REASON_FORMAT}\``,
+    `3. 调用 \`opx_agent_submit({ step_id: "verify_tool", verdict: "passed", validation_steps: <必做清单申报结果> })\` 提交通过后结束会话。`,
     "",
   )
   return lines.join("\n")
@@ -814,7 +850,11 @@ function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctx
   lines.push(
     "1. 逐项复核/裁定上方各项：待复核 issue 经 `recheck_adjudications` 复核（通过置 done、不通过驳回并附驳回原因）；待裁定豁免经 `exempt_adjudications` 裁定（dismissed/rejected）",
   )
-  lines.push(`2. 全部处理完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed" })\``)
+  lines.push(
+    "2. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 validation_steps 条目声明本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据），或按已加载质量门 skill 必做清单逐项申报",
+  )
+  lines.push(`3. 结构化 skip_reason 格式：\`${SKIP_REASON_FORMAT}\``)
+  lines.push(`4. 全部处理完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed", validation_steps: <必做清单申报结果> })\``)
   lines.push("")
   return lines.join("\n")
 }

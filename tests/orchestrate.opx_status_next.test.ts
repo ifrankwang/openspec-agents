@@ -193,6 +193,26 @@ describe("S8: orchestrator 分派视图", () => {
       expect(out).toContain("并排分派")
     } finally { teardown(root) }
   })
+
+  test("空返回登记后（pending + resume_sessions）视图输出 task_id 复用提示；无记录不输出", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 未登记：不输出续派提示（默认无记录）
+      const out0 = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out0).not.toContain("task_id=")
+      expect(out0).not.toContain("未返回结果")
+      // 登记一个仍待分派（pending）维度的会话 → 视图提示复用 task_id 续派
+      await status.execute(
+        { change_id: CID, resume_sessions: [{ agent: "openspec-reviewer-style", session_id: "sess-abc" }] },
+        ctx.orch
+      )
+      const out = await status.execute({ change_id: CID }, ctx.orch)
+      expect(out).toContain(`task_id="sess-abc"`)
+      expect(out).toContain("复用会话提醒继续执行")
+      expect(out).toContain("勿全新重派")
+    } finally { teardown(root) }
+  })
 })
 
 // ═══════════════════════════════════════════════════

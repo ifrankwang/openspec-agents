@@ -5,6 +5,8 @@ import { SKILL_SCAN_ROOTS } from "./scan.js"
 export interface SkillTagIndex {
   tagMap: Map<string, string[]>
   skillTags: Map<string, string[]>
+  /** skill 名 → frontmatter 声明的机器可读必做清单（must_do），未声明则无键。 */
+  skillMustDo: Map<string, string[]>
 }
 
 let cacheKey: string | null = null
@@ -19,6 +21,7 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
   if (cacheKey === key && cacheIndex) return cacheIndex
   const tagMap = new Map<string, string[]>()
   const skillTags = new Map<string, string[]>()
+  const skillMustDo = new Map<string, string[]>()
   const seen = new Set<string>()
   for (const root of roots) {
     if (!existsSync(root)) continue
@@ -38,12 +41,19 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
           arr.push(entry.name)
           tagMap.set(tag, arr)
         }
+        // 可选约定：must_do 必做清单（机器可读）。单行数组形态，与 capabilities 解析同机制；
+        // 未声明的 skill 不参与必做清单覆盖度门禁（优雅降级，缺失不报错）。
+        const mdo = raw.match(/must_do:\s*\[([^\]]*)\]/)
+        if (mdo) {
+          const items = mdo[1].split(",").map((s: string) => s.trim().replace(/["']/g, "")).filter(Boolean)
+          if (items.length > 0) skillMustDo.set(entry.name, items)
+        }
         seen.add(entry.name)
       } catch { /* skip unreadable */ }
     }
   }
   cacheKey = key
-  cacheIndex = { tagMap, skillTags }
+  cacheIndex = { tagMap, skillTags, skillMustDo }
   return cacheIndex
 }
 
@@ -77,4 +87,9 @@ export function resolveSkillsForCapabilities(
 /** efficiency tag 命中的效率类 skill 名 */
 export function getEfficiencySkills(index: SkillTagIndex = scanSkillTags()): string[] {
   return index.tagMap.get("efficiency") || []
+}
+
+/** 取 skill 声明的机器可读必做清单（must_do）；未声明返回 null（该 skill 不参与覆盖度门禁）。 */
+export function getSkillMustDo(name: string, index: SkillTagIndex = scanSkillTags()): string[] | null {
+  return index.skillMustDo.get(name) ?? null
 }

@@ -42,11 +42,11 @@ permission:
 |------|------|
 | `opx_orch_init` | 初始化编排会话。工具自行解析 tasks.md；重复初始化当前组时保留进度，切换任务组时初始化目标组。支持 recovery 参数恢复进度（phase / review_layer / reopenIssues / reset_steps）。 |
 | `opx_orch_set_worktree` | 确保 worktree 就绪。参数可选，自动按规范创建/复用。 |
-| `opx_agent_submit` | 统一 step 提交入口（子代理按角色自行调用，编排者不代提交）。编排者在重试检查点状态通过 `checkpoint_decision` 推进：`continue` 重置该 step 重试继续审查，`giveup` 放弃当前遗留并自动沿流程推进、完成收尾准备，无需编排者再执行其他推进动作。 |
+| `opx_agent_submit` | 统一 step 提交入口（子代理按角色自行调用，编排者不代提交）。编排者在重试检查点状态通过 `checkpoint_decision` 推进：`continue` 重置该 step 重试继续审查，`giveup` 放弃当前遗留并自动沿流程推进、完成收尾准备，无需编排者再执行其他推进动作。质量门类 step 的 giveup 决策须对未覆盖必做项经 `checkpoint_skip_reasons` 逐项申报结构化降级理由后提交（格式：`{"item":"<对应必做项>","category":"<降级类别>","adjudication":"user_response\|unattended_auto\|env_unavailable","note":"<说明>"}`），否则 giveup 不会被受理。 |
 | `opx_orch_complete_task_group` | 任务组收尾：自动合并 task-group 分支到 baseBranch + 清理 worktree/分支 |
 | `opx_orch_set_unattended` | 开启/关闭无人值守模式。开启后自动处理决策点，不再 question 用户。 |
 
-编排者与所有子 agent 共用：`opx_status`（只读，按 `context.agent` 路由返回）。
+编排者与所有子 agent 共用：`opx_status`（只读查询为主，按 `context.agent` 路由返回；编排者可在子代理返回后携带 `resume_sessions` 登记最近分派会话，供空返回/取消时复用 task id 续派）。
 
 ## 禁止事项
 
@@ -61,13 +61,15 @@ permission:
 - **分派子代理前先调用 `opx_status` 确认当前处于对应阶段/层**——编排者视图包含当前阶段和 review 子层进度，确保不跳阶段或错层分派
 - **若分派的子代理被 opx_status 门禁拒绝**，应直接读取 state JSON 文件（`.opencode/.orchestrate_state/<change_id>.json`）交叉验证状态后决策，必要时用 `opx_orch_init(recovery=...)` 修复
 - **不过度沟通**——任务组内部不停下来向用户汇报，持续执行直到阻塞或完成
-- **断点续传**——developer 因步骤限制中断后重新分派即可继续，无需编排者保存已完成子任务列表
+- **断点续传**——developer 因步骤限制中断后重新分派即可继续，无需编排者保存已完成子任务列表；子代理空返回/取消（未提交、无返回结果）时，用 task 工具 `task_id` 复用其原会话续派，prompt 极简仅提醒继续执行，勿全新重派（可保留上下文、避免重复消耗）
 - **禁止在 `opx_status` 的「下一步」给出明确工具指令时改走 `opx_orch_init(recovery=...)` 或其他推断动作**——严格按「下一步」指令执行。若有疑问：正常模式向用户报告并暂停，无人值守模式重新调 `opx_status` 获取下一步。
 - **禁止将 `opx_status` 返回内容判定为"输出被压缩/输出不完整"**——`opx_status` 按角色渲染视图，视图不含 task/issue 明细属正常设计；推进被拦时会显式给出阻塞原因与下一步。编排者按视图指引执行：「下一步」已给出明确分派指令时直接分派，不得先读 state JSON 交叉验证；仅门禁拒绝或视图给出修复建议时才读取 state JSON 交叉验证。仍有疑问时正常模式向用户报告并暂停。
 
 ## 调度循环
 
 每次子代理返回后，调 `opx_status` 取权威"下一步"指令并遵循。`opx_status` 列出多个子代理时并排分派（单条消息中同时发送），不串行等待。不自行推断阶段流转。分派/推进决策以工具返回为准。
+
+子代理返回后调 `opx_status` 时，若本次分派未正常收尾（子代理空返回/取消、未提交），且能从 task 工具返回 `<task id>` 或取消错误文本中拿到会话 id，则用 `resume_sessions` 参数一并登记；`opx_status` 后续视图会在该子代理仍待分派时提示复用会话续派。
 
 分派前 prompt 校验：按"禁止事项"中禁止转述的动态内容清单，逐项检查 prompt 是否含 worktree 路径、issue 清单、执行边界值、relevantSpecs 等禁止字段（changeId 不属于动态上下文，不在此禁止范围）。校验通过后再通过 `task` 工具分派。
 

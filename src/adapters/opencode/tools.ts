@@ -46,12 +46,21 @@ export const set_worktree = tool({
 
 export const status = tool({
   description:
-    "统一只读状态/上下文查询。按调用者角色路由：orchestrator→统计+worktree；architect→spec/blocker；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度既有 issue。",
+    "统一状态/上下文查询（只读查询为主，可携带登记最近分派会话）。按调用者角色路由：orchestrator→统计+worktree；architect→spec/blocker；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度既有 issue。orchestrator 在子代理返回后调用时，可携带 resume_sessions 登记该子代理的会话 id（供其空返回/取消时复用 task id 续派）。",
   args: {
     change_id: tool.schema.string().min(1).describe("change ID"),
+    resume_sessions: tool.schema
+      .array(
+        tool.schema.object({
+          agent: tool.schema.string().min(1).describe("子代理 agent 名"),
+          session_id: tool.schema.string().min(1).describe("opencode task 工具返回的子代理会话 id（<task id> 或取消错误文本中的 id）"),
+        })
+      )
+      .optional()
+      .describe("子代理返回后登记最近分派会话（仅 orchestrator 生效；按当前 step 待分派判定写/清记录）"),
   },
   async execute(args, context) {
-    return statusExecute({ change_id: args.change_id }, { worktree: context.worktree, agent: context.agent })
+    return statusExecute({ change_id: args.change_id, resume_sessions: args.resume_sessions }, { worktree: context.worktree, agent: context.agent })
   },
 })
 

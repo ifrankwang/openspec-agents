@@ -392,3 +392,77 @@ describe("gap12 detectMainRepoPollution 抛错时 status 容错", () => {
     } finally { teardown(root) }
   })
 })
+
+// ════════════════════════════════════════════════════════════════
+//  gap13：空返回续派兜底——resume_sessions 登记 / 清理 / 视图提示
+// ════════════════════════════════════════════════════════════════
+
+describe("gap13 空返回续派：resume_sessions 登记与视图提示", () => {
+  test("pending agent 传 resume_sessions → _last_dispatch 落盘（state 断言）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      await status.execute(
+        { change_id: CID, resume_sessions: [{ agent: "openspec-reviewer-style", session_id: "s1" }] },
+        ctx.orch
+      )
+      const item = readItem(wt, CID)
+      expect(item.metadata["_last_dispatch"]).toEqual({ "openspec-reviewer-style": "s1" })
+    } finally { teardown(root) }
+  })
+
+  test("非 pending（已提交）agent 传 resume_sessions → 旧记录清除", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // style 维已提交 failed（非 pending）；verify_quality 多 agent 下当前 step 不变，
+      // 判定基准 step 有效（单 agent step 提交后 step 推进的场景见遗留风险）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "7", title: "风格问题", description: "d", severity: "Low", dimension: "style" }],
+        },
+        ctx.dims["style"]
+      )
+      // 注入历史残留记录，再携带 resume_sessions 登记同一 agent → 应被清除
+      rewriteItem(wt, (item) => { item.metadata["_last_dispatch"] = { "openspec-reviewer-style": "old-sess" } })
+      await status.execute(
+        { change_id: CID, resume_sessions: [{ agent: "openspec-reviewer-style", session_id: "new-sess" }] },
+        ctx.orch
+      )
+      expect(readItem(wt, CID).metadata["_last_dispatch"]).toEqual({})
+    } finally { teardown(root) }
+  })
+
+  test("视图提示：pending + 有记录 + 在 rec.agents 三者齐备才提示", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 命中：登记 style（pending 且在待分派 agents）→ 视图输出 task_id 复用提示
+      await status.execute(
+        { change_id: CID, resume_sessions: [{ agent: "openspec-reviewer-style", session_id: "s-hit" }] },
+        ctx.orch
+      )
+      const hit = await status.execute({ change_id: CID }, ctx.orch)
+      expect(hit).toContain(`task_id="s-hit"`)
+      // 不命中-非 pending：style 提交 failed 后同记录不再提示
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_quality", verdict: "failed",
+          new_children: [{ id: "8", title: "风格问题 2", description: "d", severity: "Low", dimension: "style" }],
+        },
+        ctx.dims["style"]
+      )
+      const notPending = await status.execute({ change_id: CID }, ctx.orch)
+      expect(notPending).not.toContain(`task_id="s-hit"`)
+      // 不命中-不在 agents：记录与待分派 agents 无关 → 不提示
+      rewriteItem(wt, (item) => { item.metadata["_last_dispatch"] = { "openspec-developer": "s-dev" } })
+      const notInAgents = await status.execute({ change_id: CID }, ctx.orch)
+      expect(notInAgents).not.toContain(`task_id="s-dev"`)
+      // 不命中-无记录：清除记录后无提示
+      rewriteItem(wt, (item) => { item.metadata["_last_dispatch"] = {} })
+      const noRecord = await status.execute({ change_id: CID }, ctx.orch)
+      expect(noRecord).not.toContain("task_id=")
+    } finally { teardown(root) }
+  })
+})

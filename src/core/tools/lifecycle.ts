@@ -3,18 +3,18 @@ import type { TaskItem, TaskStatus } from "../types.js"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.js"
 import { ORCHESTRATOR_AGENT, agentToReviewLayer } from "../constants.js"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.js"
-import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.js"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.js"
 import { generateIsolationNamespace } from "../namespace.js"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
 import type { ParsedTask } from "../tasks-md.js"
 import { assertOrchestrator, findTaskGroup } from "../derive.js"
 import { assertPathWithin } from "../paths.js"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags } from "../workflow/engine.js"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, getStepVerdict } from "../workflow/engine.js"
 import { renderWorkflowStatusView } from "../workflow/status.js"
 import { taskChildrenOf } from "../task-children.js"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.js"
-import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext } from "./types.js"
+import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.js"
 
 /** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
 function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
@@ -510,58 +510,88 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   ].join("\n")
 }
 
-export async function statusExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
-  const state = await readStateByWorktree(ctx.worktree, params.change_id)
+export async function statusExecute(params: StatusParams, ctx: ToolContext): Promise<string> {
   const agent = ctx.agent
+  // resume_sessions 登记为写路径：仅 orchestrator 显式携带时加锁读改写 _last_dispatch；
+  // 未携带（或非 orchestrator 调用）时保持纯只读快路径，行为与历史完全一致。
+  const resumeSessions =
+    agent === ORCHESTRATOR_AGENT && params.resume_sessions && params.resume_sessions.length > 0
+      ? params.resume_sessions
+      : null
+  const lockPath = resumeSessions ? await getLockPath(ctx.worktree, params.change_id) : null
+  if (lockPath) await acquireLock(lockPath)
+  try {
+    const state = await readStateByWorktree(ctx.worktree, params.change_id)
 
-  if (!state) {
-    if (agent === ORCHESTRATOR_AGENT) {
-      const diskWts = await discoverDiskWorktrees(ctx.worktree)
-      if (diskWts.length > 0) {
-        const lines = ["# 编排进度", "", "**状态文件**: 未初始化", "", "## 磁盘 Worktree（可恢复进度）", ""]
-        lines.push("| 分支 | 路径 |")
-        lines.push("|------|------|")
-        for (const w of diskWts) lines.push(`| ${w.branch} | \`${w.path}\` |`)
-        lines.push("")
-        lines.push("请用 question 工具询问用户确认恢复目标，然后调用 opx_orch_init(recovery=...)。")
-        return lines.join("\n")
+    if (!state) {
+      if (agent === ORCHESTRATOR_AGENT) {
+        const diskWts = await discoverDiskWorktrees(ctx.worktree)
+        if (diskWts.length > 0) {
+          const lines = ["# 编排进度", "", "**状态文件**: 未初始化", "", "## 磁盘 Worktree（可恢复进度）", ""]
+          lines.push("| 分支 | 路径 |")
+          lines.push("|------|------|")
+          for (const w of diskWts) lines.push(`| ${w.branch} | \`${w.path}\` |`)
+          lines.push("")
+          lines.push("请用 question 工具询问用户确认恢复目标，然后调用 opx_orch_init(recovery=...)。")
+          return lines.join("\n")
+        }
+      }
+      return "编排会话尚未初始化。请先调用 opx_orch_init。"
+    }
+
+    const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
+    if (!item) {
+      return "编排会话未就绪：找不到活跃任务组的工作项，请重新调用 opx_orch_init。"
+    }
+
+    // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
+    const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+    const rec = recommendForItem(item, workflow)
+    // 空返回/取消兜底：登记 orchestrator 上报的子代理会话 id（agent → session id）。
+    // 按「当前推荐 step 的 verdict」判定：pending（空返回未收敛）→ 写记录供续派提示复用；
+    // 非 pending（已提交/无待分派 step）→ 清除记录，防回退 dev 后误报续派提示。
+    if (resumeSessions) {
+      const lastDispatch =
+        typeof item.metadata["_last_dispatch"] === "object" && item.metadata["_last_dispatch"] !== null
+          ? (item.metadata["_last_dispatch"] as Record<string, string>)
+          : {}
+      for (const s of resumeSessions) {
+        if (rec.stepId !== null && getStepVerdict(item, rec.stepId, s.agent) === "pending") {
+          lastDispatch[s.agent] = s.session_id
+        } else {
+          delete lastDispatch[s.agent]
+        }
+      }
+      item.metadata["_last_dispatch"] = lastDispatch
+      await writeState(ctx.worktree, state)
+    }
+    const tg = findTaskGroup(state, state.taskGroupId)
+    // 主仓库 openspec 污染诊断（56ddfe9 意图）：orchestrator 分派视图展示主仓库污染，供编排者人工核对
+    const mainPollution = agent === ORCHESTRATOR_AGENT ? await detectMainRepoPollution(ctx.worktree) : null
+    // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
+    // 变更分流（直提 / 仅处理待复核项 / 全量）。渲染层为同步函数，此处预计算后经 WorkflowStatusViewOptions 传入。
+    // 仅在推荐分派该 agent 时计算，其余角色/step 不产生额外 git 调用。
+    let toolChanges: DetectChangesResult | undefined
+    if (
+      agentToReviewLayer(agent) === "tool" &&
+      rec.status === "recommend" &&
+      rec.stepId === "verify_tool" &&
+      rec.agents.includes(agent)
+    ) {
+      const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
+      if (wtPath) {
+        const checkpoint =
+          typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
+        const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : undefined
+        toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
       }
     }
-    return "编排会话尚未初始化。请先调用 opx_orch_init。"
+    // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
+    const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
+    return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution, toolChanges, exemptedHits })
+  } finally {
+    if (lockPath) releaseLock(lockPath)
   }
-
-  const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
-  if (!item) {
-    return "编排会话未就绪：找不到活跃任务组的工作项，请重新调用 opx_orch_init。"
-  }
-
-  // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
-  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
-  const rec = recommendForItem(item, workflow)
-  const tg = findTaskGroup(state, state.taskGroupId)
-  // 主仓库 openspec 污染诊断（56ddfe9 意图）：orchestrator 分派视图展示主仓库污染，供编排者人工核对
-  const mainPollution = agent === ORCHESTRATOR_AGENT ? await detectMainRepoPollution(ctx.worktree) : null
-  // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
-  // 变更分流（直提 / 仅处理待复核项 / 全量）。渲染层为同步函数，此处预计算后经 WorkflowStatusViewOptions 传入。
-  // 仅在推荐分派该 agent 时计算，其余角色/step 不产生额外 git 调用。
-  let toolChanges: DetectChangesResult | undefined
-  if (
-    agentToReviewLayer(agent) === "tool" &&
-    rec.status === "recommend" &&
-    rec.stepId === "verify_tool" &&
-    rec.agents.includes(agent)
-  ) {
-    const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
-    if (wtPath) {
-      const checkpoint =
-        typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
-      const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : undefined
-      toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
-    }
-  }
-  // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
-  const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
-  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution, toolChanges, exemptedHits })
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {

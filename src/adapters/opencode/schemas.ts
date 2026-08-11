@@ -1,6 +1,7 @@
 import { tool } from "@opencode-ai/plugin"
 import { SEVERITY_LEVELS } from "../../core/constants.js"
 import { CODE_DIMENSIONS } from "../../core/types.js"
+import { SKIP_REASON_FORMAT } from "../../core/tools/gate.js"
 
 export const executionBoundarySchema = tool.schema.object({
   allowed_directories: tool.schema.array(tool.schema.string().min(1)).min(1).describe("developer 只能修改/创建文件的目录列表（含实施与验证所需的测试代码目录）"),
@@ -22,7 +23,7 @@ export const validationStepSchema = tool.schema.object({
   step: tool.schema.string().min(1).describe("验证步骤名称，对应 opx_status 操作指引中的步骤描述"),
   completed: tool.schema.boolean().describe("是否完成"),
   evidence: tool.schema.string().optional().describe("执行结果摘要或证据，含关键输出指标"),
-  skip_reason: tool.schema.string().optional().describe("跳过原因（仅 completed=false 时必填）"),
+  skip_reason: tool.schema.string().optional().describe(`结构化降级理由 JSON（仅 completed=false 时必填），格式：${SKIP_REASON_FORMAT}；adjudication 取值：user_response=用户答复 / unattended_auto=无人值守自动降级 / env_unavailable=环境不可用（须附尝试记录）`),
 })
 
 export const blockerItem = tool.schema.object({
@@ -55,6 +56,12 @@ export const agentSubmitSchema = tool.schema.object({
   exempt_adjudications: tool.schema.array(exemptAdjudicationItem).optional().describe("裁定的豁免申请列表：dismissed→cancelled，rejected→回 todo"),
   recheck_adjudications: tool.schema.array(recheckAdjudicationItem).optional().describe("复核已修复待复核（review 态）issue 的结论列表：passed→done，rejected→回 todo + refix_count 递增 + 写 reject_reason（谁提谁裁定）"),
   checkpoint_decision: tool.schema.enum(["continue", "giveup"]).optional().describe("重试检查点决策：continue=重置该 step tag 并回退 parent；giveup=未解决 children 强制 cancelled 并将 step 标记 completed"),
+  checkpoint_skip_reasons: tool.schema.array(tool.schema.object({
+    item: tool.schema.string().min(1).describe("对应的必做项（质量门 skill 的 must_do 清单项）"),
+    category: tool.schema.string().min(1).describe("降级类别，如环境不可用 / 用户裁定豁免 / 无人值守自动降级"),
+    adjudication: tool.schema.enum(["user_response", "unattended_auto", "env_unavailable"]).describe("裁定方式：user_response=用户答复 / unattended_auto=无人值守自动降级 / env_unavailable=环境不可用（须附尝试记录）"),
+    note: tool.schema.string().optional().describe("降级说明"),
+  })).optional().describe("giveup 决策配套：对当前 step 质量门必做清单未覆盖项的结构化降级理由（未覆盖项缺理由则拒绝 giveup）"),
   new_children: tool.schema.array(tool.schema.object({
     id: tool.schema.string().min(1).describe("新 issue 的唯一 id（不可为空）"),
     title: tool.schema.string().min(1).describe("issue 标题（不可为空）"),

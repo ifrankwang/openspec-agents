@@ -359,32 +359,34 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
     } finally { teardown(root) }
   })
 
-  test("validation_steps skipped + skip_reason → 接受并落盘", async () => {
+  test("validation_steps skipped + 结构化 skip_reason → 接受并落盘", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
+      const reason = '{"item":"冒烟","category":"no_ui_change","adjudication":"user_response"}'
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
-          validation_steps: [{ step: "冒烟", completed: false, skip_reason: "无 UI 变更" }],
+          validation_steps: [{ step: "冒烟", completed: false, skip_reason: reason }],
         },
         makeCtx("openspec-reviewer-task", wt)
       )
-      expect(metaOf(readItem(wt, CID), "validation_steps")[0].skip_reason).toBe("无 UI 变更")
+      expect(metaOf(readItem(wt, CID), "validation_steps")[0].skip_reason).toBe(reason)
     } finally { teardown(root) }
   })
 
-  test("仅测试代码变更豁免②③：skipped + skip_reason → passed 接受并推进到 verify_quality", async () => {
+  test("仅测试代码变更豁免②③：skipped + 结构化 skip_reason → passed 接受并推进到 verify_quality", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
+      const reason = '{"item":"服务健康与 API 测试","category":"test_code_only","adjudication":"user_response","note":"本次变更仅含测试代码，豁免启动服务与 API 测试"}'
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
           validation_steps: [
             { step: "①task 产出完整性", completed: true, evidence: "全部 task 验证通过" },
-            { step: "②启动服务并检查健康", completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" },
-            { step: "③独立执行全量 API 测试", completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" },
+            { step: "②启动服务并检查健康", completed: false, skip_reason: reason },
+            { step: "③独立执行全量 API 测试", completed: false, skip_reason: reason },
             { step: "④审查测试代码质量", completed: true, evidence: "测试代码质量审查通过" },
           ],
         },
@@ -393,8 +395,8 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
       const item = readItem(wt, CID)
       const steps = metaOf(item, "validation_steps")
       expect(steps).toHaveLength(4)
-      expect(steps[1]).toMatchObject({ completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" })
-      expect(steps[2]).toMatchObject({ completed: false, skip_reason: "本次变更仅含测试代码，豁免启动服务与 API 测试" })
+      expect(steps[1]).toMatchObject({ completed: false, skip_reason: reason })
+      expect(steps[2]).toMatchObject({ completed: false, skip_reason: reason })
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_quality")
     } finally { teardown(root) }
