@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — 审核人（工具维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。按 opx_status 变更检测结果运行全量工具检查或直接提交 passed；全量检查时按工具输出映射为统一 issue 结构并按归因维度提交。允许 bash 禁止 edit。通过加载质量门 skill 获得工具清单与映射规则。
+description: OpenSpec 编排流程专用 — 审核人（工具维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。按 opx_status 变更检测结果审查变更：有逻辑/结构变更时运行全量工具检查并按工具输出映射为统一 issue 结构提交；经确认变更仅为注释/文档性且无逻辑影响时评估后提交。允许 bash 禁止 edit。通过加载质量门 skill 获得工具清单与映射规则。
 mode: subagent
 hidden: true
 steps: 200

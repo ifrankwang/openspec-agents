@@ -64,6 +64,8 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).not.toContain("## Skill 加载清单")
     // 不展示 hash
     expect(out).not.toContain("cp-1")
+    // 分支③证据区块不注入（口径正确性：仅分支③渲染）
+    expect(out).not.toContain("本次变更证据（自上次工具检查）")
   })
 
   test("分支② 仅处理待复核项：无变更 + 本层待复核/待裁定 → 不跑全量，渲染待处理项清单", () => {
@@ -89,6 +91,8 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).toContain("recheck_adjudications")
     expect(out).toContain("exempt_adjudications")
     expect(out).not.toContain("顺序运行全部确定性工具检查")
+    // 分支③证据区块不注入（口径正确性：仅分支③渲染）
+    expect(out).not.toContain("本次变更证据（自上次工具检查）")
   })
 
   test("分支② 不分 severity 守卫：本层 Info 级 review 待复核 issue 也挡直提（走仅处理待复核项）", () => {
@@ -108,6 +112,8 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).not.toContain("无需运行全量工具检查，直接调用")
     // 不渲染全量工具检查指引
     expect(out).not.toContain("顺序运行全部确定性工具检查")
+    // 分支③证据区块不注入（口径正确性：仅分支③渲染）
+    expect(out).not.toContain("本次变更证据（自上次工具检查）")
   })
 
   test("分支③ 全量：有变更 → 维持现状全量指引（含 worktree/变更范围区块与全量检查指令）", () => {
@@ -120,6 +126,33 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).toContain("顺序运行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描）")
     expect(out).toContain("## Skill 加载清单")
     expect(out).not.toContain("无需运行全量工具检查")
+    // 分支③证据区块：本次（自上次工具检查）增量口径文件清单 + 检查点区间 diff 命令（与 baseRef..HEAD 累计口径区分）
+    expect(out).toContain("本次变更证据（自上次工具检查）")
+    expect(out).toContain("`src/a.ts`")
+    expect(out).toContain("git -C /wt diff")
+    expect(out).toContain("base..HEAD")
+    // 无检查点（首次进入）形态：基线兜底口径标注，与「变更范围」一致
+    expect(out).toContain("本次区间以基线（base..HEAD）兜底")
+    expect(out).toContain("首次进入，无上次工具检查记录")
+    // 未提交变更查看提示（diff 命令仅覆盖已提交区间）
+    expect(out).toContain("若存在未提交变更，另用 `git status` / `git diff` 查看工作区改动")
+    // 裁量语义操作指引（task.yaml 追加句渲染：有变更分支审查证据后可免全量）
+    expect(out).toContain("跳过全量工具检查")
+    expect(out).toContain("仅注释/文档性")
+  })
+
+  test("分支③ 无检查点且无基线基准（边缘）：不渲染 diff 命令，仅渲染文件清单与口径标注", () => {
+    const item = makeItem()
+    const out = renderWorkingView(item, "verify_tool", "openspec-reviewer-tool", {
+      tg: { worktreePath: "/wt", branchName: "b", baseRef: undefined },
+      toolChanges: { files: ["src/a.ts"], hasNonDocChange: true },
+    })
+    expect(out).toContain("本次变更证据（自上次工具检查）")
+    expect(out).toContain("无检查点且无基线基准，无法界定已提交变更区间")
+    expect(out).toContain("`src/a.ts`")
+    // 不渲染无效 diff 命令（避免 "(无基准)..HEAD" 形态坏命令）
+    expect(out).not.toContain("git -C /wt diff")
+    expect(out).not.toContain("(无基准)")
   })
 
   test("toolChanges 缺省（未预计算）→ 维持全量渲染（默认安全侧，不误伤既有视图）", () => {
@@ -128,5 +161,7 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).toContain("# ✅ 当前轮到你执行")
     expect(out).toContain("顺序运行全部确定性工具检查")
     expect(out).toContain("## Worktree")
+    // toolChanges 缺省时分支③证据区块不注入（避免无检测结果时展示空证据）
+    expect(out).not.toContain("本次变更证据（自上次工具检查）")
   })
 })

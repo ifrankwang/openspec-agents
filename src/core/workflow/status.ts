@@ -486,6 +486,14 @@ function renderAgentWorking(
   }
   lines.push(...renderStepSemantics(step, common, stepCtx))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
+  // verify_tool 分支③（有变更 → 全量路径）证据注入：展示检查点增量口径的本次变更证据（文件清单 +
+  // 区间 diff 命令），与 Worktree 区块「变更范围」（baseRef..HEAD 整个 change 累计口径）区分，
+  // 供 reviewer 审查变更内容后按操作指引裁量是否可免全量工具检查（裁量语义由 workflow 配置单源承载，
+  // 此处仅渲染事实证据）。仅 verify_tool + reviewer-tool + 已预计算变更检测结果（hasNonDocChange=true）
+  // 时渲染；分支①②提前返回、toolChanges 缺省路径不经过此处，不误伤其他 agent/step。
+  if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges?.hasNonDocChange) {
+    lines.push(...renderToolChangesEvidence(item, tg, toolChanges))
+  }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent, state))
   lines.push(...renderSkillSuggestions(ctxAgent, caps))
@@ -717,6 +725,48 @@ function renderToolChildren(item: WorkItem, ctxAgent: string): string[] {
   const lines: string[] = []
   lines.push(...renderChildrenSection("Issue (待复核)", active))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
+  return lines
+}
+
+/** verify_tool 分支③（全量路径）证据区块：检查点增量口径的本次变更证据（文件清单 + 区间 diff 命令）。
+ *  有检查点时标注「本次为自上次工具检查（checkpoint..HEAD）增量区间」，与 Worktree 区块「变更范围」
+ *  （baseRef..HEAD 整个 change 累计口径）区分；无检查点（首次进入）时标注基线兜底口径，与变更范围一致；
+ *  无检查点亦无基线基准时不渲染 diff 命令（无法界定区间）。仅渲染事实证据，不做变更性质判定——
+ *  裁量语义由 workflow 配置操作指引单源承载。 */
+function renderToolChangesEvidence(item: WorkItem, tg: TaskGroupState, toolChanges: DetectChangesResult): string[] {
+  const checkpoint =
+    typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
+  const baseRef = tg.baseRef ?? undefined
+  const rangeRef = checkpoint ?? baseRef
+  const lines = ["## 本次变更证据（自上次工具检查）", ""]
+  if (checkpoint) {
+    lines.push(
+      `- **口径**: 本次为「自上次工具检查（${checkpoint}..HEAD）」的增量区间（含已提交与未提交的非 openspec 变更）；` +
+        `与上方「变更范围」（${baseRef ?? "(无)"}..HEAD 整个 change 累计口径）不同`,
+      "",
+    )
+  } else if (baseRef) {
+    lines.push(
+      `- **口径**: 本次区间以基线（${baseRef}..HEAD）兜底，与上方「变更范围」一致（首次进入，无上次工具检查记录；` +
+        "含已提交与未提交的非 openspec 变更）",
+      "",
+    )
+  } else {
+    lines.push("- **口径**: 无检查点且无基线基准，无法界定已提交变更区间；本次变更仅按检出文件与未提交变更提示", "")
+  }
+  if (toolChanges.files.length > 0) {
+    lines.push("- **变更文件清单**:", "")
+    for (const f of toolChanges.files) lines.push(`  - \`${f}\``)
+    lines.push("")
+  } else {
+    lines.push("- **变更文件清单**: （本区间未检出非 openspec 变更文件）", "")
+  }
+  if (rangeRef) {
+    lines.push(`- **查看本次区间 diff**: \`git -C ${tg.worktreePath} diff ${rangeRef}..HEAD\``)
+    lines.push("  - 该命令仅覆盖已提交区间；若存在未提交变更，另用 `git status` / `git diff` 查看工作区改动")
+    lines.push("")
+  }
+  lines.push("")
   return lines
 }
 

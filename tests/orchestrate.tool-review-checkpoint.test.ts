@@ -7,6 +7,7 @@
  * 3. 纯文档重审直提：重置后检查点区间仅 openspec 文档变更 → 直提 passed（分支①）
  * 4. 多提交含代码 → 走全量（分支③）
  * 5. verify_tool failed 后 dev 修复回归：检查点区间含修复提交 → 走全量
+ * 6. 注释性变更裁量直提：有代码文件变更但审查证据后免全量 → 直接提交 passed，检查点推进
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { __setGitRunner } from "../src/core/git"
@@ -97,6 +98,47 @@ describe("tool review 检查点增量端到端", () => {
         ctx.toolR
       )
       expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBe("cp-4")
+    } finally { teardown(root) }
+  })
+
+  test("注释性变更裁量直提：有代码文件变更但审查证据后免全量 → 直接提交 passed，检查点推进", async () => {
+    const { wt, root, fakeGit } = fresh()
+    try {
+      fakeGit.headShas = ["cp-1", "cp-2"]
+      const { ctx } = await driveToVerifyTool(wt, CID)
+
+      // 首次进入 verify_tool：无检查点 → base_ref 兜底，区间含代码 → 全量
+      fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
+      const firstView = await status.execute({ change_id: CID }, ctx.toolR)
+      expect(firstView).toContain("顺序运行全部确定性工具检查")
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+      expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBe("cp-1")
+
+      // ── 重置 verify_tool：dev 只改代码注释（检查点区间含代码文件，hasNonDocChange=true → 分支③）──
+      await init.execute(
+        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
+        ctx.orch
+      )
+      fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "src/main/java/com/t/App.java")
+      const discretionView = await status.execute({ change_id: CID }, ctx.toolR)
+      // 分支③视图：全量指引保留（原句不删）+ 本次变更证据区块（增量口径文件清单 + 检查点区间 diff 命令）+ 裁量语义操作指引
+      expect(discretionView).toContain("顺序运行全部确定性工具检查")
+      expect(discretionView).toContain("本次变更证据（自上次工具检查）")
+      expect(discretionView).toContain("`src/main/java/com/t/App.java`")
+      expect(discretionView).toContain("git -C")
+      expect(discretionView).toContain("cp-1..HEAD")
+      expect(discretionView).toContain("跳过全量工具检查")
+      expect(discretionView).toContain("仅注释/文档性")
+      // 有检查点形态口径标注：本次为「自上次工具检查（cp-1..HEAD）」增量区间，与「变更范围」baseRef..HEAD 累计口径不同
+      expect(discretionView).toContain("自上次工具检查（cp-1..HEAD）")
+      expect(discretionView).toContain("与上方「变更范围」（")
+      expect(discretionView).toContain("累计口径）不同")
+      // 未提交变更查看提示
+      expect(discretionView).toContain("若存在未提交变更，另用 `git status` / `git diff` 查看工作区改动")
+
+      // reviewer 审查证据后裁量：不运行工具直接提交 passed → 检查点推进到 cp-2
+      await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, ctx.toolR)
+      expect(readItem(wt, CID).metadata["_tool_review_checkpoint"]).toBe("cp-2")
     } finally { teardown(root) }
   })
 
