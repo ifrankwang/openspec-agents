@@ -1,16 +1,48 @@
 {
   "name": "openspec-orchestrate",
-  "version": "0.107.0",
+  "version": "0.108.0",
   "type": "module",
-  "main": "./src/adapters/opencode/index.ts",
+  "main": "./src/core/index.ts",
   "exports": {
     ".": {
-      "import": "./src/adapters/opencode/index.ts",
-      "types": "./src/adapters/opencode/index.ts"
+      "import": "./src/core/index.ts",
+      "types": "./src/core/index.ts"
     },
     "./core": {
       "import": "./src/core/index.ts",
       "types": "./src/core/index.ts"
+    },
+    "./provider": {
+      "import": "./src/core/provider.ts",
+      "types": "./src/core/provider.ts"
+    },
+    "./opencode": {
+      "import": "./src/adapters/opencode/index.ts",
+      "types": "./src/adapters/opencode/index.ts"
+    },
+    "./server": {
+      "import": "./src/adapters/opencode/index.ts",
+      "types": "./src/adapters/opencode/index.ts"
+    },
+    "./claude-code": {
+      "import": "./src/adapters/claude-code/index.ts",
+      "types": "./src/adapters/claude-code/index.ts"
+    },
+    "./codex": {
+      "import": "./src/adapters/codex/index.ts",
+      "types": "./src/adapters/codex/index.ts"
+    },
+    "./zcode": {
+      "import": "./src/adapters/zcode/index.ts",
+      "types": "./src/adapters/zcode/index.ts"
+    },
+    "./mcp": {
+      "import": "./src/adapters/mcp-common/index.ts",
+      "types": "./src/adapters/mcp-common/index.ts"
+    },
+    "./mcp/cli": {
+      "import": "./src/adapters/mcp-common/cli.ts",
+      "types": "./src/adapters/mcp-common/cli.ts"
     }
   },
   "files": [
@@ -19,11 +51,18 @@
   ],
   "scripts": {
     "sync": "./scripts/sync-to-cache.sh",
+    "zcode:plugin": "bun scripts/build-zcode-plugin.ts",
+    "claude:plugin": "bun scripts/build-claude-code-plugin.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.17.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.17.0",
@@ -32,6 +71,7 @@
     "typescript": "^5.9.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "js-yaml": "^4.1.0"
   }
 }

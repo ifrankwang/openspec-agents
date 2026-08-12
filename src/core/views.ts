@@ -1,8 +1,8 @@
-import type { TaskGroupState, OrchestrateState, TaskItem } from "./types.js"
-import { derivePortFromNamespace } from "./namespace.js"
+import type { TaskGroupState, OrchestrateState, TaskItem } from "./types.ts"
+import { derivePortFromNamespace } from "./namespace.ts"
 import { readFileSync } from "node:fs"
-import { findSkillPath } from "../skills/scan.js"
-import { scanSkillTags, resolveSkillsForCapabilities, getEfficiencySkills } from "../skills/resolve.js"
+import { findSkillPath } from "../skills/scan.ts"
+import { scanSkillTags, resolveSkillsForCapabilities, getEfficiencySkills } from "../skills/resolve.ts"
 
 export function renderSkillSuggestions(agent: string, caps: string[]): string[] {
   if (caps.length === 0) return []

@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { readDashboardState } from "../src/core/dashboard"
 
 const TMP = join("/tmp", "dash-test-" + Date.now())
-const STATE_DIR = join(TMP, ".opencode", ".orchestrate_state")
+const STATE_DIR = join(TMP, "openspec", "states")
 
 function writeState(changeId: string, data: unknown) {
   mkdirSync(STATE_DIR, { recursive: true })
@@ -349,9 +349,9 @@ describe("Dashboard", () => {
 
   test("readDashboardState without changeId exposes workItemCards", async () => {
     const dir = join(TMP, "enum-" + Date.now())
-    mkdirSync(join(dir, ".opencode", ".orchestrate_state"), { recursive: true })
+    mkdirSync(join(dir, "openspec", "states"), { recursive: true })
     writeFileSync(
-      join(dir, ".opencode", ".orchestrate_state", "dash-workitems.json"),
+      join(dir, "openspec", "states", "dash-workitems.json"),
       JSON.stringify(workItemState, null, 2)
     )
     const data = await readDashboardState(dir)

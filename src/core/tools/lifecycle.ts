@@ -1,20 +1,20 @@
 import path from "path"
-import type { TaskItem, TaskStatus } from "../types.js"
-import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.js"
-import { ORCHESTRATOR_AGENT, agentToReviewLayer } from "../constants.js"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.js"
-import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.js"
-import { generateIsolationNamespace } from "../namespace.js"
-import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.js"
-import type { ParsedTask } from "../tasks-md.js"
-import { assertOrchestrator, findTaskGroup } from "../derive.js"
-import { assertPathWithin } from "../paths.js"
-import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, getStepVerdict } from "../workflow/engine.js"
-import { renderWorkflowStatusView } from "../workflow/status.js"
-import { taskChildrenOf } from "../task-children.js"
-import type { WorkItem, WorkItemPhase } from "../workflow/types.js"
-import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.js"
+import type { TaskItem, TaskStatus } from "../types.ts"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
+import { agentToReviewLayer } from "../constants.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
+import { generateIsolationNamespace } from "../namespace.ts"
+import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
+import type { ParsedTask } from "../tasks-md.ts"
+import { assertOrchestrator, findTaskGroup } from "../derive.ts"
+import { assertPathWithin } from "../paths.ts"
+import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.ts"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, getStepVerdict } from "../workflow/engine.ts"
+import { renderWorkflowStatusView } from "../workflow/status.ts"
+import { taskChildrenOf } from "../task-children.ts"
+import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
+import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.ts"
 
 /** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
 function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
@@ -240,7 +240,7 @@ function assertValidRecovery(recovery: InitParams["recovery"]): void {
 }
 
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
-  assertOrchestrator(ctx.agent, "opx_orch_init")
+  assertOrchestrator(ctx, "opx_orch_init")
 
   const args = { ...params }
   if (typeof (args as any).recovery === "string") {
@@ -414,7 +414,7 @@ async function bindWorktreeRefs(
 }
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
-  assertOrchestrator(ctx.agent, "opx_orch_set_worktree")
+  assertOrchestrator(ctx, "opx_orch_set_worktree")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
@@ -512,10 +512,10 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
 
 export async function statusExecute(params: StatusParams, ctx: ToolContext): Promise<string> {
   const agent = ctx.agent
-  // resume_sessions 登记为写路径：仅 orchestrator 显式携带时加锁读改写 _last_dispatch；
-  // 未携带（或非 orchestrator 调用）时保持纯只读快路径，行为与历史完全一致。
+  // resume_sessions 登记为写路径：仅编排视角（orchestrator）显式携带时加锁读改写 _last_dispatch；
+  // 未携带（或非编排视角调用）时保持纯只读快路径，行为与历史完全一致。
   const resumeSessions =
-    agent === ORCHESTRATOR_AGENT && params.resume_sessions && params.resume_sessions.length > 0
+    ctx.orchestrator === true && params.resume_sessions && params.resume_sessions.length > 0
       ? params.resume_sessions
       : null
   const lockPath = resumeSessions ? await getLockPath(ctx.worktree, params.change_id) : null
@@ -524,7 +524,7 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
     const state = await readStateByWorktree(ctx.worktree, params.change_id)
 
     if (!state) {
-      if (agent === ORCHESTRATOR_AGENT) {
+      if (ctx.orchestrator) {
         const diskWts = await discoverDiskWorktrees(ctx.worktree)
         if (diskWts.length > 0) {
           const lines = ["# 编排进度", "", "**状态文件**: 未初始化", "", "## 磁盘 Worktree（可恢复进度）", ""]
@@ -547,7 +547,7 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
     // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
     const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
     const rec = recommendForItem(item, workflow)
-    // 空返回/取消兜底：登记 orchestrator 上报的子代理会话 id（agent → session id）。
+    // 空返回/取消兜底：登记编排者上报的子代理会话 id（agent → session id）。
     // 按「当前推荐 step 的 verdict」判定：pending（空返回未收敛）→ 写记录供续派提示复用；
     // 非 pending（已提交/无待分派 step）→ 清除记录，防回退 dev 后误报续派提示。
     if (resumeSessions) {
@@ -566,36 +566,36 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
       await writeState(ctx.worktree, state)
     }
     const tg = findTaskGroup(state, state.taskGroupId)
-    // 主仓库 openspec 污染诊断（56ddfe9 意图）：orchestrator 分派视图展示主仓库污染，供编排者人工核对
-    const mainPollution = agent === ORCHESTRATOR_AGENT ? await detectMainRepoPollution(ctx.worktree) : null
-    // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
-    // 变更分流（直提 / 仅处理待复核项 / 全量）。渲染层为同步函数，此处预计算后经 WorkflowStatusViewOptions 传入。
-    // 仅在推荐分派该 agent 时计算，其余角色/step 不产生额外 git 调用。
-    let toolChanges: DetectChangesResult | undefined
-    if (
-      agentToReviewLayer(agent) === "tool" &&
-      rec.status === "recommend" &&
-      rec.stepId === "verify_tool" &&
-      rec.agents.includes(agent)
-    ) {
-      const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
-      if (wtPath) {
-        const checkpoint =
-          typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
-        const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : undefined
-        toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
-      }
+  // 主仓库 openspec 污染诊断（56ddfe9 意图）：编排者分派视图展示主仓库污染，供编排者人工核对
+  const mainPollution = ctx.orchestrator ? await detectMainRepoPollution(ctx.worktree) : null
+  // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
+  // 变更分流（直提 / 仅处理待复核项 / 全量）。渲染层为同步函数，此处预计算后经 WorkflowStatusViewOptions 传入。
+  // 仅在推荐分派该 agent 时计算，其余角色/step 不产生额外 git 调用。
+  let toolChanges: DetectChangesResult | undefined
+  if (
+    agentToReviewLayer(agent) === "tool" &&
+    rec.status === "recommend" &&
+    rec.stepId === "verify_tool" &&
+    rec.agents.includes(agent)
+  ) {
+    const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
+    if (wtPath) {
+      const checkpoint =
+        typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
+      const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : undefined
+      toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
     }
-    // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
-    const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
-    return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, mainPollution, toolChanges, exemptedHits })
+  }
+  // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
+  const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
+  return renderWorkflowStatusView(item, workflow, rec, { agent, orchestrator: ctx.orchestrator, identityDeclared: ctx.identityDeclared }, { state, tg, mainPollution, toolChanges, exemptedHits })
   } finally {
     if (lockPath) releaseLock(lockPath)
   }
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
-  assertOrchestrator(ctx.agent, "opx_orch_complete_task_group")
+  assertOrchestrator(ctx, "opx_orch_complete_task_group")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
@@ -661,11 +661,12 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
 }
 
 export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolContext): Promise<string> {
-  assertOrchestrator(ctx.agent, "opx_orch_set_unattended")
+  assertOrchestrator(ctx, "opx_orch_set_unattended")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
-  state.unattended = params.enabled
+  // enabled 缺省按 schema 声明 default=true 兜底（跨形态一致：opencode 直载透传 input 不应用 zod default）
+  state.unattended = params.enabled ?? true
   await writeState(ctx.worktree, state)
-  const status = params.enabled ? "开启" : "关闭"
+  const status = state.unattended ? "开启" : "关闭"
   return `无人值守模式已 **${status}**。启用后系统将自动处理决策点，不再 question 用户。`
 }

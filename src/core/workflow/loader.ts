@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { join, dirname, resolve as pathResolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import yaml from "js-yaml"
 import type {
   WorkflowConfig,
@@ -9,9 +10,9 @@ import type {
   StepTransitions,
   WorkItemPhase,
   WorkflowCommon,
-} from "./types.js"
-import { WORK_ITEM_PHASES, stepAgentIds } from "./types.js"
-import { DIMENSION_AGENT_MAP } from "../constants.js"
+} from "./types.ts"
+import { WORK_ITEM_PHASES, stepAgentIds } from "./types.ts"
+import { DIMENSION_AGENT_MAP } from "../constants.ts"
 
 const SPECIAL_TRANSITIONS = ["done", "halt"] as const
 const PHASE_NAMES = new Set<string>(WORK_ITEM_PHASES)
@@ -21,7 +22,7 @@ export interface LoadedWorkflow extends WorkflowConfig {
   stepMap: Map<string, { step: StepConfig; phase: PhaseConfig }>
 }
 
-export const TASK_WORKFLOW_PATH = join(import.meta.dir, "..", "..", "..", "assets", "workflows", "task.yaml")
+export const TASK_WORKFLOW_PATH = pathResolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "assets", "workflows", "task.yaml")
 
 const workflowFileCache = new Map<string, LoadedWorkflow>()
 

@@ -1,5 +1,5 @@
-import type { TaskItem, TaskStatus } from "./types.js"
-import type { WorkItem, WorkItemPhase } from "./workflow/types.js"
+import type { TaskItem, TaskStatus } from "./types.ts"
+import type { WorkItem, WorkItemPhase } from "./workflow/types.ts"
 
 /**
  * 子任务（task child）共享投影助手。

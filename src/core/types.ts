@@ -1,4 +1,4 @@
-import type { WorkItem } from "./workflow/types.js"
+import type { WorkItem } from "./workflow/types.ts"
 
 export const CODE_DIMENSIONS = ["style", "architecture", "performance", "security", "maintainability"] as const
 export const REVIEW_DIMENSIONS = [...CODE_DIMENSIONS] as const

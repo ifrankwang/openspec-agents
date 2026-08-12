@@ -1,6 +1,6 @@
 import { __setGitRunner, type GitRunner } from "../src/core/git"
 import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
-import type { ToolContext } from "@opencode-ai/plugin"
+import type { ToolContext } from "../src/core/tools/types"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
 
@@ -247,20 +247,22 @@ export function makeCtx(
   return {
     agent,
     worktree,
-    directory: worktree,
-    sessionID: "test-session",
-    messageID: "test-msg",
-    abort: new AbortController().signal,
-    metadata() {},
-    ask() {},
     ...overrides,
-  } as ToolContext
+  }
+}
+
+/** 编排视角上下文：各 agent 主代理承担编排者职责（替代旧 openspec-orchestrator 独立角色）。 */
+export function makeOrchCtx(
+  worktree: string,
+  overrides?: Partial<ToolContext>
+): ToolContext {
+  return makeCtx("primary", worktree, { orchestrator: true, ...overrides })
 }
 
 // ─── State Reader ───
 
 export function readState(worktree: string, changeId: string): Record<string, unknown> | null {
-  const p = join(worktree, ".opencode", ".orchestrate_state", `${changeId}.json`)
+  const p = join(worktree, "openspec", "states", `${changeId}.json`)
   if (!existsSync(p)) return null
   return JSON.parse(readFileSync(p, "utf-8")) as Record<string, unknown>
 }

@@ -21,13 +21,17 @@ tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/
 
 | 目录 | 内容 |
 |------|------|
-| `assets/agents/` | 子代理定义文件（`openspec-*.md`）。frontmatter（mode/description/permission）、角色定位、严重级别判例、审查内容与工具权限边界在此修改。 |
-| `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`。扫描遵循 OpenCode 标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
+| `assets/agents/` | 子代理定义文件（`openspec-*.md`）与主代理注入模板（`openspec-main.md`）。frontmatter（mode/description/permission）、角色定位、严重级别判例、审查内容与工具权限边界在此修改。 |
+| `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`，以及编排主代理 skill（`orchestrator/SKILL.md`）。扫描遵循标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
 | `assets/workflows/` | workflow 定义（`task.yaml`）。引擎按此驱动 step 流转与 agent 归属，并承载 step 级语义（instructions/constraints）与顶层 `common` 共享语义。 |
 | `.agents/skills/` | 项目内部分析用 skill，如 `openspec-orchestrate-optimizer`。非子代理加载目标。 |
-| `src/core/tools/` | 编排工具实现（生命周期 / 通用 step 提交）。行为以源码为准。 |
+| `src/core/tools/` | 编排工具实现（生命周期 / 通用 step 提交）与工具参数纯 JSON Schema。行为以源码为准。 |
 | `src/core/workflow/` | workflow 引擎（状态机、collector、poller、状态视图）。 |
-| `src/adapters/opencode/` | OpenCode 适配层（工具注册、参数 schema、agent/skill 注入）。 |
+| `src/adapters/opencode/` | OpenCode 适配层（插件壳、JSON Schema→链式 schema 转换、agent/skill 注入）。 |
+| `src/adapters/mcp-common/` | 通用 MCP Server（HTTP/stdio transport 承载 6 个 opx_* 工具与 dashboard/poller 副作用）。 |
+| `src/adapters/claude-code/` `src/adapters/zcode/` | 各 agent 官方插件包生成适配器（Claude Code / ZCode，共享 plugin-common 生成器，差异仅清单目录名与 marketplace 位置）。 |
+| `src/adapters/plugin-common/` | 插件包共享生成器（plugin.json 清单、agents/skills 转换、MCP bundle、marketplace）。 |
+| `src/adapters/codex/` | codex 适配器（agent/MCP 配置注入、默认无人值守）。 |
 | `src/skills/` | skill 扫描与解析。 |
 | `tests/` | 测试文件。`bun test` 执行。 |
 
@@ -39,9 +43,9 @@ AGENTS.md 只记录设计准则、职责边界和协作约束，不记录阶段�
 
 ### 编排流转单一事实源
 
-编排的 next-step（下一步分派谁 / 调用什么工具）由 `opx_status` 工具权威产出。orchestrator agent 定义不得重复描述具体阶段流转顺序，仅描述原则与角色职责边界。工具产出与文档描述之间的冲突以工具为准。
+编排的 next-step（下一步分派谁 / 调用什么工具）由 `opx_status` 工具权威产出。编排主代理 skill（`orchestrator/SKILL.md`）不得重复描述具体阶段流转顺序，仅描述原则与角色职责边界。工具产出与文档描述之间的冲突以工具为准。
 
-- `openspec-orchestrator.md` 中禁止记录任何具体流程流转相关描述，统一以 `opx_status` 指引为准。
+- 编排主代理 skill 与 `openspec-main.md` 主代理注入模板中禁止记录任何具体流程流转相关描述，统一以 `opx_status` 指引为准。
 - 除 `opx_status` 外，其他工具返回体不得包含流转方向提示（如"请分派 X"、"进入 Y 阶段"），流转决策一律由 `opx_status` 产出。
 
 ### 编排改动须评估全流程连锁影响
@@ -74,19 +78,19 @@ agent 专属语义（角色定位、严重级别判例、审查内容、工具�
 
 ### 子代理上下文不得转述
 
-编排者不得向子代理转述 worktree 路径、执行边界、issue 清单等动态上下文。分派 prompt 仅含分派指令 + 轮次/阶段标识。子代理通过 `opx_status` 按角色自取。
+编排者（各 agent 主代理）不得向子代理转述 worktree 路径、执行边界、issue 清单等动态上下文。分派 prompt 仅含分派指令 + 轮次/阶段标识 + `_agent` 身份指令（非 OpenCode 直载形态分派时，见编排主代理 skill 分派范式）。子代理通过 `opx_status` 按角色自取。
 
-编排者 agent 的调度循环必须包含分派前 prompt 校验作为分派前置条件，确保不转述禁止的动态内容。
+编排主代理 skill 承载的调度范式必须包含分派前 prompt 校验作为分派前置条件，确保不转述禁止的动态内容。
 
 注：`change_id`（会话标识）不属于动态上下文，可在分派 prompt 中传递。
 
 ### 命名规范
 
 - 所有工具以 `opx_` 前缀注册
-- Agent 命名模式：`openspec-{role}`（orchestrator / architect / developer / reviewer-tool / reviewer-task / reviewer-{dim}）
-- `opx_status` 按 `context.agent` 路由视图
-- orchestrator agent mode=primary，其余 mode=subagent
-- orchestrator 权限：`edit/write=deny`，仅允许 `opx_*` 工具和 `git`/`ls`/`find`/`grep` 命令
+- Agent 命名模式：`openspec-{role}`（architect / developer / reviewer-tool / reviewer-task / reviewer-{dim}）；编排者职责由各 agent 主代理承载（无独立 orchestrator 子代理）
+- `opx_status` 按调用者角色路由视图（编排视角角色判定 + agent 名）
+- 主代理注入模板（openspec-main）mode=primary，其余 mode=subagent
+- 主代理权限：`edit/write=deny`，仅允许 `opx_*` 工具、skill 和 `git`/`ls`/`find`/`grep` 命令
 
 ### 谁提谁裁定
 
@@ -94,7 +98,7 @@ issue 的豁免与复核裁定权归报 source 的层/维度，维度标签不�
 
 ### 编排层不涉及被编排 agent 的内部逻辑
 
-orchestrator agent 定义仅描述编排逻辑（分派原则、门禁诊断），不涉及被编排 agent 的审查内容、审查范围、严重级别认定等内部逻辑。这些内容属于各 agent 自身定义（agent.md 与 workflow 配置 step 语义）与 skill 范畴，出现偏差在各 agent 层面修正。
+编排主代理 skill 仅描述编排逻辑（分派原则、门禁诊断），不涉及被编排 agent 的审查内容、审查范围、严重级别认定等内部逻辑。这些内容属于各 agent 自身定义（agent.md 与 workflow 配置 step 语义）与 skill 范畴，出现偏差在各 agent 层面修正。
 
 ### agent 与技术栈 skill 解耦（单向依赖）
 

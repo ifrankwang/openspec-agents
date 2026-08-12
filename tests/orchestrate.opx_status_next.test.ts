@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 
 import { __setGitRunner } from "../src/core/git"
 import { status } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx } from "./helpers"
+import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx, makeOrchCtx } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool,
   driveToVerifyTask, driveToQuality, readItem,
@@ -39,7 +39,7 @@ function fresh(): { wt: string; root: string } {
 
 /** 直接改写 state（注入检查点标记等）。 */
 function mutateState(wt: string, fn: (item: any) => void): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = JSON.parse(readFileSync(p, "utf-8"))
   fn(state.workItems.find((w: any) => w.id === "task:1"))
   writeFileSync(p, JSON.stringify(state, null, 2))
@@ -54,7 +54,7 @@ describe("S1: 未初始化", () => {
     const { wt, root } = fresh()
     try {
       // 不调 init，直接查 status
-      const out = await status.execute({ change_id: CID }, makeCtx("openspec-orchestrator", wt))
+      const out = await status.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out).toContain("尚未初始化")
     } finally { teardown(root) }
   })
@@ -191,6 +191,8 @@ describe("S8: orchestrator 分派视图", () => {
       expect(out).toContain("`openspec-reviewer-security`")
       expect(out).toContain("`openspec-reviewer-maintainability`")
       expect(out).toContain("并排分派")
+      // 直载形态身份恒显式（会话 agent 推导）：编排视角视图不渲染 MCP 专属的 `_agent` 身份提示
+      expect(out).not.toContain("_agent")
     } finally { teardown(root) }
   })
 

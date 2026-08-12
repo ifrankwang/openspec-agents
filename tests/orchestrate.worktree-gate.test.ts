@@ -13,7 +13,7 @@ import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, status, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 
 const CID = "test-worktree-gate"
 const EB = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
@@ -28,7 +28,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 
 /** 手动写 state 文件（构造 reopenIssues 前置等）。 */
 function writeStateSync(wt: string, state: Record<string, unknown>): void {
-  const dir = join(wt, ".opencode", ".orchestrate_state")
+  const dir = join(wt, "openspec", "states")
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${CID}.json`), JSON.stringify(state, null, 2))
 }
@@ -37,7 +37,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
   test("子代理在 worktree 未就绪时查 status → ⛔ 拒绝执行视图（不含操作指引 / 当前轮到你执行）", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
       const out = await status.execute({ change_id: CID }, makeCtx("openspec-architect", wt))
@@ -55,7 +55,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
   test("orchestrator 在 worktree 未就绪时查 status → 不含分派指令，提示先 set_worktree", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
       const out = await status.execute({ change_id: CID }, o)
@@ -72,7 +72,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
   test("set_worktree 后 orchestrator 视图恢复分派指令", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       await set_worktree.execute({ change_id: CID }, o)
 
@@ -88,7 +88,7 @@ describe("worktree 就绪门禁：opx_agent_submit 硬门禁", () => {
   test("worktree 未就绪时提交 analyze → 抛错拒绝（指引先 set_worktree）", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
 
       await expect(
@@ -98,7 +98,7 @@ describe("worktree 就绪门禁：opx_agent_submit 硬门禁", () => {
         )
       ).rejects.toThrow(/worktree 未就绪[\s\S]*opx_orch_set_worktree/)
       // 门禁抛错零状态变更：仍在 todo/analyze
-      const out = await status.execute({ change_id: CID }, makeCtx("openspec-orchestrator", wt))
+      const out = await status.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out).toContain("分派前置条件未满足")
     } finally { teardown(root) }
   })
@@ -106,7 +106,7 @@ describe("worktree 就绪门禁：opx_agent_submit 硬门禁", () => {
   test("checkpoint_decision 决策路径绕过 worktree 门禁（不误伤）", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       // 手工构造检查点态（无 worktree_path）
       const item = {
@@ -147,7 +147,7 @@ describe("worktree 就绪门禁：reopenIssues 清空 worktree_path 后恢复", 
   test("reopenIssues 置 worktree_path=null → orchestrator 视图提示先 set_worktree", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       // 构造已完成组（done + worktree_path 已绑定）
       const done = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",

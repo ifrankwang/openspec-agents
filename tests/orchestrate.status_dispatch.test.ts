@@ -24,7 +24,7 @@ import { join } from "node:path"
 
 import { __setGitRunner, type GitRunner } from "../src/core/git"
 import { status, init, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx } from "./helpers"
+import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx, makeOrchCtx } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToQuality, readItem, makeAgentCtxs,
 } from "./helpers-workflow"
@@ -40,7 +40,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function statePath(wt: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  return join(wt, "openspec", "states", `${CID}.json`)
 }
 
 /** 直接改写活跃 task WorkItem（手工构造前置状态用）。 */
@@ -81,7 +81,7 @@ describe("gap1 未初始化 + 磁盘 worktree → 恢复候选列表", () => {
         branch: `task-group/${CID}/1`,
         path: join(wt, ".worktree", CID, "task-group-1"),
       })
-      const out = await status.execute({ change_id: CID }, makeCtx("openspec-orchestrator", wt))
+      const out = await status.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out).toContain("未初始化")
       expect(out).toContain("## 磁盘 Worktree（可恢复进度）")
       expect(out).toContain("opx_orch_init(recovery=...)")
@@ -351,7 +351,7 @@ describe("gap11 worktree 内 session 调 status", () => {
       await set_worktree.execute({ change_id: CID, worktree_path: "worktree-live" }, ctx.orch)
 
       // 从 worktree 内 session（worktree=wtLive）查 status → readStateByWorktree 走 isWorktreePath 分支
-      const orchView = await status.execute({ change_id: CID }, makeCtx("openspec-orchestrator", wtLive))
+      const orchView = await status.execute({ change_id: CID }, makeOrchCtx(wtLive))
       expect(orchView).toContain("# 编排进度")
       expect(orchView).toContain("分派子代理：`openspec-architect`")
       const archView = await status.execute({ change_id: CID }, makeCtx("openspec-architect", wtLive))
@@ -463,6 +463,19 @@ describe("gap13 空返回续派：resume_sessions 登记与视图提示", () => 
       rewriteItem(wt, (item) => { item.metadata["_last_dispatch"] = {} })
       const noRecord = await status.execute({ change_id: CID }, ctx.orch)
       expect(noRecord).not.toContain("task_id=")
+    } finally { teardown(root) }
+  })
+
+  test("非编排视角调用携带 resume_sessions → 不写记录（纯只读快路径）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToQuality(wt, CID)
+      // 子代理视角（非 orchestrator）即便携带 resume_sessions 也不得写 _last_dispatch
+      await status.execute(
+        { change_id: CID, resume_sessions: [{ agent: "openspec-reviewer-style", session_id: "s-unauth" }] },
+        ctx.dims["style"]
+      )
+      expect(readItem(wt, CID).metadata["_last_dispatch"]).toBeUndefined()
     } finally { teardown(root) }
   })
 })

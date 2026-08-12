@@ -77,7 +77,13 @@ function render(item: any, workflow: ReturnType<typeof loadWorkflow>, rec: any, 
     workItems: [item], createdAt: "", updatedAt: "",
   }
   const tg = { worktreePath: "/wt", branchName: "b", baseRef: "base", ...(opts.tg ?? {}) }
-  return renderWorkflowStatusView(item, workflow, rec, agent, { state, tg, ...opts } as any)
+  return renderWorkflowStatusView(
+    item,
+    workflow,
+    rec,
+    { agent, orchestrator: opts.orchestrator ?? agent === "primary" },
+    { state, tg, ...opts } as any,
+  )
 }
 
 // ═══════════════════════════════════════════════════
@@ -171,16 +177,16 @@ describe("blocked：轮次 agent 用 blocked_agent，非轮次 agent 用 blocked
 describe("终态与 worktree 未就绪硬编码", () => {
   test("done（已完成 / 待收尾）与 cancelled", () => {
     const wf = loadWorkflow(BASE_YAML)
-    const done = render(makeItem({ phase: "done", currentStep: null, metadata: { completed_at: "2026-01-01" } }), wf, {}, "openspec-orchestrator")
+    const done = render(makeItem({ phase: "done", currentStep: null, metadata: { completed_at: "2026-01-01" } }), wf, {}, "primary")
     expect(done).toContain("# ✅ 任务组已完成")
     expect(done).toContain("**完成时间**: 2026-01-01")
 
-    const pending = render(makeItem({ phase: "done", currentStep: null }), wf, {}, "openspec-orchestrator")
+    const pending = render(makeItem({ phase: "done", currentStep: null }), wf, {}, "primary")
     expect(pending).toContain("任务组已完成，待收尾")
     expect(pending).toContain("opx_orch_complete_task_group")
     expect(pending).not.toContain("完成时间")
 
-    const cancelled = render(makeItem({ phase: "cancelled", currentStep: null }), wf, {}, "openspec-orchestrator")
+    const cancelled = render(makeItem({ phase: "cancelled", currentStep: null }), wf, {}, "primary")
     expect(cancelled).toContain("任务组已取消")
   })
 
@@ -203,14 +209,14 @@ describe("orchestrator 分派视图硬编码", () => {
     const wf = loadWorkflow(BASE_YAML)
     // 推进阻塞 + 分派子代理
     const item = makeItem({ phase: "review", currentStep: "verify", metadata: { _advance_block_reason: "原因A" } })
-    const out = render(item, wf, { status: "recommend", stepId: "verify", agents: ["reviewer", "other"] }, "openspec-orchestrator")
+    const out = render(item, wf, { status: "recommend", stepId: "verify", agents: ["reviewer", "other"] }, "primary")
     expect(out).toContain("**推进阻塞**: 原因A")
     expect(out).toContain("分派子代理：`reviewer`、`other`。")
     expect(out).toContain("多子代理相互独立")
 
     // 状态不一致：rec.agents 空 + failed 残留 tag
     const item2 = makeItem({ phase: "review", currentStep: "verify", tags: { "verify:reviewer": "failed" } })
-    const out2 = render(item2, wf, { status: "recommend", stepId: "verify", agents: [] }, "openspec-orchestrator")
+    const out2 = render(item2, wf, { status: "recommend", stepId: "verify", agents: [] }, "primary")
     expect(out2).toContain("⚠️ 状态不一致")
     expect(out2).toContain("失败维度：`reviewer`")
   })
@@ -221,7 +227,7 @@ describe("orchestrator 分派视图硬编码", () => {
     const out = render(
       item, wf,
       { status: "recommend", stepId: "verify", agents: ["reviewer"] },
-      "openspec-orchestrator",
+      "primary",
       { mainPollution: { repoRoot: "/repo", files: ["a.md", "b.md"] } },
     )
     expect(out).toContain("## ⚠️ 主仓库 openspec 污染")
@@ -241,7 +247,7 @@ describe("orchestrator 分派视图硬编码", () => {
         ],
       },
     })
-    const out = render(item, wf, { status: "recommend", stepId: "verify", agents: ["reviewer"] }, "openspec-orchestrator")
+    const out = render(item, wf, { status: "recommend", stepId: "verify", agents: ["reviewer"] }, "primary")
     expect(out).toContain("## Blocker")
     expect(out).toContain("- Blocker #b1 | ✓ 已解决 | cat")
     expect(out).toContain("- Blocker #b2 | ⏳ 待处理 | cat2")
@@ -252,7 +258,7 @@ describe("orchestrator 分派视图硬编码", () => {
   test("分派前置：worktree 未就绪时不给出分派指令", () => {
     const wf = loadWorkflow(BASE_YAML)
     const item = makeItem({ phase: "review", currentStep: "verify" })
-    const out = render(item, wf, { status: "recommend", stepId: "verify", agents: ["reviewer"] }, "openspec-orchestrator", { tg: { worktreePath: "" } })
+    const out = render(item, wf, { status: "recommend", stepId: "verify", agents: ["reviewer"] }, "primary", { tg: { worktreePath: "" } })
     expect(out).toContain("分派前置条件未满足")
     expect(out).not.toContain("分派子代理：")
   })

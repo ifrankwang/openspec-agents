@@ -1,9 +1,10 @@
-import type { TaskGroupState, IssueItem, OrchestrateState, Phase, QualityLayerProgress, ExecutionBoundary, BlockerItem } from "./types.js"
-import { BLOCKING_SEVERITIES, ORCHESTRATOR_AGENT } from "./constants.js"
-import type { WorkItem, WorkItemPhase } from "./workflow/types.js"
-import { EXEMPT_REQUEST_KEY } from "./workflow/types.js"
-import { resolveChildIssueFields } from "./workflow/reset.js"
-import { taskListOf, issueChildrenOf } from "./task-children.js"
+import type { TaskGroupState, IssueItem, OrchestrateState, Phase, QualityLayerProgress, ExecutionBoundary, BlockerItem } from "./types.ts"
+import { BLOCKING_SEVERITIES } from "./constants.ts"
+import type { WorkItem, WorkItemPhase } from "./workflow/types.ts"
+import type { ToolContext } from "./tools/types.ts"
+import { EXEMPT_REQUEST_KEY } from "./workflow/types.ts"
+import { resolveChildIssueFields } from "./workflow/reset.ts"
+import { taskListOf, issueChildrenOf } from "./task-children.ts"
 
 export function createEmptyQualityProgress(): QualityLayerProgress {
   return {
@@ -43,11 +44,10 @@ export function isStatusUnresolved(status?: string): boolean {
   return !status || (ISSUE_UNRESOLVED_STATUSES as readonly string[]).includes(status)
 }
 
-export function assertOrchestrator(agent: string, toolName: string): void {
-  if (agent !== ORCHESTRATOR_AGENT) {
-    throw new Error(
-      `工具 "${toolName}" 仅限编排者 "${ORCHESTRATOR_AGENT}" 调用，当前调用者为 "${agent}"。`
-    )
+/** 独占工具权限校验：仅「编排视角」调用者（各 agent 主代理）可调用。 */
+export function assertOrchestrator(ctx: ToolContext, toolName: string): void {
+  if (!ctx.orchestrator) {
+    throw new Error(`工具 "${toolName}" 仅限编排者（主代理）调用，当前调用者为 "${ctx.agent}"。`)
   }
 }
 

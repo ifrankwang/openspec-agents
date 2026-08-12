@@ -1,27 +1,7 @@
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync, existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import * as yaml from "js-yaml"
 import type { AgentConfig } from "@opencode-ai/sdk"
-
-interface ParsedAgent {
-  frontmatter: Record<string, unknown>
-  body: string
-}
-
-function parseAgentMd(content: string): ParsedAgent {
-  const result: ParsedAgent = { frontmatter: {}, body: content }
-  if (!content.startsWith("---")) return result
-  const end = content.indexOf("---", 3)
-  if (end === -1) return result
-  const fmText = content.slice(3, end).trim()
-  result.body = content.slice(end + 3).trim()
-  try {
-    result.frontmatter = (yaml.load(fmText) as Record<string, unknown>) ?? {}
-  } catch {
-    result.body = content
-  }
-  return result
-}
+import { parseAgentMd, resolve } from "../agent-md.ts"
 
 function mapPermission(
   fm: Record<string, unknown>
@@ -39,11 +19,26 @@ function mapPermission(
   return permission
 }
 
-const AGENTS_ROOT = join(import.meta.dir!, "..", "..", "..", "assets", "agents")
+const AGENTS_ROOT = resolve("assets", "agents")
+
+/** 已知主代理名集合：注入的 openspec-main + 用户既有 primary agent + opencode 默认主代理 "primary"。 */
+const primaryAgents = new Set<string>(["primary"])
+
+/** 编排视角角色判定：调用者是否为主代理（承担编排者职责），替代 agent 名硬编码。 */
+export function isPrimaryAgent(agent: string): boolean {
+  return primaryAgents.has(agent)
+}
 
 export function injectAgents(config: Record<string, unknown>): void {
+  // 探测主代理名：config.agent 中 mode=primary 的条目（用户自定义 + 注入的主代理模板）
+  const existingAgents = (config.agent as Record<string, unknown>) ?? {}
+  for (const [name, cfg] of Object.entries(existingAgents)) {
+    if (typeof cfg === "object" && cfg !== null && (cfg as Record<string, unknown>).mode === "primary") {
+      primaryAgents.add(name)
+    }
+  }
   if (existsSync(AGENTS_ROOT)) {
-    const files = new Bun.Glob("*.md").scanSync({ cwd: AGENTS_ROOT })
+    const files = readdirSync(AGENTS_ROOT).filter((f) => f.endsWith(".md"))
     for (const file of files) {
       const md = readFileSync(join(AGENTS_ROOT, file), "utf-8")
       const { frontmatter, body } = parseAgentMd(md)
@@ -65,10 +60,14 @@ export function injectAgents(config: Record<string, unknown>): void {
       const perm = mapPermission(frontmatter)
       if (perm) agentConfig.permission = perm
 
-      const existingAgents = (config.agent as Record<string, unknown>) ?? {}
-      const existingAgent = existingAgents[name] as Record<string, unknown> | undefined
+      if (frontmatter.mode === "primary") {
+        primaryAgents.add(name)
+      }
+
+      const existingAgentsMap = (config.agent as Record<string, unknown>) ?? {}
+      const existingAgent = existingAgentsMap[name] as Record<string, unknown> | undefined
       config.agent = {
-        ...existingAgents,
+        ...existingAgentsMap,
         [name]: { ...agentConfig, ...existingAgent },
       }
     }

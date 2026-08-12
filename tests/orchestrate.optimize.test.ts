@@ -24,7 +24,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, submitQualityPassed,
   taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS, rollbackQuality,
@@ -41,7 +41,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function statePath(wt: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  return join(wt, "openspec", "states", `${CID}.json`)
 }
 
 /** 直接改写活跃 task WorkItem（手动构造前置状态用）。 */
@@ -782,7 +782,7 @@ describe("B8. taskNumber 数字 ID 归一化 + init base_branch", () => {
   test("init 显式传 base_branch → state.baseBranch 正确", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1", base_branch: "develop" }, o)
       const state = JSON.parse(readFileSync(statePath(wt), "utf-8"))
       expect(state.baseBranch).toBe("develop")

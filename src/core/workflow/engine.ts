@@ -4,11 +4,11 @@ import type {
   Verdict,
   StepConfig,
   StepAdjudication,
-} from "./types.js"
-import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
-import type { LoadedWorkflow } from "./loader.js"
-import { tagKey } from "./types.js"
-import { reviewLayerFromMetadata, readIssueSource } from "../constants.js"
+} from "./types.ts"
+import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
+import type { LoadedWorkflow } from "./loader.ts"
+import { tagKey } from "./types.ts"
+import { reviewLayerFromMetadata, readIssueSource } from "../constants.ts"
 
 const TERMINAL_PHASES: WorkItemPhase[] = ["done", "cancelled"]
 

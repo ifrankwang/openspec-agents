@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
-import { SKILL_SCAN_ROOTS } from "./scan.js"
+import { SKILL_SCAN_ROOTS } from "./scan.ts"
 
 export interface SkillTagIndex {
   tagMap: Map<string, string[]>

@@ -1,4 +1,4 @@
-import { SEVERITY_LEVELS, BLOCKING_SEVERITIES } from "../constants.js"
+import { SEVERITY_LEVELS, BLOCKING_SEVERITIES } from "../constants.ts"
 export { SEVERITY_LEVELS, BLOCKING_SEVERITIES }
 
 export const WORK_ITEM_PHASES = ["todo", "in_progress", "review", "done", "cancelled"] as const

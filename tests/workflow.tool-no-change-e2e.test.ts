@@ -39,7 +39,7 @@ const QUALITY_GATE_INDEX: SkillTagIndex = {
 }
 
 function readItem(wt: string): any {
-  const state = JSON.parse(readFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), "utf-8"))
+  const state = JSON.parse(readFileSync(join(wt, "openspec", "states", `${CID}.json`), "utf-8"))
   return state?.workItems?.find((w: any) => w.id === "task:1")
 }
 
@@ -53,7 +53,7 @@ function noChangeSteps(): Array<{ step: string; completed: boolean; skip_reason:
 
 /** 注入 review 态（已修复待复核）tool 层 issue child，模拟 dev 已提交 fixed_issue_ids 后待复核状态。 */
 function injectToolReviewIssue(wt: string, issue: { id: string; description: string }): void {
-  const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const statePath = join(wt, "openspec", "states", `${CID}.json`)
   const state = JSON.parse(readFileSync(statePath, "utf-8"))
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.children.push({
@@ -161,7 +161,7 @@ describe("checkpoint 视图 giveup 申报指引（复核回环修复问题 2）"
   test("质量门类 step（verify_tool）检查点视图含 checkpoint_skip_reasons 指引；空索引豁免时不渲染（不误伤非质量门 step）", async () => {
     const root = `/tmp/tnc-cp-${Date.now()}`
     const wt = await freshAtToolNoChange(root)
-    const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+    const statePath = join(wt, "openspec", "states", `${CID}.json`)
     const state = JSON.parse(readFileSync(statePath, "utf-8"))
     state.workItems.find((w: any) => w.id === "task:1").metadata["_checkpoint"] = true
     writeFileSync(statePath, JSON.stringify(state, null, 2))

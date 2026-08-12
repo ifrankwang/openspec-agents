@@ -19,7 +19,7 @@ import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
 import { init, status, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { loadWorkflow } from "../src/core/workflow/loader"
-import { FakeGitRunner, makeCtx } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx } from "./helpers"
 
 const CID = "wf-status"
 
@@ -36,13 +36,13 @@ function freshWt(root: string): string {
 }
 
 function readStateSync(wt: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   if (!existsSync(p)) return null
   return JSON.parse(readFileSync(p, "utf-8"))
 }
 
 function writeStateSync(wt: string, s: any): void {
-  writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(s, null, 2))
+  writeFileSync(join(wt, "openspec", "states", `${CID}.json`), JSON.stringify(s, null, 2))
 }
 
 function taskItemOf(s: any): any {
@@ -51,7 +51,7 @@ function taskItemOf(s: any): any {
 
 /** 用 opx_agent_submit 把新流推进到 review（verify_tool 步），返回 orchestrator/architect/developer ctx。 */
 async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx>; a: ReturnType<typeof makeCtx>; d: ReturnType<typeof makeCtx> }> {
-  const o = makeCtx("openspec-orchestrator", wt)
+  const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
   await init.execute({ change_id: CID, task_group_id: "1" }, o)
@@ -69,7 +69,7 @@ async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx
 
 /** 把新流推进到 implement step（in_progress），返回 developer ctx。 */
 async function driveToImplement(wt: string): Promise<ReturnType<typeof makeCtx>> {
-  const o = makeCtx("openspec-orchestrator", wt)
+  const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   await init.execute({ change_id: CID, task_group_id: "1" }, o)
   await set_worktree.execute({ change_id: CID }, o)
@@ -156,7 +156,7 @@ describe("P6-B 新流动态视图", () => {
     __setGitRunner(new FakeGitRunner())
     await driveToReview(wt)
 
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("# 编排进度")
     expect(output).toContain("## 下一步")
@@ -195,7 +195,7 @@ describe("P6-B 新流动态视图", () => {
       item,
       workflow,
       { status: "recommend", stepId: "verify_quality", agents: [] },
-      "openspec-orchestrator",
+      { agent: "primary", orchestrator: true },
       { state, tg: {} }
     )
     expect(output).toContain("⚠️ 状态不一致")
@@ -682,7 +682,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const root = `/tmp/wf-m1d-d-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     await set_worktree.execute({ change_id: CID }, o)
 
@@ -730,7 +730,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     taskItemOf(state).currentStep = null
     writeStateSync(wt, state)
 
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("任务组已完成，待收尾")
     expect(output).toContain("opx_orch_complete_task_group")
@@ -757,7 +757,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     taskItemOf(state).currentStep = null
     writeStateSync(wt, state)
 
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("任务组已取消")
 
@@ -780,7 +780,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     ]
     writeStateSync(wt, state)
 
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("# 编排进度")
     expect(output).toContain("## 阶段进展 / 审核进度")

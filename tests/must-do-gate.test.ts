@@ -67,7 +67,7 @@ const REASONS_ALL = [
 ]
 
 function readItem(wt: string): any {
-  const state = JSON.parse(readFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), "utf-8"))
+  const state = JSON.parse(readFileSync(join(wt, "openspec", "states", `${CID}.json`), "utf-8"))
   return state?.workItems?.find((w: any) => w.id === "task:1")
 }
 
@@ -326,7 +326,7 @@ describe("giveup 无法无痕绕过覆盖度核对", () => {
     __setGitRunner(fakeGit)
     await driveToTool(wt)
     // 置检查点态：_checkpoint=true（对齐 opx_agent_submit.test 的检查点构造方式）
-    const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+    const statePath = join(wt, "openspec", "states", `${CID}.json`)
     const state = JSON.parse(readFileSync(statePath, "utf-8"))
     const item = state.workItems.find((w: any) => w.id === "task:1")
     item.metadata["_checkpoint"] = true
@@ -429,7 +429,7 @@ describe("giveup 无法无痕绕过覆盖度核对", () => {
       makeCtx("openspec-reviewer-task", wt),
     )
     // verify_quality 检查点态
-    const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+    const statePath = join(wt, "openspec", "states", `${CID}.json`)
     const state = JSON.parse(readFileSync(statePath, "utf-8"))
     const item = state.workItems.find((w: any) => w.id === "task:1")
     item.metadata["_checkpoint"] = true

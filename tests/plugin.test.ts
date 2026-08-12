@@ -43,7 +43,7 @@ describe("OpenspecOrchestratePlugin", () => {
     await hooks.config!(config as any)
 
     const agent = config.agent as Record<string, unknown>
-    expect(agent["openspec-orchestrator"]).toBeDefined()
+    expect(agent["openspec-main"]).toBeDefined()
     expect(agent["openspec-architect"]).toBeDefined()
     expect(agent["openspec-developer"]).toBeDefined()
     expect(agent["openspec-reviewer-tool"]).toBeDefined()
@@ -54,9 +54,10 @@ describe("OpenspecOrchestratePlugin", () => {
     expect(agent["openspec-reviewer-security"]).toBeDefined()
     expect(agent["openspec-reviewer-maintainability"]).toBeDefined()
 
-    // Check orchestrator agent has correct mode
-    const orch = agent["openspec-orchestrator"] as Record<string, unknown>
-    expect(orch.mode).toBe("primary")
+    // 主代理（openspec-main）承载编排者职责：mode=primary，可加载 skill
+    const main = agent["openspec-main"] as Record<string, unknown>
+    expect(main.mode).toBe("primary")
+    expect((main.permission as Record<string, unknown>).skill).toBe("allow")
 
     // Check reviewer agents have prompt body
     const style = agent["openspec-reviewer-style"] as Record<string, unknown>
@@ -87,10 +88,10 @@ describe("OpenspecOrchestratePlugin", () => {
     await hooks.config!(config as any)
     const agent = config.agent as Record<string, unknown>
     expect(agent["build"]).toBeDefined()
-    expect(agent["openspec-orchestrator"]).toBeDefined()
+    expect(agent["openspec-main"]).toBeDefined()
   })
 
-  test("未初始化 worktree（无 context.json）→ 不启动 poller", async () => {
+  test("插件壳不再启动 poller（dashboard/collector 副作用已迁移至 MCP server 进程）", async () => {
     const root = `/tmp/test-plugin-nocontext-${Date.now()}`
     mkdirSync(root, { recursive: true })
     const spy = spyOn(poller, "startPolling")
@@ -103,17 +104,17 @@ describe("OpenspecOrchestratePlugin", () => {
     }
   })
 
-  test("已初始化 worktree（存在 context.json）→ 启动 poller", async () => {
+  test("已初始化 worktree（存在 context.json）→ 插件壳仍不启动 poller（副作用归 MCP server）", async () => {
     const root = `/tmp/test-plugin-ctx-${Date.now()}`
-    mkdirSync(join(root, ".opencode", ".orchestrate_state"), { recursive: true })
+    mkdirSync(join(root, "openspec", "states"), { recursive: true })
     writeFileSync(
-      join(root, ".opencode", ".orchestrate_state", "context.json"),
+      join(root, "openspec", "states", "context.json"),
       JSON.stringify({ changeId: "c1", taskGroupId: "1" })
     )
     const spy = spyOn(poller, "startPolling")
     try {
       await OpenspecOrchestratePlugin({ ...mockInput, worktree: root } as any)
-      expect(spy).toHaveBeenCalled()
+      expect(spy).not.toHaveBeenCalled()
     } finally {
       spy.mockRestore()
       try { rmSync(root, { recursive: true, force: true }) } catch {}

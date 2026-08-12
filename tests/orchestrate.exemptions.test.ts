@@ -43,7 +43,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function statePath(wt: string, cid: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", `${cid}.json`)
+  return join(wt, "openspec", "states", `${cid}.json`)
 }
 
 function rewriteItem(wt: string, cid: string, mutate: (item: any) => void): void {
@@ -54,7 +54,7 @@ function rewriteItem(wt: string, cid: string, mutate: (item: any) => void): void
 }
 
 function exemptionsPath(wt: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", EXEMPTIONS_FILE)
+  return join(wt, "openspec", "states", EXEMPTIONS_FILE)
 }
 
 /** 带 rule/file/line 的存量安全类 issue（tool reviewer 提报形态）。 */

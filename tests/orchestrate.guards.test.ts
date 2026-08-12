@@ -15,7 +15,7 @@ import { writeFileSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
   taskItemOf, taskListOf, metaOf, readItem, taskIdsOf, rollbackQuality,
@@ -34,7 +34,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function statePath(wt: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  return join(wt, "openspec", "states", `${CID}.json`)
 }
 
 /** 直接改写活跃 task WorkItem（手动构造前置状态用）。 */
@@ -141,7 +141,7 @@ describe("G1. set_worktree 守卫已移除", () => {
   test("init 后直接调 set_worktree → 成功", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
@@ -157,7 +157,7 @@ describe("G1.2. set_worktree 自修复", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       fakeGit.dirtyPaths.add(`${wt}-openspec`)
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
@@ -167,7 +167,7 @@ describe("G1.2. set_worktree 自修复", () => {
   test("已有 worktree 可 fast-forward → merge + 复用", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       let result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
@@ -179,7 +179,7 @@ describe("G1.2. set_worktree 自修复", () => {
   test("已有 worktree 分叉 + clean → 清理重建", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       let result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
@@ -192,7 +192,7 @@ describe("G1.2. set_worktree 自修复", () => {
   test("已有 worktree 分叉 + dirty → 抛错", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
@@ -214,7 +214,7 @@ describe("G2. 身份守卫", () => {
   test("non-orchestrator 调 set_worktree → throws", async () => {
     const { wt, root } = fresh()
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
       await expectError(
         set_worktree.execute({ change_id: CID }, makeCtx("openspec-developer", wt)),
         /仅限编排者/
@@ -281,7 +281,7 @@ describe("G4.1. init 重入", () => {
     const { wt, root } = fresh()
     try {
       await driveToImplement(wt, CID)
-      const result = await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+      const result = await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
       expect(result).toBe("编排会话已初始化。")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")

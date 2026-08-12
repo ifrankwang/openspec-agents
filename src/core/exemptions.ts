@@ -1,10 +1,10 @@
 import path from "path"
 import { mkdirSync, writeFileSync, renameSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import type { WorkItem } from "./workflow/types.js"
-import { resolveChildIssueFields } from "./workflow/reset.js"
-import { getStateDir, resolveStateRoot, acquireLock, releaseLock } from "./state.js"
-import type { Dimension, ReviewLayer } from "./types.js"
+import type { WorkItem } from "./workflow/types.ts"
+import { resolveChildIssueFields } from "./workflow/reset.ts"
+import { getStateDir, resolveStateRoot, acquireLock, releaseLock } from "./state.ts"
+import type { Dimension, ReviewLayer } from "./types.ts"
 
 /**
  * 项目级跨 change 豁免清单（跨 change 共享，写主仓库根的状态目录）。

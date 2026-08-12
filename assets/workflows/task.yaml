@@ -10,6 +10,7 @@ max_retries: 10
 # 跨所有 step 共享的通用指引/约束：渲染时 common 在前、step 在后合并进对应视图区块
 common:
   instructions:
+    - "非 OpenCode 直载形态（经 MCP 接入的 agent 客户端）调用 opx_* 工具时，须携带 `_agent` 参数并传自身角色名（如 openspec-developer）；缺省会被视为编排主代理视角，将拿不到自身角色的执行视图与操作指引"
     - "调用 opx_status 获取动态上下文（{{worktree_path}}、变更范围、上轮会话摘要）"
     - "按 Skill 加载清单加载匹配的 skill 并遵循其全部规范"
     - "读取 `{{worktree_path}}/openspec/changes/{{change_id}}/` 下的相关文档：tasks.md（任务清单，按行内 `[spec:xxx]` 溯源定位 specs/ 下相关 spec.md）、design.md、proposal.md"

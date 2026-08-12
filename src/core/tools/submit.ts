@@ -1,29 +1,29 @@
-import type { OrchestrateState } from "../types.js"
-import type { ToolContext, AgentSubmitParams } from "./types.js"
-import type { WorkItem, Severity, StepConfig } from "../workflow/types.js"
-import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.js"
+import type { OrchestrateState } from "../types.ts"
+import type { ToolContext, AgentSubmitParams } from "./types.ts"
+import type { WorkItem, Severity, StepConfig } from "../workflow/types.ts"
+import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.ts"
 import {
   submitForStep, adjudicateExempt, adjudicateRecheck, assertSubmitRouting, chainPassAdvance,
-} from "../workflow/submit.js"
+} from "../workflow/submit.ts"
 import {
   createInitialWorkItem, checkpointTriggered,
   applyCheckpointContinue, applyCheckpointGiveup,
   getStepVerdict, clearStepTags, isBlockingSeverity, isInfoSeverity, isTerminalPhase, applyTransition,
-} from "../workflow/engine.js"
-import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.js"
-import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.js"
-import { REVIEW_DIMENSIONS } from "../types.js"
-import type { Dimension } from "../types.js"
-import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.js"
-import { markTaskGroupCheckboxesComplete, reconcileMainPollution, getCurrentHead } from "../git.js"
-import { assertIssueFilesWithin } from "../paths.js"
+} from "../workflow/engine.ts"
+import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.ts"
+import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.ts"
+import { REVIEW_DIMENSIONS } from "../types.ts"
+import type { Dimension } from "../types.ts"
+import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.ts"
+import { markTaskGroupCheckboxesComplete, reconcileMainPollution, getCurrentHead } from "../git.ts"
+import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
-} from "../state.js"
-import { readExemptions, applyExemptionDowngrade, writeDismissedExemption } from "../exemptions.js"
+} from "../state.ts"
+import { readExemptions, applyExemptionDowngrade, writeDismissedExemption } from "../exemptions.ts"
 import {
   assertStructuredSkipReasons, uncoveredMustDo, isValidSkipData, SKIP_REASON_FORMAT,
-} from "./gate.js"
+} from "./gate.ts"
 
 /** 读取 task workflow 配置（assets/workflows/task.yaml），进程内缓存。 */
 const loadTaskWorkflow = () => loadWorkflowFile(TASK_WORKFLOW_PATH)

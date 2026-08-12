@@ -1,4 +1,4 @@
-import type { WorkItem } from "./types.js"
+import type { WorkItem } from "./types.ts"
 
 export type WritebackHandler = (item: WorkItem, action: string, payload: unknown) => Promise<void> | void
 

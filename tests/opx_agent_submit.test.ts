@@ -15,7 +15,7 @@ import { init, agent_submit, set_worktree, complete_task_group } from "../src/ad
 import { loadWorkflow, stepAgentIds } from "../src/core/workflow"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
-import { FakeGitRunner, makeCtx, setupWorkspace } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "agent-submit"
@@ -25,7 +25,7 @@ const EB = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "
 afterAll(() => { __setGitRunner(null) })
 
 function readStateSync(wt: string, cid: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${cid}.json`)
+  const p = join(wt, "openspec", "states", `${cid}.json`)
   if (!existsSync(p)) return null
   return JSON.parse(readFileSync(p, "utf-8"))
 }
@@ -83,7 +83,7 @@ function issueToChild(issue: Record<string, unknown>): any {
 
 /** 直接向 state 注入一个 issue child（push 到活跃 task WorkItem 的 children）。 */
 function injectIssue(wt: string, issue: any): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = readStateSync(wt, CID)
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.children.push(issueToChild(issue))
@@ -92,7 +92,7 @@ function injectIssue(wt: string, issue: any): void {
 
 /** 直接改写已有 issue child 的状态（模拟旧工具裁定结果：verified→done、exempted→cancelled、其余→todo）。 */
 function setIssueStatus(wt: string, issueId: string, status: string): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = readStateSync(wt, CID)
   const item = state.workItems.find((w: any) => w.id === "task:1")
   const child = item.children.find((c: any) => c.externalId === issueId || c.id === `issue:${issueId}`)
@@ -117,7 +117,7 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
 
 /** init + set_worktree 一次到位：worktree 就绪硬门禁要求提交前 worktree 就绪（opx_orch_set_worktree 后提交）。 */
 async function initWorktree(wt: string): Promise<void> {
-  const orch = makeCtx("openspec-orchestrator", wt)
+  const orch = makeOrchCtx(wt)
   await init.execute({ change_id: CID, task_group_id: "1" }, orch)
   await set_worktree.execute({ change_id: CID }, orch)
 }
@@ -363,7 +363,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(taskItemOf(wt).phase).toBe("review")
 
       // Info child 声明解决后 → child 置 review（待复核，不直接 done）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.phase = "in_progress"
@@ -424,7 +424,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
         createdAt: "2026-07-01T00:00:00.000Z",
         updatedAt: "2026-07-01T00:00:00.000Z",
       }
-      const stateDir = join(wt, ".opencode", ".orchestrate_state")
+      const stateDir = join(wt, "openspec", "states")
       mkdirSync(stateDir, { recursive: true })
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(state, null, 2))
 
@@ -510,7 +510,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       // children 全部终态（无遗留未解决 issue）
       expect(item.children.every((c: WorkItem) => c.phase === "done" || c.phase === "cancelled")).toBe(true)
 
-      const r = await complete_task_group.execute({ change_id: CID }, makeCtx("openspec-orchestrator", wt))
+      const r = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(r).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
       expect(fakeGit.mergedBranches).toContain("task-group/agent-submit/1")
@@ -563,7 +563,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
 
       // 旧工具裁定 verified → child done；重置回 implement 后重提，不被覆写回 todo
       setIssueStatus(wt, "1", "verified")
-      const p1 = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const p1 = join(wt, "openspec", "states", `${CID}.json`)
       const s1 = JSON.parse(readFileSync(p1, "utf-8"))
       const it1 = s1.workItems.find((w: any) => w.id === "task:1")
       it1.phase = "in_progress"
@@ -577,7 +577,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
 
       // 旧工具裁定 rejected（不可二次申请豁免）→ child 保持 todo 带 reject_reason，不被覆写为 open
       setIssueStatus(wt, "1", "rejected")
-      const p2 = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const p2 = join(wt, "openspec", "states", `${CID}.json`)
       const s2 = JSON.parse(readFileSync(p2, "utf-8"))
       const it2 = s2.workItems.find((w: any) => w.id === "task:1")
       it2.phase = "in_progress"
@@ -640,7 +640,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     try {
       await initWorktree(wt)
       // 直接构造「done 终态、待收尾」状态（等价于 opx_agent_submit 推进到 done 后的落盘）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
@@ -660,7 +660,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       state.workItems = [item]
       writeFileSync(statePath, JSON.stringify(state, null, 2))
 
-      const orch = makeCtx("openspec-orchestrator", wt)
+      const orch = makeOrchCtx(wt)
       const r1 = await complete_task_group.execute({ change_id: CID }, orch)
       expect(r1).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
@@ -718,7 +718,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(child.metadata["exempt_request"]).toBeDefined()
 
       // 模拟编排将任务移回 review/verify_quality 供豁免复核（真实编排由 orchestrator 调度）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.phase = "review"
@@ -745,7 +745,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     try {
       await initWorktree(wt)
       // 构造前置：task 在 verify_quality，child 带 exempt_request + source=style reviewer
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
@@ -796,7 +796,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
@@ -834,7 +834,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
@@ -880,7 +880,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
@@ -1069,7 +1069,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(taskChildrenOf(wt).every((t: any) => t.phase === "review")).toBe(true)
 
       // 模拟回 implement（当前在 review，blocker 仅 failed 提交回退 analyze 路径）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.phase = "in_progress"
@@ -1408,7 +1408,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(child.phase).toBe("review")
 
       // 模拟编排把 item 移回 review/verify_tool 供报源层复核（真实编排由 orchestrator 调度）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.phase = "review"
@@ -1700,7 +1700,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       }))
 
       // 预置分层验证 tag：verify_tool + verify_quality:architecture 均 passed，verify_task passed 留作对照
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
@@ -1736,7 +1736,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
 /** 注入 review 态（已修复待复核）quality 层 issue child，模拟 dev 已提交 fixed_issue_ids 后待复核状态。
  *  不传 issue.dimension 则 metadata 不含 dimension 字段（缺维度 quality issue 仍按报源收敛裁定权）。 */
 function injectReviewIssue(wt: string, issue: Record<string, unknown>): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = readStateSync(wt, CID)
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.children.push({
@@ -2098,7 +2098,7 @@ describe("issue 复核（recheck）端到端", () => {
       expect(taskItemOf(wt).currentStep).toBe("implement")
 
       // 直接构造终态（cancelled）child：模拟 issue 已被裁定 dismissed（豁免已消费）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.children.find((c: any) => c.externalId === "7").phase = "cancelled"
@@ -2125,7 +2125,7 @@ describe("issue 复核（recheck）端到端", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.phase = "review"
@@ -2180,7 +2180,7 @@ describe("issue 复核（recheck）端到端", () => {
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       // 注入 quality 层 todo issue：报源 security reviewer、未声明 dimension（metadata 无 dimension 字段，回落 style）
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.children.push({
@@ -2261,7 +2261,7 @@ describe("issue 复核（recheck）端到端", () => {
       expect(taskItemOf(wt).tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
 
       // 复核场景：模拟 dev 已修复（issue 置 review 待复核、清除豁免标记），移回 verify_quality 供 quality reviewer 提交
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(statePath, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       const tChild = item.children.find((c: any) => c.externalId === "T")

@@ -1,6 +1,6 @@
-import { readStateByWorktree, writeState } from "../state.js"
-import { getCollectors, type CollectorAdapter } from "./collector.js"
-import type { WorkItem } from "./types.js"
+import { readStateByWorktree, writeState } from "../state.ts"
+import { getCollectors, type CollectorAdapter } from "./collector.ts"
+import type { WorkItem } from "./types.ts"
 
 const DEFAULT_TICK_MS = 1_000
 

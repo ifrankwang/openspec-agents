@@ -13,7 +13,7 @@ afterAll(() => {
 })
 
 function statePath(root: string): string {
-  const dir = join(root, ".opencode", ".orchestrate_state")
+  const dir = join(root, "openspec", "states")
   mkdirSync(dir, { recursive: true })
   return join(dir, `${CID}.json`)
 }
@@ -71,7 +71,7 @@ describe("writeState worktree 回写", () => {
   }
 
   function readStateFromDisk(root: string, changeId: string): Record<string, unknown> | null {
-    const p = join(root, ".opencode", ".orchestrate_state", `${changeId}.json`)
+    const p = join(root, "openspec", "states", `${changeId}.json`)
     if (!existsSync(p)) return null
     return JSON.parse(readFileSync(p, "utf-8")) as Record<string, unknown>
   }
@@ -96,7 +96,7 @@ describe("writeState worktree 回写", () => {
     expect(inMain).not.toBeNull()
     expect(inMain?.changeId).toBe("wt-write-1")
 
-    const inWorktree = join(worktreeDir, ".opencode", ".orchestrate_state", "wt-write-1.json")
+    const inWorktree = join(worktreeDir, "openspec", "states", "wt-write-1.json")
     expect(existsSync(inWorktree)).toBe(false)
   })
 

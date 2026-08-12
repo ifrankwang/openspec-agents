@@ -10,7 +10,7 @@ import { writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
-import { agentSubmitSchema } from "../src/adapters/opencode/schemas"
+import { agentSubmitSchema } from "../src/core/tools/schemas"
 import { FakeGitRunner, setupWithFakeGit, teardown } from "./helpers"
 import { setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, taskIdsOf, readItem } from "./helpers-workflow"
 
@@ -193,9 +193,9 @@ describe("B. git 分支名校验", () => {
 
 describe("C. agent_submit 无效 id / 空字段校验", () => {
   test("schema 层：new_children 不再暴露 source_phase 参数（归因层由报源 agent 自动推导）", () => {
-    const arr = agentSubmitSchema.shape["new_children"]
-    const elem = arr.unwrap ? arr.unwrap().element : arr.element
-    const keys = Object.keys(elem.shape ?? {})
+    const arr = agentSubmitSchema.properties!["new_children"]
+    const elem = (arr.items as { properties?: Record<string, unknown> }) ?? {}
+    const keys = Object.keys(elem.properties ?? {})
     expect(keys).toContain("dimension")
     expect(keys).not.toContain("source_phase")
   })
@@ -378,7 +378,7 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToImplement(wt, CID)
-      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const p = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(p, "utf-8"))
       const item = state.workItems.find((w: any) => w.id === "task:1")
       item.children.push({

@@ -85,7 +85,7 @@ function renderWorking(item: any, stepId: string, agent: string): string {
     item,
     workflow,
     { status: "recommend", stepId, agents: [agent] },
-    agent,
+    { agent, orchestrator: false },
     { state, tg } as any,
   )
 }

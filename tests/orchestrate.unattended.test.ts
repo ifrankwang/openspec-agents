@@ -6,7 +6,7 @@ import { __setGitRunner } from "../src/core/git"
 import {
   init, status, set_unattended,
 } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
 import { setupToAnalyze, driveToVerifyTool } from "./helpers-workflow"
 import {
   createInitialWorkItem, checkpointTriggered, effectiveMaxRetries,
@@ -42,10 +42,24 @@ describe("T1: set_unattended tool", () => {
     const root = `/tmp/ut1-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       await set_unattended.execute({ change_id: CID, enabled: true }, o)
+
+      const state = readState(wt, CID)
+      expect(state.unattended).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("enabled 缺省（default=true）与显式传值语义一致", async () => {
+    const root = `/tmp/ut1b-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeOrchCtx(wt)
+
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await set_unattended.execute({ change_id: CID }, o)
 
       const state = readState(wt, CID)
       expect(state.unattended).toBe(true)
@@ -56,7 +70,7 @@ describe("T1: set_unattended tool", () => {
     const root = `/tmp/ut2-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       await set_unattended.execute({ change_id: CID, enabled: true }, o)
@@ -71,7 +85,7 @@ describe("T1: set_unattended tool", () => {
     const root = `/tmp/ut3-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       const d = makeCtx("openspec-developer", wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
@@ -127,10 +141,10 @@ describe("T2: checkpoint 时 unattended 行为", () => {
         title: "遗留 issue", description: "d", phase: "todo", suspended: false,
         currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low",
       })
-      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const p = join(wt, "openspec", "states", `${CID}.json`)
       writeFileSync(p, JSON.stringify(state, null, 2))
 
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await set_unattended.execute({ change_id: CID, enabled: true }, o)
 
       const output = await status.execute({ change_id: CID }, o)
@@ -156,7 +170,7 @@ describe("T2: checkpoint 时 unattended 行为", () => {
         title: "遗留 issue", description: "d", phase: "todo", suspended: false,
         currentStep: null, tags: {}, metadata: {}, children: [], labels: [], severity: "Low",
       })
-      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const p = join(wt, "openspec", "states", `${CID}.json`)
       writeFileSync(p, JSON.stringify(state, null, 2))
 
       const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
@@ -165,7 +179,7 @@ describe("T2: checkpoint 时 unattended 行为", () => {
       expect(effectiveMaxRetries(workflow, step)).toBe(10)
 
       // 关闭 unattended 后判定不变（引擎按 retry 计数，与无人值守标志无关）
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await set_unattended.execute({ change_id: CID, enabled: false }, o)
       const again = JSON.parse(readFileSync(p, "utf-8"))
       const item2 = again.workItems.find((w: any) => w.id === "task:1")

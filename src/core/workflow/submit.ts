@@ -1,12 +1,12 @@
-import type { WorkItem, WorkItemPhase, StepConfig, StepAdjudication } from "./types.js"
-import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
-import type { LoadedWorkflow } from "./loader.js"
-import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase, isInfoSeverity } from "./engine.js"
-import { issueChildrenOf, taskChildrenOf } from "../task-children.js"
-import { readIssueSource } from "../constants.js"
+import type { WorkItem, WorkItemPhase, StepConfig, StepAdjudication } from "./types.ts"
+import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
+import type { LoadedWorkflow } from "./loader.ts"
+import { applyAgentVerdict, adjudicateStep, stepCanPass, applyTransition, getStepVerdict, isTerminalPhase, isInfoSeverity } from "./engine.ts"
+import { issueChildrenOf, taskChildrenOf } from "../task-children.ts"
+import { readIssueSource } from "../constants.ts"
 
 /** 豁免申请标记键单一事实源在 types.ts（engine 与 submit 共用免循环引用）；本模块 re-export 兼容既有消费方。 */
-export { EXEMPT_REQUEST_KEY } from "./types.js"
+export { EXEMPT_REQUEST_KEY } from "./types.ts"
 
 export interface SubmitInput {
   stepId: string

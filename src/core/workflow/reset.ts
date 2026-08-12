@@ -1,10 +1,10 @@
-import type { WorkItem } from "./types.js"
-import { tagKey } from "./types.js"
-import { clearStepTags, isTerminalPhase } from "./engine.js"
-import { DIMENSION_AGENT_MAP, reviewLayerFromMetadata } from "../constants.js"
-import { REVIEW_DIMENSIONS } from "../types.js"
-import type { Dimension, ReviewLayer } from "../types.js"
-import { issueChildrenOf } from "../task-children.js"
+import type { WorkItem } from "./types.ts"
+import { tagKey } from "./types.ts"
+import { clearStepTags, isTerminalPhase } from "./engine.ts"
+import { DIMENSION_AGENT_MAP, reviewLayerFromMetadata } from "../constants.ts"
+import { REVIEW_DIMENSIONS } from "../types.ts"
+import type { Dimension, ReviewLayer } from "../types.ts"
+import { issueChildrenOf } from "../task-children.ts"
 
 export interface ResetReviewTagsInput {
   fixedSourcePhases: string[]

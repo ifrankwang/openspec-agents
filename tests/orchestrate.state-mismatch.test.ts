@@ -35,7 +35,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function statePath(wt: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  return join(wt, "openspec", "states", `${CID}.json`)
 }
 
 /** 直接改写活跃 task WorkItem（手工构造前置状态用）。 */

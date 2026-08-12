@@ -15,7 +15,7 @@ import { writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import { setupToAnalyze, driveToImplement, readItem, taskListOf } from "./helpers-workflow"
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { submitForStep } from "../src/core/workflow/submit"
@@ -33,7 +33,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function statePath(wt: string): string {
-  return join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  return join(wt, "openspec", "states", `${CID}.json`)
 }
 
 /** 直接改写活跃 task WorkItem（手动构造前置状态用）。 */
@@ -69,7 +69,7 @@ describe("syncTaskChildren 断根：重复 task children", () => {
   test("组切换 1→2→1 多次 init 不产生重复 task children", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       await init.execute({ change_id: CID, task_group_id: "2" }, o)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
@@ -107,7 +107,7 @@ describe("syncTaskChildren 断根：重复 task children", () => {
   test("同组 continue（无 recovery 重复 init）：tasks.md 增删任务后 children 一致性刷新", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       expect(taskChildIds(readItem(wt, CID)).length).toBe(3)
 
@@ -130,7 +130,7 @@ describe("syncTaskChildren 断根：重复 task children", () => {
   test("同组 continue 清除残留推进阻塞原因（_advance_block_reason）", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       rewriteItem(wt, "1", (item) => {
         item.metadata["_advance_block_reason"] = "跨 phase 正向推进被门禁拦截：测试原因"

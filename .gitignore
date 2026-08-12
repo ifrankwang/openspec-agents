@@ -5,4 +5,5 @@ dist
 .worktree/
 .worktrees/
 .codegraph
+openspec/states/
 .opencode/.orchestrate_state/

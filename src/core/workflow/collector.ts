@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import type { WorkItem } from "./types.js"
-import { createInitialWorkItem } from "./engine.js"
+import type { WorkItem } from "./types.ts"
+import { createInitialWorkItem } from "./engine.ts"
 
 /**
  * 收集器统一接入接口（spec workflow-collectors）。

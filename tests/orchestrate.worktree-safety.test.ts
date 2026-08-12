@@ -18,7 +18,7 @@ import type { OrchestrateState } from "../src/core/types"
 import {
   init, set_worktree, agent_submit, status,
 } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
 import { setupToAnalyze, driveToQuality, DIMENSION_AGENTS } from "./helpers-workflow"
 
 const CID = "test-wtsafe"
@@ -46,7 +46,7 @@ function taskItemOf(wt: string): any {
 
 /** 同步读状态文件原始 JSON。 */
 function readStateSync(wt: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   if (!existsSync(p)) return null
   return JSON.parse(readFileSync(p, "utf-8"))
 }
@@ -62,7 +62,7 @@ describe("W1. set_worktree 分支安全守卫", () => {
     const root = `/tmp/wts-w1a-${Date.now()}`
     const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       const first = await set_worktree.execute({ change_id: CID }, o)
@@ -89,7 +89,7 @@ describe("W1. set_worktree 分支安全守卫", () => {
     const root = `/tmp/wts-w1b-${Date.now()}`
     const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       const first = await set_worktree.execute({ change_id: CID }, o)
@@ -122,7 +122,7 @@ describe("W2. init recovery 对 worktree 引用", () => {
     const root = `/tmp/wts-w2a-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       await set_worktree.execute({ change_id: CID }, o)
@@ -150,7 +150,7 @@ describe("W2. init recovery 对 worktree 引用", () => {
     const root = `/tmp/wts-w2b-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
 
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       await set_worktree.execute({ change_id: CID }, o)
@@ -295,7 +295,7 @@ describe("W5. 锁路径 worktree 归一化", () => {
     const fromMain = await getLockPath(mainRepo, CID)
     const fromWorktree = await getLockPath(worktreeDir, CID)
     expect(fromWorktree).toBe(fromMain)
-    expect(fromMain).toBe(join(mainRepo, ".opencode", ".orchestrate_state", `${CID}.review.lock`))
+    expect(fromMain).toBe(join(mainRepo, "openspec", "states", `${CID}.review.lock`))
 
     const sampleState: OrchestrateState = {
       changeId: CID,
@@ -308,8 +308,8 @@ describe("W5. 锁路径 worktree 归一化", () => {
       updatedAt: new Date().toISOString(),
     }
     await writeState(worktreeDir, sampleState)
-    expect(existsSync(join(mainRepo, ".opencode", ".orchestrate_state", `${CID}.json`))).toBe(true)
-    expect(existsSync(join(worktreeDir, ".opencode", ".orchestrate_state", `${CID}.json`))).toBe(false)
+    expect(existsSync(join(mainRepo, "openspec", "states", `${CID}.json`))).toBe(true)
+    expect(existsSync(join(worktreeDir, "openspec", "states", `${CID}.json`))).toBe(false)
 
     try { rmSync(base, { recursive: true, force: true }) } catch {}
   })
@@ -321,7 +321,7 @@ describe("W5. 锁路径 worktree 归一化", () => {
 
 /** init → set_worktree → analyze → implement，停在 review 阶段且 tool 层未提交（workflow-engine agent_submit 语义）。 */
 async function setupToToolReview(wt: string, fakeGit: FakeGitRunner): Promise<void> {
-  const o = makeCtx("openspec-orchestrator", wt)
+  const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
   await init.execute({ change_id: CID, task_group_id: "1" }, o)
@@ -432,7 +432,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     await expect(
@@ -447,7 +447,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     await expect(
@@ -462,7 +462,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
 
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     const custom = join(wt, ".worktree", "custom")
@@ -578,7 +578,7 @@ describe("W8. 主仓库 openspec 污染诊断", () => {
     __setGitRunner(fakeGit)
     fakeGit.dirtyPaths.add(`${mainRepo}-openspec`)
 
-    const o = makeCtx("openspec-orchestrator", mainRepo)
+    const o = makeOrchCtx(mainRepo)
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     const out = await status.execute({ change_id: CID }, o)
 
@@ -597,7 +597,7 @@ const BOUNDARY = { allowed_directories: ["src"], allowed_packages: ["com.t"], no
 
 /** init → set_worktree，agent_submit(analyze) 前 worktree 已就绪 */
 async function setupToWorktreeReady(wt: string, fakeGit: FakeGitRunner): Promise<void> {
-  const o = makeCtx("openspec-orchestrator", wt)
+  const o = makeOrchCtx(wt)
   await init.execute({ change_id: CID, task_group_id: "1" }, o)
   await set_worktree.execute({ change_id: CID }, o)
 }
@@ -739,7 +739,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
-    const o = makeCtx("openspec-orchestrator", wt)
+    const o = makeOrchCtx(wt)
     await init.execute({ change_id: CID, task_group_id: "1" }, o)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
@@ -780,7 +780,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     const state = readStateSync(wt)
     const item = state.workItems.find((w: any) => w.id === "task:1")
     item.metadata["base_ref"] = null
-    writeFileSync(join(wt, ".opencode", ".orchestrate_state", `${CID}.json`), JSON.stringify(state))
+    writeFileSync(join(wt, "openspec", "states", `${CID}.json`), JSON.stringify(state))
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
     await archSubmit(wt)

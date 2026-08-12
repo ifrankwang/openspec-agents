@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { generateIsolationNamespace } from "../src/core/namespace"
 import { init, set_worktree, complete_task_group } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToQuality, submitQualityPassed, readItem, taskListOf,
 } from "./helpers-workflow"
@@ -34,7 +34,7 @@ function fresh(): { wt: string; root: string; fakeGit: FakeGitRunner } {
 }
 
 function stateOf(wt: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : null
 }
 
@@ -43,7 +43,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
     const { wt, root, fakeGit } = fresh()
     try {
       fakeGit.currentBranch = "develop"
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       expect(stateOf(wt).baseBranch).toBe("develop")
     } finally { teardown(root) }
@@ -52,7 +52,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
   test("init 显式传 base_branch 正确使用", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1", base_branch: "release/1.0" }, o)
       expect(stateOf(wt).baseBranch).toBe("release/1.0")
     } finally { teardown(root) }
@@ -62,7 +62,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
     const { wt, root, fakeGit } = fresh()
     try {
       fakeGit.currentBranch = "HEAD"
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       const err = await init.execute({ change_id: CID, task_group_id: "1" }, o).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/detached HEAD|显式.*base_branch/)
@@ -72,7 +72,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
   test("新建 init 生成确定性的 isolationNamespace", async () => {
     const { wt, root } = fresh()
     try {
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       expect(stateOf(wt).isolationNamespace).toBe(generateIsolationNamespace(CID))
       expect(stateOf(wt).isolationNamespace).toMatch(/^[0-9a-f]{6}$/)
@@ -82,7 +82,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
   test("旧 state 缺 isolationNamespace 时 init 补全；既有值保留", async () => {
     const { wt, root } = fresh()
     try {
-      const stateDir = join(wt, ".opencode", ".orchestrate_state")
+      const stateDir = join(wt, "openspec", "states")
       mkdirSync(stateDir, { recursive: true })
       const legacyState = {
         changeId: CID,
@@ -94,7 +94,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
       }
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacyState))
 
-      const o = makeCtx("openspec-orchestrator", wt)
+      const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1" }, o)
       expect(stateOf(wt).isolationNamespace).toBe(generateIsolationNamespace(CID))
 

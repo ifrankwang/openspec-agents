@@ -42,7 +42,7 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
 
 /** 注入带归因字段的 issue child（metadata.source/source_phase/dimension/file/line/suggestion）。 */
 function injectChild(wt: string, child: any): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = JSON.parse(readFileSync(p, "utf-8"))
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.children.push(child)
@@ -71,7 +71,7 @@ function makeChild(id: string, overrides: Record<string, unknown> = {}): any {
 
 /** 把 review 验证 tag 全部置 passed（模拟已通过全部 review 子层）。 */
 function seedReviewTags(wt: string): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = JSON.parse(readFileSync(p, "utf-8"))
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.tags = {
@@ -90,7 +90,7 @@ function seedReviewTags(wt: string): void {
 
 /** 把 item 手动拉回 implement step（模拟 review 回退 dev 修复）。 */
 function rewindToImplement(wt: string): void {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   const state = JSON.parse(readFileSync(p, "utf-8"))
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.phase = "in_progress"

@@ -15,7 +15,7 @@ import {
 import type { CollectorAdapter } from "../src/core/workflow"
 import { createInitialWorkItem } from "../src/core/workflow/engine"
 import type { WorkItem } from "../src/core/workflow/types"
-import { FakeGitRunner, makeCtx, setupWorkspace } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace } from "./helpers"
 
 const CID = "poller"
 
@@ -26,7 +26,7 @@ afterAll(() => {
 })
 
 function readStateSync(wt: string): any {
-  const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+  const p = join(wt, "openspec", "states", `${CID}.json`)
   if (!existsSync(p)) return null
   return JSON.parse(readFileSync(p, "utf-8"))
 }
@@ -42,7 +42,7 @@ function freshSetup(root: string): { wt: string } {
 }
 
 async function initSession(wt: string): Promise<void> {
-  await init.execute({ change_id: CID, task_group_id: "1" }, makeCtx("openspec-orchestrator", wt))
+  await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
 }
 
 /** 可配置假 adapter：pull 返回固定原始项，可注入 pull/transform/writeback 失败。 */
@@ -333,7 +333,7 @@ describe("startPolling 定时调度", () => {
       registerCollector(fake)
 
       await pollOnce(wt, CID) // 第一次：新增 x1，写盘
-      const statePath = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const mtimeAfterFirst = statSync(statePath).mtimeMs
 
       // 等待确保 mtime 具备区分度（文件系统时间戳精度）

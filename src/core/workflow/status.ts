@@ -1,20 +1,20 @@
-import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.js"
-import type { WorkItem, StepConfig, WorkflowCommon } from "./types.js"
-import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.js"
-import { EXEMPTED_HIT_KEY } from "../exemptions.js"
-import type { LoadedWorkflow } from "./loader.js"
-import type { EngineRecommendation } from "./engine.js"
-import type { DetectChangesResult } from "../git.js"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.js"
-import { ORCHESTRATOR_AGENT, agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.js"
-import { resolveChildIssueFields } from "./reset.js"
-import { taskListOf, issueChildrenOf } from "../task-children.js"
+import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.ts"
+import type { WorkItem, StepConfig, WorkflowCommon } from "./types.ts"
+import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
+import { EXEMPTED_HIT_KEY } from "../exemptions.ts"
+import type { LoadedWorkflow } from "./loader.ts"
+import type { EngineRecommendation } from "./engine.ts"
+import type { DetectChangesResult } from "../git.ts"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
+import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.ts"
+import { resolveChildIssueFields } from "./reset.ts"
+import { taskListOf, issueChildrenOf } from "../task-children.ts"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
   renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
   isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
-} from "../views.js"
-import { resolveMustDoForCaps, SKIP_REASON_FORMAT } from "../tools/gate.js"
+} from "../views.ts"
+import { resolveMustDoForCaps, SKIP_REASON_FORMAT } from "../tools/gate.ts"
 
 export interface WorkflowStatusViewOptions {
   state: OrchestrateState
@@ -27,13 +27,22 @@ export interface WorkflowStatusViewOptions {
   exemptedHits?: number
 }
 
+/** 状态视图调用者信息：agent 名用于渲染归属，orchestrator 表示编排视角（各 agent 主代理）路由。 */
+export interface StatusViewCaller {
+  agent: string
+  orchestrator?: boolean
+  /** 调用者 agent 身份是否显式声明（MCP 形态下为是否携带 `_agent` 参数；OpenCode 直载形态恒 true）。
+   *  false 且落入编排视角时，分派视图渲染补传 `_agent` 的身份提示（MCP 子代理首查死锁兜底）。 */
+  identityDeclared?: boolean
+}
+
 /**
  * 新流动态视图：按调用者角色 + 引擎推荐（recommendForItem）渲染。
  * - 终态（done/cancelled）：呈现已完成/已取消状态（见 renderTerminalPhase）
  * - checkpoint：呈现检查点状态 + continue/giveup 决策入口（复用既有文案）
  * - suspended / blocked / terminal：分别呈现暂停原因 / 阻塞原因 / step 已通过
  * - recommend：
- *   - orchestrator → 分派视图（阶段进展 + children 统计 + blocker 汇总 + 下一步分派）
+ *   - 编排视角 → 分派视图（阶段进展 + children 统计 + blocker 汇总 + 下一步分派）
  *   - 调用者 ∈ 推荐 agents → ✅ 执行视图（skill 加载清单 + 按 step 渲染 children/blocker/会话摘要 + 操作指引）
  *   - 否则 → ⛔ 阶段门禁（复用既有 gate 文案）
  */
@@ -41,13 +50,14 @@ export function renderWorkflowStatusView(
   item: WorkItem,
   workflow: LoadedWorkflow,
   rec: EngineRecommendation,
-  ctxAgent: string,
+  caller: StatusViewCaller,
   options: WorkflowStatusViewOptions,
 ): string {
+  const ctxAgent = caller.agent
   // 状态异常（phase ↔ step 归属错位）最高优先级：子代理一律拒绝执行；
-  // orchestrator 继续走分派视图，由 renderOrchestratorDispatch 渲染 ⚠️ 诊断。
+  // 编排视角继续走分派视图，由 renderOrchestratorDispatch 渲染 ⚠️ 诊断。
   if (phaseStepMismatch(item, workflow)) {
-    if (ctxAgent !== ORCHESTRATOR_AGENT) {
+    if (!caller.orchestrator) {
       return renderStateMismatch(item, workflow)
     }
   }
@@ -61,19 +71,19 @@ export function renderWorkflowStatusView(
     return renderTerminalPhase(item)
   }
   if (rec.status === "blocked") {
-    if (ctxAgent === ORCHESTRATOR_AGENT) {
-      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
+    if (caller.orchestrator) {
+      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution, caller.identityDeclared)
     }
     return renderBlocked(rec, item, workflow, ctxAgent)
   }
   if (rec.status === "terminal") {
-    if (ctxAgent === ORCHESTRATOR_AGENT) {
-      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
+    if (caller.orchestrator) {
+      return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution, caller.identityDeclared)
     }
     return renderTerminal(rec)
   }
-  if (ctxAgent === ORCHESTRATOR_AGENT) {
-    return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution)
+  if (caller.orchestrator) {
+    return renderOrchestratorDispatch(options.state, item, workflow, rec, options.tg, options.mainPollution, caller.identityDeclared)
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
@@ -231,6 +241,7 @@ function renderOrchestratorDispatch(
   rec: EngineRecommendation,
   tg: TaskGroupState,
   mainPollution?: { repoRoot: string; files: string[] } | null,
+  identityDeclared?: boolean,
 ): string {
   const lines = [
     "# 编排进度",
@@ -322,6 +333,15 @@ function renderOrchestratorDispatch(
     }
   }
   lines.push("")
+  // MCP 形态兜底（身份未显式声明时）：分派视图追加补传 `_agent` 的身份提示。提示正文直接复用
+  // workflow 配置 common 块中的 `_agent` 指引原文（单一文案来源，避免双源）；配置缺失该条时静默降级。
+  // 覆盖场景：MCP 子代理未按分派 prompt 携带 `_agent` 首查状态，落入编排视角视图时能获得自救指引。
+  if (identityDeclared === false) {
+    const agentGuidance = workflow.common?.instructions?.find((i) => i.includes("_agent"))
+    if (agentGuidance) {
+      lines.push(`> **身份提示**：${interpolateText(agentGuidance, {})}`, "")
+    }
+  }
   return lines.join("\n")
 }
 

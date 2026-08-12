@@ -14,7 +14,7 @@
  * - worktree 指状态文件所在 repo 根（非 .worktree 子目录）；setupToAnalyze 自动补调 set_worktree
  *   使 worktree 就绪，需 worktree/branch 元数据的用例无需自行调用
  */
-import type { ToolContext } from "@opencode-ai/plugin"
+import type { ToolContext } from "../src/core/tools/types"
 import type { WorkItem } from "../src/core/workflow/types"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -22,7 +22,7 @@ import { loadWorkflow } from "../src/core/workflow/loader"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { taskListOf as projectTaskList } from "../src/core/task-children"
 import { init, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
-import { makeCtx, readState } from "./helpers"
+import { makeCtx, makeOrchCtx, readState } from "./helpers"
 
 export type Ctx = ReturnType<typeof makeCtx>
 
@@ -102,17 +102,17 @@ export function renderWorkingView(item: any, stepId: string, agent: string, opti
     item,
     workflow,
     { status: "recommend", stepId, agents: [agent] },
-    agent,
+    { agent, orchestrator: false },
     { state, tg, ...options } as any,
   )
 }
 
 // ─── 阶段驱动助手 ───
 
-/** 构造全部角色 ctx（agent 名与 task.yaml step.agents 一致）。 */
+/** 构造全部角色 ctx（agent 名与 task.yaml step.agents 一致；orch 为编排视角主代理）。 */
 export function makeAgentCtxs(wt: string): AgentCtx {
   return {
-    orch: makeCtx("openspec-orchestrator", wt),
+    orch: makeOrchCtx(wt),
     arch: makeCtx("openspec-architect", wt),
     dev: makeCtx("openspec-developer", wt),
     toolR: makeCtx("openspec-reviewer-tool", wt),

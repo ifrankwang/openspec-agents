@@ -1,14 +1,14 @@
 import path from "path"
-import { mkdirSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, statSync, readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync, cpSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
-import type { OrchestrateState, TaskGroupState, Phase, IssueItem } from "./types.js"
-import type { WorkItem, WorkItemPhase, Severity } from "./workflow/types.js"
-import { createInitialWorkItem } from "./workflow/engine.js"
-import { EXEMPT_REQUEST_KEY } from "./workflow/submit.js"
-import { STATE_DIR_NAME, STATE_SUBDIR_NAME } from "./constants.js"
-import { DIMENSION_AGENT_MAP } from "./constants.js"
-import { discoverRepoRoot } from "./git.js"
-import { generateIsolationNamespace } from "./namespace.js"
+import type { OrchestrateState, TaskGroupState, Phase, IssueItem } from "./types.ts"
+import type { WorkItem, WorkItemPhase, Severity } from "./workflow/types.ts"
+import { createInitialWorkItem } from "./workflow/engine.ts"
+import { EXEMPT_REQUEST_KEY } from "./workflow/submit.ts"
+import { STATE_DIR_NAME, STATE_SUBDIR_NAME, LEGACY_STATE_DIR_NAME, LEGACY_STATE_SUBDIR_NAME } from "./constants.ts"
+import { DIMENSION_AGENT_MAP } from "./constants.ts"
+import { discoverRepoRoot } from "./git.ts"
+import { generateIsolationNamespace } from "./namespace.ts"
 
 const LOCK_POLL_INTERVAL_MS = 50
 const LOCK_META_FILENAME = "meta.json"
@@ -27,31 +27,74 @@ export function getStateDir(worktree: string): string {
   return path.join(worktree, STATE_DIR_NAME, STATE_SUBDIR_NAME)
 }
 
+/** 旧布局 .opencode/.orchestrate_state（读取兼容与迁移源）。 */
+export function getLegacyStateDir(worktree: string): string {
+  return path.join(worktree, LEGACY_STATE_DIR_NAME, LEGACY_STATE_SUBDIR_NAME)
+}
+
 /** Worktree 内用于存储 changeId/taskGroupId 指针的上下文文件（相对于 worktree 根） */
-export const WORKTREE_CONTEXT_FILE = ".opencode/.orchestrate_state/context.json"
+export const WORKTREE_CONTEXT_FILE = "openspec/states/context.json"
+/** 旧布局 worktree 上下文指针（读取兼容）。 */
+export const WORKTREE_CONTEXT_FILE_LEGACY = ".opencode/.orchestrate_state/context.json"
 
 /**
- * 从 worktree 中读取上下文指针（changeId + taskGroupId）。
- * 文件不存在时返回 null。
+ * 幂等迁移：旧 .opencode/.orchestrate_state/ 数据（主状态/exemptions/锁/context.json 指针）→
+ * openspec/states/。新目录已存在（含空目录）即视为已迁移，重复调用无副作用；
+ * 迁移只拷贝不删除旧文件，旧布局在迁移期间仍可读（双读兼容）。
  */
-export async function readContextFromWorktree(worktreePath: string): Promise<{ changeId: string; taskGroupId: string } | null> {
-  const fp = path.join(worktreePath, WORKTREE_CONTEXT_FILE)
-  try {
-    const raw = await readFile(fp, "utf-8")
-    return JSON.parse(raw) as { changeId: string; taskGroupId: string }
-  } catch {
-    return null
+export function migrateLegacyStateDir(root: string): void {
+  const legacyDir = getLegacyStateDir(root)
+  if (!existsSync(legacyDir)) return
+  const newDir = getStateDir(root)
+  if (existsSync(newDir)) return
+  mkdirSync(newDir, { recursive: true })
+  for (const entry of readdirSync(legacyDir, { withFileTypes: true })) {
+    const src = path.join(legacyDir, entry.name)
+    const dst = path.join(newDir, entry.name)
+    try {
+      if (entry.isDirectory()) {
+        cpSync(src, dst, { recursive: true })
+      } else {
+        copyFileSync(src, dst)
+      }
+    } catch {
+      // 单文件迁移失败不阻塞整体迁移（其余条目继续）
+    }
   }
 }
 
 /**
+ * 从 worktree 中读取上下文指针（changeId + taskGroupId）。
+ * 新布局 openspec/states/context.json 优先，旧 .opencode/.orchestrate_state/context.json 双读兼容。
+ * 文件不存在时返回 null。
+ */
+export async function readContextFromWorktree(worktreePath: string): Promise<{ changeId: string; taskGroupId: string } | null> {
+  const fp = path.join(worktreePath, WORKTREE_CONTEXT_FILE)
+  const fpLegacy = path.join(worktreePath, WORKTREE_CONTEXT_FILE_LEGACY)
+  for (const p of [fp, fpLegacy]) {
+    try {
+      const raw = await readFile(p, "utf-8")
+      return JSON.parse(raw) as { changeId: string; taskGroupId: string }
+    } catch {
+      // 该布局无指针，尝试下一个
+    }
+  }
+  return null
+}
+
+/**
  * 向 worktree 写入上下文指针（changeId + taskGroupId）。
- * 自动创建所需目录。
+ * 自动创建所需目录；首次写入新布局前把旧布局指针幂等迁移到新位置。
  */
 export async function writeContextToWorktree(worktreePath: string, changeId: string, taskGroupId: string): Promise<void> {
-  const dir = path.dirname(path.join(worktreePath, WORKTREE_CONTEXT_FILE))
+  const fp = path.join(worktreePath, WORKTREE_CONTEXT_FILE)
+  const fpLegacy = path.join(worktreePath, WORKTREE_CONTEXT_FILE_LEGACY)
+  if (!existsSync(fp) && existsSync(fpLegacy)) {
+    migrateLegacyStateDir(worktreePath)
+  }
+  const dir = path.dirname(fp)
   mkdirSync(dir, { recursive: true })
-  await writeFile(path.join(worktreePath, WORKTREE_CONTEXT_FILE), JSON.stringify({ changeId, taskGroupId }, null, 2))
+  await writeFile(fp, JSON.stringify({ changeId, taskGroupId }, null, 2))
 }
 
 export function getStatePath(worktree: string, changeId: string): string {
@@ -182,12 +225,16 @@ interface LegacyState extends OrchestrateState {
 
 export async function readStateByChangeId(worktree: string, changeId: string): Promise<OrchestrateState | null> {
   const fp = getStatePath(worktree, changeId)
+  const fpLegacy = path.join(getLegacyStateDir(worktree), `${changeId}.json`)
+  // 双读兼容：新布局 openspec/states/ 优先，旧 .opencode/.orchestrate_state/ 兜底（迁移前仍可读）
+  const readPath = existsSync(fp) ? fp : existsSync(fpLegacy) ? fpLegacy : null
   let raw: unknown
   try {
-    raw = JSON.parse(await readFile(fp, "utf-8"))
+    raw = readPath ? JSON.parse(await readFile(readPath, "utf-8")) : null
   } catch {
-    return null
+    raw = null
   }
+  if (raw === null) return null
   const legacy = raw as LegacyState
   const sampleGroup = legacy.taskGroups?.[0]
   if (sampleGroup && !("tasks" in sampleGroup)) {
@@ -226,7 +273,9 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     unattended: legacy.unattended,
   }
   if (needsUpgrade) {
-    // 迁移产物一次性落盘固定单轨形态，避免每次读取都重建
+    // 迁移产物一次性落盘固定单轨形态，避免每次读取都重建（首次写新目录前幂等迁移旧数据）
+    migrateLegacyStateDir(worktree)
+    mkdirSync(getStateDir(worktree), { recursive: true })
     await writeFile(fp, JSON.stringify(state, null, 2))
   }
   return state
@@ -238,6 +287,8 @@ export async function resolveStateRoot(worktree: string): Promise<string> {
 
 export async function writeState(worktree: string, state: OrchestrateState): Promise<void> {
   const target = await resolveStateRoot(worktree)
+  // 首次新目录写入前幂等迁移旧 .opencode 数据（主状态/exemptions/锁），重复迁移无副作用
+  migrateLegacyStateDir(target)
   mkdirSync(getStateDir(target), { recursive: true })
   state.updatedAt = new Date().toISOString()
   await writeFile(getStatePath(target, state.changeId), JSON.stringify(state, null, 2))

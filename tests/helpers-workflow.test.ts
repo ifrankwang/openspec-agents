@@ -64,7 +64,8 @@ describe("阶段驱动助手", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      expect(ctx.orch.agent).toBe("openspec-orchestrator")
+      expect(ctx.orch.agent).toBe("primary")
+      expect(ctx.orch.orchestrator).toBe(true)
       expect(ctx.arch.agent).toBe("openspec-architect")
       expect(ctx.dev.agent).toBe("openspec-developer")
       expect(ctx.toolR.agent).toBe("openspec-reviewer-tool")

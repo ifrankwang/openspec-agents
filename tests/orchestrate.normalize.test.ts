@@ -105,7 +105,7 @@ describe("N1. issue id # 前缀归一化", () => {
       expect(item.currentStep).toBe("verify_quality")
 
       // 模拟编排将任务移回 review/verify_quality 供豁免复核
-      const p = join(wt, ".opencode", ".orchestrate_state", `${CID}.json`)
+      const p = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(require("node:fs").readFileSync(p, "utf-8"))
       const wi = state.workItems.find((w: any) => w.id === "task:1")
       wi.phase = "review"

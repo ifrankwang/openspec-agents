@@ -1,12 +1,13 @@
-import type { ReviewDimension, ReviewLayer } from "./types.js"
-import type { WorkItem } from "./workflow/types.js"
+import type { ReviewDimension, ReviewLayer } from "./types.ts"
+import type { WorkItem } from "./workflow/types.ts"
 
-export const STATE_DIR_NAME = ".opencode"
-export const STATE_SUBDIR_NAME = ".orchestrate_state"
+export const STATE_DIR_NAME = "openspec"
+export const STATE_SUBDIR_NAME = "states"
+/** 旧布局 .opencode/.orchestrate_state（读取兼容 + 首次新目录写入时幂等迁移）。 */
+export const LEGACY_STATE_DIR_NAME = ".opencode"
+export const LEGACY_STATE_SUBDIR_NAME = ".orchestrate_state"
 export const SEVERITY_LEVELS = ["Critical", "High", "Medium", "Low", "Info"] as const
 export const BLOCKING_SEVERITIES = ["Critical", "High", "Medium", "Low"] as const
-
-export const ORCHESTRATOR_AGENT = "openspec-orchestrator"
 
 export const DIMENSION_AGENT_MAP: Record<ReviewDimension, string> = {
   style: "openspec-reviewer-style",

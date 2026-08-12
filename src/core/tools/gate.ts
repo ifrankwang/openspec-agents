@@ -17,7 +17,7 @@ import {
   resolveSkillsForCapabilities,
   getSkillMustDo,
   type SkillTagIndex,
-} from "../../skills/resolve.js"
+} from "../../skills/resolve.ts"
 
 /** 裁定方式枚举：用户答复 / 无人值守自动降级 / 环境不可用（须附尝试记录）。 */
 export const SKIP_REASON_ADJUDICATIONS = ["user_response", "unattended_auto", "env_unavailable"] as const

@@ -1,9 +1,9 @@
-import type { OrchestrateState } from "./types.js"
-import { readStateByWorktree, readStateByChangeId, getStateDir } from "./state.js"
+import type { OrchestrateState } from "./types.ts"
+import { readStateByWorktree, readStateByChangeId, getStateDir } from "./state.ts"
 import { readdirSync, existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import path from "path"
-import type { WorkItem, WorkItemType, WorkItemPhase, Verdict } from "./workflow/types.js"
+import type { WorkItem, WorkItemType, WorkItemPhase, Verdict } from "./workflow/types.ts"
 
 /** 看板卡片投影：WorkItem → 前端可渲染结构。 */
 export interface WorkItemCard {

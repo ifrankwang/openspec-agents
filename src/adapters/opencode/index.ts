@@ -1,10 +1,6 @@
 import { type Plugin } from "@opencode-ai/plugin"
-import { join } from "node:path"
-import { injectSkills } from "./skills.js"
-import { injectAgents } from "./agents.js"
-import { startDashboard } from "./dashboard.js"
-import { OpenSpecCollector, AdoCollector, registerCollector, startPolling } from "../../core/workflow/index.js"
-import { readContextFromWorktree } from "../../core/state.js"
+import { injectSkills } from "./skills.ts"
+import { injectAgents } from "./agents.ts"
 
 import {
   init,
@@ -13,24 +9,14 @@ import {
   complete_task_group,
   set_unattended,
   agent_submit,
-} from "./tools.js"
+} from "./tools.ts"
 
+/**
+ * OpenCode 插件壳（兼容过渡入口）：配置注入（agent/skill）+ 工具直载。
+ * dashboard/collector/poller 副作用已迁移至 MCP server 进程（src/adapters/mcp-common/），
+ * OpenCode 建议切换为 MCP client 形态接入；插件壳保留兼容直到双轨验证完成。
+ */
 export const OpenspecOrchestratePlugin: Plugin = async (input) => {
-  try {
-    if (input?.worktree) {
-      startDashboard(input.worktree)
-      // 注册内置收集器（OpenSpec + ADO 占位）并启动定时拉取；worktree 为动态上下文在此注入。
-      registerCollector(new OpenSpecCollector({ openspecDir: join(input.worktree, "openspec") }))
-      registerCollector(new AdoCollector())
-      // 仅已初始化（存在 context.json 上下文指针）的 worktree 启动轮询：
-      // 未初始化 worktree / 主仓库 checkout（.git 为目录）不启动，从源头避免无会话空转与报错噪音。
-      const ctx = await readContextFromWorktree(input.worktree)
-      if (ctx?.changeId && ctx?.taskGroupId) {
-        startPolling(input.worktree)
-      }
-    }
-  } catch { /* dashboard/调度启动失败不影响编排功能 */ }
-
   return {
     config: async (config) => {
       injectAgents(config)
