@@ -76,6 +76,10 @@ agent doc 禁止枚举/赘述 `opx_status` 的返回内容（字段清单、"返
 
 agent 专属语义（角色定位、严重级别判例、审查内容、工具权限边界）单一事实源在 `assets/agents/*.md`。跨 step 共享操作指引在 workflow 配置 `common` 块，step 专属操作指引在 step 级 `instructions` / `constraints`。`opx_status` 将 `common` 与 step 语义合并渲染为操作指引与约束区块。修改 agent 专属语义改 agent.md，修改操作指引改 workflow 配置，禁止同一概念双源。
 
+### 同一维度跨阶段审查检查点一致
+
+同一质量维度若由多个 agent 在不同阶段承担审查（如架构维度：analyze 阶段方案审查与 review 阶段实施审查），其核心检查点（"审什么"清单）必须一致，并锚定同一规范源（skill）；阶段特有差异按归属划分——审查语义类差异在 agent.md，流程类差异在 workflow 配置。
+
 ### 子代理上下文不得转述
 
 编排者（各 agent 主代理）不得向子代理转述 worktree 路径、执行边界、issue 清单等动态上下文。分派 prompt 仅含分派指令 + 轮次/阶段标识 + `_agent` 身份指令（非 OpenCode 直载形态分派时，见编排主代理 skill 分派范式）。子代理通过 `opx_status` 按角色自取。

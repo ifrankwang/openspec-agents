@@ -126,6 +126,14 @@ driving adapter → application → domain ← driven adapter
 - 值对象用不可变类型，枚举用枚举类型，实体用引用类型——类型选择本身就是语言表达
 - 跨 Bounded Context 的同一术语含义必须一致
 
+### 命名合理性判据
+
+命名规则与判据分工互补：命名规则定义静态一致性约束——代码命名必须与术语表一致；命名合理性判据是判定标准，识别命名是否体现意图、是否造成混淆、是否出现漂移，修正动作即对一致性约束的执行。
+
+- 命名须实际体现概念意图，禁止用泛化命名（如 process/handle/data/info）掩盖真实语义
+- 同义概念全库统一命名，禁止同名不同义或近义不同名造成场景混淆
+- 代码命名偏离术语表即为漂移信号，识别后回溯术语表修正，回归一致性约束
+
 ## CQRS 读写分离
 
 Command（写）和 Query（读）走不同路径，互不混淆：
@@ -203,6 +211,17 @@ Specification 将业务规则封装为可组合的谓词对象，用于判定候
 - 约束：领域模型不依赖外部模型，ACL 转换方向仅为 infrastructure → domain
 
 六边形视角下，ACL 属 driven adapter（出站适配器）中的转换组件，方向约束同"adapter → 内核"。
+
+## 外部系统命名隔离
+
+命名基准是领域术语表（见「通用语言」章节），外部系统名不属于领域语言。外部系统（第三方 API、遗留系统、中间件）的命名与模型只允许出现在 infrastructure 层（四层）/ driven adapter（六边形），禁止通过接口契约上浮到内核与外部访问入口。
+
+- 接口/方法命名用领域语义：Port 接口名与方法名（如 CustomerQueryPort.queryCustomer）禁止出现外部系统名（如 SapQueryPort、queryFromErp）
+- DTO 命名用领域语义：application/interfaces 层 DTO 类名与字段名（如 CustomerDetailResponse）禁止出现外部系统名（如 SapCustomerResponse、字段 sapOrderNo）
+- 跨层传输的数据须经 ACL/assembler 转换为领域语义对象，外部模型类型禁止出现在内核与 interfaces 层的接口签名中
+- 外部系统名仅限 infrastructure 层实现类、ACL 转换类与配置（如 SapClient、ErpOrderConverter）
+
+六边形视角下，外部系统名仅限 driven adapter（出站适配器）实现类与配置。
 
 ## Port / Adapter 模式
 
