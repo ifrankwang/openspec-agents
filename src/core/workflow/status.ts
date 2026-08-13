@@ -293,24 +293,6 @@ function renderOrchestratorDispatch(
       if (agents.length > 1) {
         lines.push("（多子代理相互独立，可在单条消息中并排分派，无需串行等待）")
       }
-      // 空返回/取消续派提示：上次分派该 agent 未返回结果（_last_dispatch 有记录）且仍待分派（pending）
-      // 时，提示复用 task 工具 task_id 续派（保留上下文、避免全新重派重复消耗）。三条件缺一不提示。
-      const lastDispatch =
-        typeof item.metadata["_last_dispatch"] === "object" && item.metadata["_last_dispatch"] !== null
-          ? (item.metadata["_last_dispatch"] as Record<string, string>)
-          : {}
-      for (const a of agents) {
-        const sid = lastDispatch[a]
-        if (
-          typeof sid === "string" && sid !== "" &&
-          rec.stepId !== null &&
-          getStepVerdict(item, rec.stepId, a) === "pending"
-        ) {
-          lines.push(
-            `⚠️ 上次分派 \`${a}\`（会话 \`${sid}\`）未返回结果，建议用 task 工具 \`task_id="${sid}"\` 复用会话提醒继续执行，勿全新重派（可保留上下文、避免重复消耗）。`
-          )
-        }
-      }
     }
   } else {
     // 防御出口：当前 step 存在 failed 残留 tag 但无待分派项 → 状态不一致。

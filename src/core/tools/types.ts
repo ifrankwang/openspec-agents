@@ -43,9 +43,6 @@ export interface UnattendedParams {
 
 export interface StatusParams {
   change_id: string
-  /** 子代理返回后由编排者登记最近分派会话（agent → 子代理 session id），
-   *  供子代理空返回/取消时复用 task id 续派。不传则保持纯只读快路径。 */
-  resume_sessions?: Array<{ agent: string; session_id: string }>
 }
 
 export interface AgentSubmitParams {

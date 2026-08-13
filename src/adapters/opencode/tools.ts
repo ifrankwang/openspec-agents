@@ -43,10 +43,10 @@ export const set_worktree = tool({
 
 export const status = tool({
   description:
-    "统一状态/上下文查询（只读查询为主，可携带登记最近分派会话）。按调用者角色路由：编排视角→统计+worktree；architect→spec/blocker；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度既有 issue。编排主代理在子代理返回后调用时，可携带 resume_sessions 登记该子代理的会话 id（供其空返回/取消时复用 task id 续派）。",
+    "统一状态/上下文查询（只读为主）。按调用者角色路由：编排视角→统计+worktree；architect→spec/blocker；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度既有 issue。",
   args: jsonSchemaToZod(statusSchema).shape as any,
   async execute(args, context) {
-    return statusExecute({ change_id: args.change_id as string, resume_sessions: args.resume_sessions as any }, makeCtx(context))
+    return statusExecute({ change_id: args.change_id as string }, makeCtx(context))
   },
 })
 

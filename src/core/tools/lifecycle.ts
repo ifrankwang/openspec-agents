@@ -3,14 +3,14 @@ import type { TaskItem, TaskStatus } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
-import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
 import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.ts"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, getStepVerdict } from "../workflow/engine.ts"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags } from "../workflow/engine.ts"
 import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
@@ -512,60 +512,33 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
 
 export async function statusExecute(params: StatusParams, ctx: ToolContext): Promise<string> {
   const agent = ctx.agent
-  // resume_sessions 登记为写路径：仅编排视角（orchestrator）显式携带时加锁读改写 _last_dispatch；
-  // 未携带（或非编排视角调用）时保持纯只读快路径，行为与历史完全一致。
-  const resumeSessions =
-    ctx.orchestrator === true && params.resume_sessions && params.resume_sessions.length > 0
-      ? params.resume_sessions
-      : null
-  const lockPath = resumeSessions ? await getLockPath(ctx.worktree, params.change_id) : null
-  if (lockPath) await acquireLock(lockPath)
-  try {
-    const state = await readStateByWorktree(ctx.worktree, params.change_id)
+  const state = await readStateByWorktree(ctx.worktree, params.change_id)
 
-    if (!state) {
-      if (ctx.orchestrator) {
-        const diskWts = await discoverDiskWorktrees(ctx.worktree)
-        if (diskWts.length > 0) {
-          const lines = ["# 编排进度", "", "**状态文件**: 未初始化", "", "## 磁盘 Worktree（可恢复进度）", ""]
-          lines.push("| 分支 | 路径 |")
-          lines.push("|------|------|")
-          for (const w of diskWts) lines.push(`| ${w.branch} | \`${w.path}\` |`)
-          lines.push("")
-          lines.push("请用 question 工具询问用户确认恢复目标，然后调用 opx_orch_init(recovery=...)。")
-          return lines.join("\n")
-        }
+  if (!state) {
+    if (ctx.orchestrator) {
+      const diskWts = await discoverDiskWorktrees(ctx.worktree)
+      if (diskWts.length > 0) {
+        const lines = ["# 编排进度", "", "**状态文件**: 未初始化", "", "## 磁盘 Worktree（可恢复进度）", ""]
+        lines.push("| 分支 | 路径 |")
+        lines.push("|------|------|")
+        for (const w of diskWts) lines.push(`| ${w.branch} | \`${w.path}\` |`)
+        lines.push("")
+        lines.push("请用 question 工具询问用户确认恢复目标，然后调用 opx_orch_init(recovery=...)。")
+        return lines.join("\n")
       }
-      return "编排会话尚未初始化。请先调用 opx_orch_init。"
     }
+    return "编排会话尚未初始化。请先调用 opx_orch_init。"
+  }
 
-    const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
-    if (!item) {
-      return "编排会话未就绪：找不到活跃任务组的工作项，请重新调用 opx_orch_init。"
-    }
+  const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
+  if (!item) {
+    return "编排会话未就绪：找不到活跃任务组的工作项，请重新调用 opx_orch_init。"
+  }
 
-    // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
-    const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
-    const rec = recommendForItem(item, workflow)
-    // 空返回/取消兜底：登记编排者上报的子代理会话 id（agent → session id）。
-    // 按「当前推荐 step 的 verdict」判定：pending（空返回未收敛）→ 写记录供续派提示复用；
-    // 非 pending（已提交/无待分派 step）→ 清除记录，防回退 dev 后误报续派提示。
-    if (resumeSessions) {
-      const lastDispatch =
-        typeof item.metadata["_last_dispatch"] === "object" && item.metadata["_last_dispatch"] !== null
-          ? (item.metadata["_last_dispatch"] as Record<string, string>)
-          : {}
-      for (const s of resumeSessions) {
-        if (rec.stepId !== null && getStepVerdict(item, rec.stepId, s.agent) === "pending") {
-          lastDispatch[s.agent] = s.session_id
-        } else {
-          delete lastDispatch[s.agent]
-        }
-      }
-      item.metadata["_last_dispatch"] = lastDispatch
-      await writeState(ctx.worktree, state)
-    }
-    const tg = findTaskGroup(state, state.taskGroupId)
+  // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
+  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+  const rec = recommendForItem(item, workflow)
+  const tg = findTaskGroup(state, state.taskGroupId)
   // 主仓库 openspec 污染诊断（56ddfe9 意图）：编排者分派视图展示主仓库污染，供编排者人工核对
   const mainPollution = ctx.orchestrator ? await detectMainRepoPollution(ctx.worktree) : null
   // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
@@ -589,9 +562,6 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
   // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
   const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
   return renderWorkflowStatusView(item, workflow, rec, { agent, orchestrator: ctx.orchestrator, identityDeclared: ctx.identityDeclared }, { state, tg, mainPollution, toolChanges, exemptedHits })
-  } finally {
-    if (lockPath) releaseLock(lockPath)
-  }
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {

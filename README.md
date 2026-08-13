@@ -240,4 +240,4 @@ bun test                    # 全部测试
 bun test tests/orchestrate.flow.test.ts  # 单一文件
 ```
 
-测试基于 `FakeGitRunner` 伪造 Git，零外部依赖。`orchestrate.status_dispatch.test.ts` 覆盖 opx_status 分派判定（活跃 item、checkpoint giveup、blocked 视图、verify_quality 聚合等待期、回退/recovery 分派、多任务组切换、git 抛错容错、空返回续派登记与视图提示）与 baseRef 省略"变更范围"的执行视图；`mcp-common.test.ts` 覆盖 MCP server 形态下同一状态机的工具承载、角色路由与默认无人值守；`dual-track.test.ts` 覆盖插件壳 vs MCP 双轨对比（同一 change 两端跑相同工具序列，归一化动态字段后断言状态文件一致）。
+测试基于 `FakeGitRunner` 伪造 Git，零外部依赖。`orchestrate.status_dispatch.test.ts` 覆盖 opx_status 分派判定（活跃 item、checkpoint giveup、blocked 视图、verify_quality 聚合等待期、回退/recovery 分派、多任务组切换、git 抛错容错）与 baseRef 省略"变更范围"的执行视图；`mcp-common.test.ts` 覆盖 MCP server 形态下同一状态机的工具承载、角色路由与默认无人值守；`dual-track.test.ts` 覆盖插件壳 vs MCP 双轨对比（同一 change 两端跑相同工具序列，归一化动态字段后断言状态文件一致）。

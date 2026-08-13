@@ -233,19 +233,6 @@ export const statusSchema: JSONSchema = {
   type: "object",
   properties: {
     change_id: { type: "string", minLength: 1, description: "change ID" },
-    resume_sessions: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          agent: { type: "string", minLength: 1, description: "子代理 agent 名" },
-          session_id: { type: "string", minLength: 1, description: "task 工具返回的子代理会话 id（<task id> 或取消错误文本中的 id）" },
-        },
-        required: ["agent", "session_id"],
-        additionalProperties: false,
-      },
-      description: "子代理返回后登记最近分派会话（仅编排视角生效；按当前 step 待分派判定写/清记录）",
-    },
   },
   required: ["change_id"],
   additionalProperties: false,
