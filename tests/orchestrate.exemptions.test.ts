@@ -324,6 +324,86 @@ describe("视图存量豁免提示", () => {
   })
 })
 
+// ── 视图：豁免反馈提示（无规则名 / 疑似行号漂移）──
+
+describe("视图豁免反馈提示（无规则名 / 疑似行号漂移）", () => {
+  test("h1. (rule+file) 命中清单但 line 不同 → verify_tool 视图渲染疑似行号漂移提示；line 一致命中降级不重复提示，且漂移提示不计入存量豁免统计", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID1)
+      // 预置豁免清单：rule=java:S2068, file=src/Main.java, line=42
+      await writeExemptions(wt, {
+        version: 1,
+        items: [{
+          key: exemptionKeyOf("java:S2068", "src/Main.java", 42)!,
+          rule: "java:S2068", file: "src/Main.java", line: 42,
+          sourcePhase: "tool", dimension: "security", severity: "High",
+          description: "硬编码密钥", exemptedAt: "t1", exemptedBy: "r1", changeId: CID1,
+        }],
+      })
+      // 同 rule+file 但 line=100 的 tool 层 review 态 issue（verify_tool 待复核区块可见）
+      rewriteItem(wt, CID1, (item: any) => {
+        item.children.push({
+          id: "issue:8", source: "openspec", externalId: "8", type: "issue",
+          title: "硬编码密钥", description: "检测到硬编码密钥", phase: "review",
+          suspended: false, currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-tool", dimension: "security", file: "src/Main.java", line: 100, rule: "java:S2068" },
+          children: [], labels: [], severity: "High",
+        })
+      })
+      const out = await status.execute({ change_id: CID1 }, ctx.toolR)
+      expect(out).toContain("疑似行号漂移")
+      expect(out).toContain("line=42")
+      // 漂移提示不写 exempted_hit 标记 → 不计入存量豁免统计（无「存量豁免提示」汇总行）
+      expect(out).not.toContain("存量豁免提示")
+      // 对照：line=42 完全命中（exempted_hit 标记）的 issue 不出现漂移提示，仅原漂移提示保留
+      rewriteItem(wt, CID1, (item: any) => {
+        item.children.push({
+          id: "issue:9", source: "openspec", externalId: "9", type: "issue",
+          title: "硬编码密钥", description: "检测到硬编码密钥", phase: "review",
+          suspended: false, currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-tool", dimension: "security", file: "src/Main.java", line: 42, rule: "java:S2068", exempted_hit: "java:S2068" },
+          children: [], labels: [], severity: "Info",
+        })
+      })
+      const out2 = await status.execute({ change_id: CID1 }, ctx.toolR)
+      expect((out2.match(/疑似行号漂移/g) ?? []).length).toBe(1)
+      // 命中降级 issue 计入存量豁免统计（仅统计 exempted_hit 标记），漂移提示不计入
+      expect(out2).toContain("1 个命中项目级跨 change 豁免清单的存量问题")
+    } finally { teardown(root) }
+  })
+
+  test("h2. tool 层 issue 无 rule（metadata 无 rule 字段）→ 视图渲染无规则名提示；有 rule 的 issue 不出现该提示", async () => {
+    const { wt, root } = fresh()
+    try {
+      const { ctx } = await driveToVerifyTool(wt, CID1)
+      rewriteItem(wt, CID1, (item: any) => {
+        item.children.push({
+          id: "issue:7", source: "openspec", externalId: "7", type: "issue",
+          title: "未使用变量", description: "检测到未使用变量", phase: "review",
+          suspended: false, currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-tool", dimension: "maintainability", file: "src/App.java", line: 3 },
+          children: [], labels: [], severity: "Low",
+        })
+      })
+      const out = await status.execute({ change_id: CID1 }, ctx.toolR)
+      expect(out).toContain("无规则名")
+      // 对照：有 rule 的 tool 层 issue 不出现无规则名提示
+      rewriteItem(wt, CID1, (item: any) => {
+        item.children.push({
+          id: "issue:8", source: "openspec", externalId: "8", type: "issue",
+          title: "硬编码密钥", description: "检测到硬编码密钥", phase: "review",
+          suspended: false, currentStep: null, tags: {},
+          metadata: { source: "openspec-reviewer-tool", dimension: "security", file: "src/Main.java", line: 42, rule: "java:S2068" },
+          children: [], labels: [], severity: "High",
+        })
+      })
+      const out2 = await status.execute({ change_id: CID1 }, ctx.toolR)
+      expect((out2.match(/无规则名/g) ?? []).length).toBe(1)
+    } finally { teardown(root) }
+  })
+})
+
 // ── g: 异常路径不落盘（清单写入与状态持久化原子性）──
 
 describe("g. 异常路径不落盘（原子性）", () => {

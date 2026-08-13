@@ -2,6 +2,7 @@ import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, 
 import type { WorkItem, StepConfig, WorkflowCommon } from "./types.ts"
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
 import { EXEMPTED_HIT_KEY } from "../exemptions.ts"
+import type { ExemptionRecord } from "../exemptions.ts"
 import type { LoadedWorkflow } from "./loader.ts"
 import type { EngineRecommendation } from "./engine.ts"
 import type { DetectChangesResult } from "../git.ts"
@@ -25,6 +26,8 @@ export interface WorkflowStatusViewOptions {
   toolChanges?: DetectChangesResult
   /** 本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时统计，供视图汇总提示）。 */
   exemptedHits?: number
+  /** 项目级跨 change 豁免清单条目（statusExecute 渲染前异步读取一次传入；renderChildIssue 逐条提示数据源，纯只读）。 */
+  exemptionItems?: ExemptionRecord[]
 }
 
 /** 状态视图调用者信息：agent 名用于渲染归属，orchestrator 表示编排视角（各 agent 主代理）路由。 */
@@ -87,9 +90,33 @@ export function renderWorkflowStatusView(
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, options.toolChanges, options.exemptedHits)
+    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, options.toolChanges, options.exemptedHits, exemptionHintCtx(options.exemptionItems))
   }
   return renderGate(rec, item, ctxAgent)
+}
+
+/** 渲染期豁免清单提示上下文（纯只读，不写状态）：items 原始清单 + 预构建 (rule+file)→line 映射。
+ *  映射在渲染入口构建一次，逐条 issue 渲染时 O(1) 查映射，避免循环内重复扫描清单。 */
+interface ExemptionHintCtx {
+  items: ExemptionRecord[]
+  ruleFileLines: Map<string, number>
+}
+
+/** 从豁免清单构建 (rule+file)→line 映射：rule 或 file 任一缺失的条目不参与（与 exemptionKeyOf 宁漏勿误一致）。 */
+function buildRuleFileLineMap(items: ExemptionRecord[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const it of items) {
+    if (typeof it.rule === "string" && it.rule !== "" && typeof it.file === "string" && it.file !== "") {
+      m.set([it.rule, it.file].join("\u0000"), it.line ?? 0)
+    }
+  }
+  return m
+}
+
+/** 豁免清单为空时不构建提示上下文（渲染链零额外开销）。 */
+function exemptionHintCtx(items: ExemptionRecord[] | undefined): ExemptionHintCtx | undefined {
+  if (!items || items.length === 0) return undefined
+  return { items, ruleFileLines: buildRuleFileLineMap(items) }
 }
 
 function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, item: WorkItem): string {
@@ -455,6 +482,7 @@ function renderAgentWorking(
   tg: TaskGroupState,
   toolChanges?: DetectChangesResult,
   exemptedHits?: number,
+  exemptionCtx?: ExemptionHintCtx,
 ): string {
   // worktree 就绪阻断（置于顶部）：未就绪时拒绝执行，渲染 ⛔ 视图，不输出 ✅ 执行视图内容
   if (!isWorktreeReady(tg)) {
@@ -477,7 +505,7 @@ function renderAgentWorking(
       return renderToolDirectSubmit(exemptedHits)
     }
     if (!toolChanges.hasNonDocChange) {
-      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptedHits)
+      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptedHits, exemptionCtx)
     }
   }
   // skill 加载清单按当前调用者 agent 声明的 capability_tags 过滤（step 内各 agent 独立声明，互不相同）
@@ -527,7 +555,7 @@ function renderAgentWorking(
     lines.push(...renderToolChangesEvidence(item, tg, toolChanges))
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
-  lines.push(...renderStepContext(item, step, ctxAgent, state))
+  lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx))
   lines.push(...renderSkillSuggestions(ctxAgent, caps))
   lines.push("## 操作指引", "")
   let n = 0
@@ -570,7 +598,7 @@ function stepContextKind(stepId: string): StepContextKind | undefined {
 }
 
 /** 按 step 渲染动态上下文：由 step.id 推导渲染类型（未命中优雅降级返回空数组）。 */
-function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: string, state: OrchestrateState): string[] {
+function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: string, state: OrchestrateState, exemptionCtx?: ExemptionHintCtx): string[] {
   if (!step) return []
   const lines: string[] = []
   switch (stepContextKind(step.id)) {
@@ -579,16 +607,16 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       lines.push(...renderAnalyzeBlockers(item))
       break
     case "implement":
-      lines.push(...renderDeveloperChildren(item, ctxAgent))
+      lines.push(...renderDeveloperChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_tool":
-      lines.push(...renderToolChildren(item, ctxAgent))
+      lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_task":
-      lines.push(...renderTaskChildren(item, ctxAgent))
+      lines.push(...renderTaskChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_quality":
-      lines.push(...renderQualityChildren(item, ctxAgent))
+      lines.push(...renderQualityChildren(item, ctxAgent, exemptionCtx))
       break
   }
   return lines
@@ -665,7 +693,7 @@ function renderAnalyzeBlockers(item: WorkItem): string[] {
 }
 
 /** implement step：developer 待修复 children（仅 todo 态：review 态由对应 reviewer 复核、豁免申请走待裁定区块）。 */
-function renderDeveloperChildren(item: WorkItem, ctxAgent: string): string[] {
+function renderDeveloperChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
   const lines: string[] = []
   // 仅 issue child 进入修复清单（task child 不得混入 issue 渲染）
   const toFix = issueChildrenOf(item).filter((c) => isAgentOwnedIssue(c, ctxAgent))
@@ -673,10 +701,10 @@ function renderDeveloperChildren(item: WorkItem, ctxAgent: string): string[] {
   const blocking = toFix.filter((c) => isBlockingSeverity(c.severity))
   const info = toFix.filter((c) => !isBlockingSeverity(c.severity))
   if (blocking.length > 0) {
-    lines.push(...renderChildrenSection("Issue (待修复 · Low 及以上，必办)", blocking))
+    lines.push(...renderChildrenSection("Issue (待修复 · Low 及以上，必办)", blocking, exemptionCtx))
   }
   if (info.length > 0) {
-    lines.push(...renderChildrenSection("Issue (待修复 · Info，建议修复，不阻塞提交)", info))
+    lines.push(...renderChildrenSection("Issue (待修复 · Info，建议修复，不阻塞提交)", info, exemptionCtx))
   }
   const highRefix = toFix.filter((c) => typeof c.metadata["refix_count"] === "number" && (c.metadata["refix_count"] as number) >= 2)
   if (highRefix.length > 0) {
@@ -752,11 +780,11 @@ function toolPendingChildren(item: WorkItem, ctxAgent: string): { active: WorkIt
 }
 
 /** verify_tool step：reviewer-tool 视角本层报源 review 态 issue + 调用者可裁定的豁免申请（待裁定）。 */
-function renderToolChildren(item: WorkItem, ctxAgent: string): string[] {
+function renderToolChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
   const { active, pending } = toolPendingChildren(item, ctxAgent)
   const lines: string[] = []
-  lines.push(...renderChildrenSection("Issue (待复核)", active))
-  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
+  lines.push(...renderChildrenSection("Issue (待复核)", active, exemptionCtx))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
   return lines
 }
 
@@ -833,7 +861,7 @@ function renderToolDirectSubmit(exemptedHits?: number): string {
 
 /** verify_tool 三分支②（仅处理待复核项）：无代码/配置变更但有本层待复核/待裁定项 →
  *  仅复核/裁定待处理项，不跑全量工具扫描，处理完成后提交。 */
-function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string, exemptedHits?: number): string {
+function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string, exemptedHits?: number, exemptionCtx?: ExemptionHintCtx): string {
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
@@ -847,7 +875,7 @@ function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctx
     )
   }
   lines.push("仅处理以下本层待复核 / 待裁定项，处理完成后提交：", "")
-  lines.push(...renderToolChildren(item, ctxAgent))
+  lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx))
   lines.push("## 操作指引", "")
   lines.push(
     "1. 逐项复核/裁定上方各项：待复核 issue 经 `recheck_adjudications` 复核（通过置 done、不通过驳回并附驳回原因）；待裁定豁免经 `exempt_adjudications` 裁定（dismissed/rejected）",
@@ -862,7 +890,7 @@ function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctx
 }
 
 /** verify_task step：task children 待验证列表 + task 层 issue 主区块 + 调用者可裁定的豁免申请（待裁定）。 */
-function renderTaskChildren(item: WorkItem, ctxAgent: string): string[] {
+function renderTaskChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
   const lines: string[] = []
   const pendingTasks = readTasks(item).filter((t) => t.status === "submitted")
   if (pendingTasks.length > 0) {
@@ -872,23 +900,23 @@ function renderTaskChildren(item: WorkItem, ctxAgent: string): string[] {
   }
   const issues = issueChildrenOf(item)
   const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
-  lines.push(...renderChildrenSection("Issue (待复核)", own))
+  lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
   const pending = issues.filter((c) => isTaskAdjudicable(c))
-  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
   return lines
 }
 
 /** verify_quality step：各维度 reviewer 渲染本维度报源 review 态 issue + 本维度豁免申请（待裁定）。 */
-function renderQualityChildren(item: WorkItem, ctxAgent: string): string[] {
+function renderQualityChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
   const dimension = agentToDimension(ctxAgent)
   if (!dimension) return []
   // task child 无 dimension 归因（resolveChildIssueFields 缺省 style），必须按 type 排除
   const issues = issueChildrenOf(item)
   const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
   const lines: string[] = []
-  lines.push(...renderChildrenSection("Issue (待复核)", own))
+  lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
   const pending = issues.filter((c) => isQualityAdjudicable(c, dimension))
-  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
   return lines
 }
 
@@ -898,16 +926,37 @@ function agentToDimension(agent: string): Dimension | undefined {
 }
 
 /** 渲染 children 区块：标题 + 逐条列表，空列表返回空数组。 */
-function renderChildrenSection(title: string, children: WorkItem[]): string[] {
+function renderChildrenSection(title: string, children: WorkItem[], exemptionCtx?: ExemptionHintCtx): string[] {
   if (children.length === 0) return []
   const lines = [`## ${title}`, ""]
-  for (const c of children) lines.push(renderChildIssue(c))
+  for (const c of children) lines.push(renderChildIssue(c, exemptionCtx))
   lines.push("")
   return lines
 }
 
+/** 逐条 issue 的豁免相关只读提示（a：tool 层无规则名提示；b：疑似行号漂移提示）。纯渲染，不写任何状态。
+ *  b 仅提示「(rule+file) 命中清单但 line 不同」的条目；已命中降级（exempted_hit 标记，
+ *  即 (rule+file+line) 完全命中）的 issue 不重复提示漂移。 */
+function appendExemptionHints(
+  lines: string[],
+  child: WorkItem,
+  f: ReturnType<typeof resolveChildIssueFields>,
+  exemptionCtx: ExemptionHintCtx | undefined,
+): void {
+  const rule = typeof child.metadata["rule"] === "string" ? child.metadata["rule"] : ""
+  if (f.sourcePhase === "tool" && rule === "") {
+    lines.push("  - 无规则名：豁免结论不会写入跨 change 清单，下个 change 将重新报此问题")
+  }
+  if (exemptionCtx && rule !== "" && f.file !== "" && child.metadata[EXEMPTED_HIT_KEY] === undefined) {
+    const hitLine = exemptionCtx.ruleFileLines.get([rule, f.file].join("\u0000"))
+    if (hitLine !== undefined && hitLine !== f.line) {
+      lines.push(`  - 疑似行号漂移：豁免清单记录 line=${hitLine}，当前报 line=${f.line}，请核对是否同一问题`)
+    }
+  }
+}
+
 /** 单个 issue child 渲染（参考 views.renderIssueItem 风格，字段来自 WorkItem.metadata）。 */
-function renderChildIssue(child: WorkItem): string {
+function renderChildIssue(child: WorkItem, exemptionCtx?: ExemptionHintCtx): string {
   const f = resolveChildIssueFields(child)
   const id = child.externalId ?? child.id.replace(/^issue:/, "")
   const rule = typeof child.metadata["rule"] === "string" ? ` | ${child.metadata["rule"]}` : ""
@@ -916,6 +965,7 @@ function renderChildIssue(child: WorkItem): string {
   ]
   if (f.file) lines.push(`  - 文件：${formatFilePath(f.file, f.line)}`)
   lines.push(`  - 描述：${child.description}`)
+  appendExemptionHints(lines, child, f, exemptionCtx)
   if (child.metadata[EXEMPTED_HIT_KEY] !== undefined) {
     const rule = typeof child.metadata[EXEMPTED_HIT_KEY] === "string" ? child.metadata[EXEMPTED_HIT_KEY] : ""
     lines.push(`  - ⚠️ 命中项目级豁免清单${rule ? `（rule=${rule}）` : ""}的存量问题，已按 Info 处理，无需重复豁免`)

@@ -194,7 +194,7 @@ tests/                        — Bun 测试，使用 FakeGitRunner
 - **阻塞升级**：不可自主决策的问题持久化、暂停、用户恢复、架构复核
 - **Worktree 隔离**：`git worktree` 分支隔离，自动合并清理。`opx_agent_submit` 检测到主仓库本 change 目录下的 openspec 文档污染时自动并入 worktree 分支并清理主仓库工作树
 - **执行边界**：架构师限定 developer 的目录和包范围，reviewer 新报 issue 自动扩展
-- **豁免机制**：developer 通过 `exempt_issue_ids` 申请豁免，issue 进入 review（待裁定）态 → 报 issue 的 review step 通过 `exempt_adjudications` 裁定（dismissed→cancelled、rejected→回修）。裁定为 dismissed 且 issue 携带工具规则（rule）时，豁免结论写入主仓库根 `openspec/states/exemptions.json` 项目级跨 change 豁免清单（原子写 + 专用目录锁，并发安全）；后续新 change 的 tool review 全量扫描提报同 (rule+file+line) 的存量问题时自动降为 Info 级，不阻塞、无需重复豁免，视图以「存量豁免提示」标注
+- **豁免机制**：developer 通过 `exempt_issue_ids` 申请豁免，issue 进入 review（待裁定）态 → 报 issue 的 review step 通过 `exempt_adjudications` 裁定（dismissed→cancelled、rejected→回修）。裁定为 dismissed 且 issue 携带工具规则（rule）时，豁免结论写入主仓库根 `openspec/states/exemptions.json` 项目级跨 change 豁免清单（原子写 + 专用目录锁，并发安全）；后续新 change 的 tool review 全量扫描提报同 (rule+file+line) 的存量问题时自动降为 Info 级，不阻塞、无需重复豁免，视图以「存量豁免提示」标注。SonarQube 平台状态标注仅作用于当次项目实例、不跨 change（每次 change 独立项目 key）；跨 change 持续豁免须走编排豁免流程（exempt_issue_ids → 裁定 dismissed 落库豁免清单）
 - **校验守卫**：多维度校验确保流程完整性
 - **状态异常防护**：`opx_status` 检测到 phase ↔ step 归属错位（含 currentStep 指向未声明 step）时，子代理一律收到 ⛔ 状态异常拒绝视图（禁止执行任何 opx_* 变更操作），编排者收到 ⚠️ 诊断并指引 `opx_orch_init(recovery=...)` 恢复；`opx_agent_submit` 对错位态提交同样抛错拒绝，零状态变更
 - **资源隔离命名空间**：每个 change 分配稳定隔离标识（SHA256(changeId) 前 6 位 hex），Agent 通过 `opx_status` 视图获取；隔离标识派生 SonarQube projectKey 后缀、docker compose 项目名与应用端口，并发 change 在外部共享资源（扫描项目、应用端口、容器）上互不冲突。历史进行中 change 的状态读取时自动补全隔离标识，无需手动迁移；旧 key 产生的扫描数据不可追溯，但 issue 清单已固化在 state，不影响继续编排

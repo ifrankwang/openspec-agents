@@ -325,7 +325,7 @@ curl -sf -u <token>: "http://localhost:9000/api/hotspots/search?projectKey=<项�
 
 MUST 携带 `inNewCodePeriod=true` 限定 new code 期、`status=TO_REVIEW` 限定待评审热点，否则返回全项目历史存量热点。仅报告待评审热点，已审 SAFE/FIXED 不纳入。
 
-Security Hotspot 不可用 NOSONAR 注释抑制，须在平台标注 SAFE 或走编排豁免流程；命中项目级豁免清单的存量热点按 Info 提报，不重新豁免。
+Security Hotspot 不可用 NOSONAR 注释抑制。平台状态标注（SAFE/FIXED 等）仅作用于当前 SonarQube 项目的 issue 实例；本编排下每次 change 使用独立项目 key（`<项目原key>-<namespace>`，namespace 按变更隔离），平台状态不随代码跨 change 继承，同一代码问题在新项目的全量扫描中以 OPEN 状态重新出现；跨 change 持续豁免的结论承载位置由编排层定义。命中项目级豁免清单的存量热点按 Info 提报，不重新豁免。
 
 热点无 BLOCKER/CRITICAL 分级体系，按 `vulnerabilityProbability` 映射 issue severity：HIGH → High、MEDIUM → Medium、LOW → Low；TO_REVIEW 表示待评审而非已确认缺陷。违规映射沿用第 8 节映射表 `SECURITY_HOTSPOT → security`。
 

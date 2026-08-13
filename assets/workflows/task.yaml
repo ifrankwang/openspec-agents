@@ -77,6 +77,7 @@ phases:
           - "实施前请注意遵守：{{notes}}"
           - "生产路径禁止 stub/fake/空实现/硬编码成功"
           - "需以 verdict=failed + blocker 上报的条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
+          - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
   - name: review
     steps:
       - id: verify_tool
@@ -102,6 +103,7 @@ phases:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行工具但不得 edit/write 任何文件"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
+          - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
       - id: verify_task
         agents:
           - id: openspec-reviewer-task

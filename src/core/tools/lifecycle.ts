@@ -5,6 +5,7 @@ import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
+import { readExemptions } from "../exemptions.ts"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
 import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
@@ -561,7 +562,9 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
   }
   // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
   const exemptedHits = item.children.filter((c) => c.type === "issue" && c.metadata["exempted_hit"] !== undefined).length
-  return renderWorkflowStatusView(item, workflow, rec, { agent, orchestrator: ctx.orchestrator, identityDeclared: ctx.identityDeclared }, { state, tg, mainPollution, toolChanges, exemptedHits })
+  // 渲染期豁免清单提示数据源：渲染前异步读取一次（renderChildIssue 为同步函数，清单条目以参数传入，不在循环内重复读）
+  const exemptionItems = (await readExemptions(ctx.worktree)).items
+  return renderWorkflowStatusView(item, workflow, rec, { agent, orchestrator: ctx.orchestrator, identityDeclared: ctx.identityDeclared }, { state, tg, mainPollution, toolChanges, exemptedHits, exemptionItems })
 }
 
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
