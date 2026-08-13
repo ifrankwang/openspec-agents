@@ -162,7 +162,7 @@ MCP server 启动时自动在 `http://127.0.0.1:4519` 启动编排进度看板�
 |------|------|
 | `bun test` | 运行所有测试 |
 | `bun run typecheck` | TypeScript 类型检查 |
-| `npm run sync` | 同步源码到本机全部安装缓存（多目标） |
+| `npm run sync` | 同步源码到本机全部安装缓存（多目标：opencode 插件缓存直接同步源码；ZCode/Claude Code 插件缓存与市场克隆先打包再同步） |
 
 ## 项目结构
 
