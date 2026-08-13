@@ -1,6 +1,6 @@
 ---
 name: java-code-maintainability
-description: Java 代码可维护性规范——方法长度、类职责、异常处理、MapStruct 转换、魔法数提取、DRY 禁止、构建忽略项。仅在 Java 后端项目使用。
+description: Java 代码可维护性规范——方法长度、类职责、异常处理、MapStruct 转换、魔法数提取、DRY 禁止、死代码、构建忽略项。仅在 Java 后端项目使用。
 capabilities: ["maintainability", "tech-stack-java"]
 ---
 
@@ -51,3 +51,12 @@ public interface OrderConverter {
 
 - 构建产物目录（`target/`、`node_modules/`、`dist/`）不得提交仓库
 - 已在 .gitignore 中配置即可
+
+## 死代码
+
+- 未使用的 import / 私有方法 / 字段 / 局部变量 → Low 级别 issue
+- 注释掉的代码：零散行 → Low 级别 issue；注释掉的整段逻辑 → Medium 级别 issue（历史追溯依赖版本控制，注释掉的代码应删除而非保留）
+- 不可达分支 / 失效条件判断 → Medium 级别 issue
+- 未被引用的类 / 接口 → Medium 级别 issue
+- 未使用的依赖 → Low 级别 issue
+- 识别未使用字段/方法时排除框架反射与代码生成场景（如 MapStruct、MyBatis、Lombok）
