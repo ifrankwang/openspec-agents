@@ -64,6 +64,11 @@ describe("claude-code 适配器", () => {
       expect(existsSync(join(pluginDir, "skills", "orchestrator", "SKILL.md"))).toBe(true)
       expect(existsSync(join(pluginDir, "skills", "java-quality-gate", "reference", "pmd-rules.md"))).toBe(true)
 
+      // assets/workflows：task.yaml 随包分发且与源码一致（bundle 逐级上溯探测读取）
+      const bundledWorkflow = readFileSync(join(pluginDir, "assets", "workflows", "task.yaml"), "utf-8")
+      const sourceWorkflow = readFileSync(join(import.meta.dir, "..", "assets", "workflows", "task.yaml"), "utf-8")
+      expect(bundledWorkflow).toBe(sourceWorkflow)
+
       // .mcp.json：stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认无人值守（官方模板变量）
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
       const entry = mcp.mcpServers["openspec-orchestrate"]
@@ -162,6 +167,11 @@ describe("zcode 适配器", () => {
       expect(result.skills).toContain("orchestrator")
       expect(existsSync(join(pluginDir, "skills", "orchestrator", "SKILL.md"))).toBe(true)
       expect(existsSync(join(pluginDir, "skills", "java-quality-gate", "reference", "pmd-rules.md"))).toBe(true)
+
+      // assets/workflows：task.yaml 随包分发且与源码一致（bundle 逐级上溯探测读取）
+      const bundledWorkflow = readFileSync(join(pluginDir, "assets", "workflows", "task.yaml"), "utf-8")
+      const sourceWorkflow = readFileSync(join(import.meta.dir, "..", "assets", "workflows", "task.yaml"), "utf-8")
+      expect(bundledWorkflow).toBe(sourceWorkflow)
 
       // .mcp.json：stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认无人值守
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))

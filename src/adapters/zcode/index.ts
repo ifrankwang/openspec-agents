@@ -28,7 +28,8 @@ export type ZcodePluginBuildResult = PluginPackageResult
 
 /**
  * 生成 ZCode 官方插件包到 outDir（默认 dist/zcode-plugin/）：
- * .zcode-plugin/plugin.json 清单、agents/*.md、skills/<名>/、.mcp.json、.mcp-server/cli.mjs bundle。
+ * .zcode-plugin/plugin.json 清单、agents/*.md、skills/<名>/、assets/workflows/、.mcp.json、
+ * .mcp-server/cli.mjs bundle。
  * 返回生成的组件清单供调用方/测试断言。
  */
 export function buildZcodePlugin(outDir: string = ZCODE_PLUGIN_DIR): ZcodePluginBuildResult {

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, existsSync } from "node:fs"
 import { join, dirname, resolve as pathResolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import yaml from "js-yaml"
@@ -22,7 +22,31 @@ export interface LoadedWorkflow extends WorkflowConfig {
   stepMap: Map<string, { step: StepConfig; phase: PhaseConfig }>
 }
 
-export const TASK_WORKFLOW_PATH = pathResolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "assets", "workflows", "task.yaml")
+/**
+ * 定位 task.yaml：源码（src/core/workflow/ 上溯 3 级=仓库根）、插件包 dist 形态
+ * （dist/zcode-plugin/.mcp-server/ 上溯 1 级=插件根）与 ZCode 缓存嵌套形态
+ * （cache/<marketplace>/<plugin>/<version>/.mcp-server/ 上溯 1 级=版本目录）部署深度不同，
+ * 故从模块所在目录逐级上溯探测 assets/workflows/task.yaml，首个命中即采用（首中即用）。
+ * bundle 单文件合并后 import.meta.url 指向部署位置（cli.mjs），源码形态指向本文件自身，两者自然成立。
+ */
+export function resolveTaskWorkflowPath(moduleUrl: string): string {
+  const startDir = dirname(fileURLToPath(moduleUrl))
+  let dir = startDir
+  let probed = 0
+  for (;;) {
+    const candidate = pathResolve(dir, "assets", "workflows", "task.yaml")
+    if (existsSync(candidate)) return candidate
+    probed++
+    const parent = dirname(dir)
+    if (parent === dir) break // 到达文件系统根
+    dir = parent
+  }
+  throw new Error(`workflow 文件缺失：从 ${startDir} 上溯 ${probed} 级未找到 assets/workflows/task.yaml`)
+}
+
+// 模块加载期求值，workflow 缺失即启动抛错（fail-fast）：opx_* 工具全部依赖 workflow，缺失时
+// server 无可用性，启动即抛比首次调用才报错更早且可读（可读错误替代原生 ENOENT）。
+export const TASK_WORKFLOW_PATH = resolveTaskWorkflowPath(import.meta.url)
 
 const workflowFileCache = new Map<string, LoadedWorkflow>()
 

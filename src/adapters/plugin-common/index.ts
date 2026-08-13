@@ -7,7 +7,8 @@
  *
  * 生成产物为一个完整插件目录：plugin.json 清单 + agents/*.md（从 assets/agents 转换、
  * 排除主代理模板、frontmatter 仅保留 name/description）+ skills/<名>/（含 orchestrator 与
- * reference/ 附属文件）+ .mcp.json（stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认
+ * reference/ 附属文件）+ assets/workflows/（task.yaml workflow 定义，bundle 内按部署深度
+ * 逐级上溯探测读取）+ .mcp.json（stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认
  * 无人值守）+ .mcp-server/cli.mjs 自包含 bundle（node 直接执行，不依赖 node_modules）。
  * 配套 marketplace.json（相对路径 source），用户本地安装即生效，Disable/Uninstall 整体消失。
  */
@@ -113,7 +114,7 @@ export interface PluginPackageResult {
 
 /**
  * 生成官方插件包到 outDir：<manifestDirName>/plugin.json 清单、agents/*.md、skills/<名>/、
- * .mcp.json、.mcp-server/cli.mjs bundle。返回生成的组件清单供调用方/测试断言。
+ * assets/workflows/、.mcp.json、.mcp-server/cli.mjs bundle。返回生成的组件清单供调用方/测试断言。
  */
 export function buildPluginPackage({ outDir, manifestDirName }: PluginPackageParams): PluginPackageResult {
   rmSync(outDir, { recursive: true, force: true })
@@ -125,6 +126,9 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
   const agents = buildAgents(join(outDir, "agents"))
   const skills = buildSkills(join(outDir, "skills"))
   bundleMcpServer(outDir)
+  // workflow 定义随包分发：bundle 内 TASK_WORKFLOW_PATH 按部署深度逐级上溯探测
+  // assets/workflows/task.yaml，插件根（dist/cache 形态）上溯 1 级即命中
+  cpSync(resolve("assets", "workflows"), join(outDir, "assets", "workflows"), { recursive: true })
 
   writeFileSync(
     join(outDir, manifestDirName, "plugin.json"),

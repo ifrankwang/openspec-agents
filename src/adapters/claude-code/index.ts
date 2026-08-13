@@ -31,7 +31,8 @@ export type ClaudeCodePluginBuildResult = PluginPackageResult
 
 /**
  * 生成 Claude Code 官方插件包到 outDir（默认 dist/claude-code-plugin/）：
- * .claude-plugin/plugin.json 清单、agents/*.md、skills/<名>/、.mcp.json、.mcp-server/cli.mjs bundle。
+ * .claude-plugin/plugin.json 清单、agents/*.md、skills/<名>/、assets/workflows/、.mcp.json、
+ * .mcp-server/cli.mjs bundle。
  * 返回生成的组件清单供调用方/测试断言。
  */
 export function buildClaudeCodePlugin(outDir: string = CLAUDE_CODE_PLUGIN_DIR): ClaudeCodePluginBuildResult {

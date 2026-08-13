@@ -120,7 +120,7 @@ bun add openspec-orchestrate @opencode-ai/plugin
    或会话内 `/plugin marketplace add ./` → `/plugin install openspec-orchestrate`；安装后如提示则执行 `/reload-plugins`
 3. 禁用/卸载：`/plugin uninstall openspec-orchestrate`（或按作用域移除 `.claude/settings.json` 的 enabledPlugins），插件整体消失
 
-claude code 接入走官方插件包形态（`.claude-plugin/plugin.json` 清单 + `agents/` + `skills/` + `.mcp.json` + 自包含 MCP server bundle），不再向目标仓库落盘 `.claude/agents`、`.claude/skills` 与 `.mcp.json`。插件子代理为只读形态（插件子代理不支持 `hooks`/`mcpServers`/`permissionMode` frontmatter——本项目子代理本就只读，无冲突）；MCP server key 由 Claude Code 自动命名空间（`plugin:<name>:<server>`）。MCP server 为 stdio + 默认无人值守，`--worktree` 指向当前打开项目根（官方模板变量 `${CLAUDE_PROJECT_DIR}`），插件安装后跨项目生效。`agents/*.md` 仅保留 `name`/`description` frontmatter，opencode 的 `mode`/`permission`/`steps` 等字段被丢弃。插件安装时复制到本地缓存（`~/.claude/plugins/cache`），MCP server 入口为插件内自包含 bundle，不依赖目标环境 node_modules。
+claude code 接入走官方插件包形态（`.claude-plugin/plugin.json` 清单 + `agents/` + `skills/` + `assets/workflows/`（task.yaml workflow 定义，bundle 按部署深度逐级上溯探测读取）+ `.mcp.json` + 自包含 MCP server bundle），不再向目标仓库落盘 `.claude/agents`、`.claude/skills` 与 `.mcp.json`。插件子代理为只读形态（插件子代理不支持 `hooks`/`mcpServers`/`permissionMode` frontmatter——本项目子代理本就只读，无冲突）；MCP server key 由 Claude Code 自动命名空间（`plugin:<name>:<server>`）。MCP server 为 stdio + 默认无人值守，`--worktree` 指向当前打开项目根（官方模板变量 `${CLAUDE_PROJECT_DIR}`），插件安装后跨项目生效。`agents/*.md` 仅保留 `name`/`description` frontmatter，opencode 的 `mode`/`permission`/`steps` 等字段被丢弃。插件安装时复制到本地缓存（`~/.claude/plugins/cache`），MCP server 入口为插件内自包含 bundle，不依赖目标环境 node_modules。
 
 分发边界：插件产物不入库（`dist/` 已在 `.gitignore`），clone 仓库后 `dist/claude-code-plugin/` 不存在，需先在目标环境运行 `bun run claude:plugin` 生成产物再做本地安装；`.claude-plugin/marketplace.json` 本身入库，其 source 为相对路径，本机生成产物后即可作为本地安装源。团队分发仅支持「目标环境先生成产物、再本地安装」；github source 分发留作未来评估。
 
@@ -138,7 +138,7 @@ claude code 接入走官方插件包形态（`.claude-plugin/plugin.json` 清单
 1. 生成插件包与市场清单：`bun run zcode:plugin`（产物：`dist/zcode-plugin/` 插件包 + 仓库根 `marketplace.json`；生成依赖本机 bun 环境）
 2. ZCode GUI 本地安装：设置 → 插件 → Create → Add marketplace → 选择仓库根目录（marketplace.json 所在目录，source 相对路径解析到本机生成的 `dist/zcode-plugin/`）→ Personal 区找到 openspec-orchestrate → Install。安装即生效（agent/skill/MCP 组件注册进当前工作区）；Disable/Uninstall 即全部组件消失
 
-zcode 接入走官方插件包形态（`.zcode-plugin/plugin.json` 清单 + `agents/` + `skills/` + `.mcp.json` + 自包含 MCP server bundle），安装/启用/禁用/卸载均为 GUI 动作，不再落盘 `~/.zcode` 与项目根 `.zcode/config.json`。插件子代理为只读形态；MCP server key 由 ZCode 自动命名空间（`plugin:openspec-orchestrate:openspec-orchestrate`）。MCP server 为 stdio + 默认无人值守，`--worktree` 指向当前打开项目根（官方模板变量 `${CLAUDE_PROJECT_DIR}`），插件用户级安装后跨项目生效。`agents/*.md` 仅保留 `name`/`description` frontmatter，opencode 的 `mode`/`permission`/`steps` 等字段被丢弃，zcode 以自己的工具体系定义行为。
+zcode 接入走官方插件包形态（`.zcode-plugin/plugin.json` 清单 + `agents/` + `skills/` + `assets/workflows/`（task.yaml workflow 定义，bundle 按部署深度逐级上溯探测读取）+ `.mcp.json` + 自包含 MCP server bundle），安装/启用/禁用/卸载均为 GUI 动作，不再落盘 `~/.zcode` 与项目根 `.zcode/config.json`。插件子代理为只读形态；MCP server key 由 ZCode 自动命名空间（`plugin:openspec-orchestrate:openspec-orchestrate`）。MCP server 为 stdio + 默认无人值守，`--worktree` 指向当前打开项目根（官方模板变量 `${CLAUDE_PROJECT_DIR}`），插件用户级安装后跨项目生效。`agents/*.md` 仅保留 `name`/`description` frontmatter，opencode 的 `mode`/`permission`/`steps` 等字段被丢弃，zcode 以自己的工具体系定义行为。
 
 分发边界：插件产物不入库（`dist/` 已在 `.gitignore`），clone 仓库后 `dist/zcode-plugin/` 不存在，需先在目标环境运行 `bun run zcode:plugin` 生成产物再做本地目录安装；`marketplace.json` 本身入库，其 source 为相对路径，本机生成产物后即可作为本地安装源。团队分发仅支持「目标环境先生成产物、再本地安装」；输出目录纳入版本管理或 github source 分发留作未来评估。
 
