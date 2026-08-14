@@ -9,7 +9,7 @@
       "name": "openspec-orchestrate",
       "source": "./dist/zcode-plugin",
       "description": "OpenSpec change 编排：opx_* 编排工具（MCP）+ 编排子代理 + orchestrator skill，非 OpenCode agent 默认无人值守",
-      "version": "0.114.0"
+      "version": "0.115.0"
     }
   ]
 }
