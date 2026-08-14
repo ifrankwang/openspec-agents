@@ -19,8 +19,6 @@ XML Mapper 和注解 SQL 必须使用 `#{param}` 形式，严禁 `+` 字符串�
 
 **PO ↔ Domain 转换**：使用 MapStruct Converter（按项目 MapStruct 规范）
 
-**DB 状态字段**：DB 用 SMALLINT → Domain 映射为枚举 → MyBatisPlus TypeHandler 自动转换，禁止业务代码直接判断数值
-
 ## Apache POI
 
 **大文件流式读取**：

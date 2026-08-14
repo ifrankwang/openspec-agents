@@ -21,7 +21,7 @@ capabilities: ["db-design", "architecture", "tech-stack-java"]
 | 查询方式 | 优先 `LambdaQueryWrapper` 面向对象方法；仅复杂多表关联/方言特性/Wrapper 难以表达时才写 XML SQL |
 | 避免 | `select *`，防止映射不稳定 |
 | Mapper XML | 语句间保持空行提升可读性 |
-| 枚举映射 | 实体枚举字段用 `@EnumValue` 映射 DB SMALLINT |
+| 枚举映射 | 状态/类别等确定性字段在 DAO 层映射为枚举，经框架层统一枚举处理管道映射 DB TINYINT，业务代码禁止直接判断数值 |
 | JSONB 映射 | 用具体 Java 类型 + typeHandler（需验证 MyBatisPlus 对 PG JSONB 适配，可能需自定义 typeHandler） |
 
 使用 MyBatisPlus 标准 `BaseMapper` + `LambdaQueryWrapper`，不依赖第三方增强框架的自研 Wrapper。

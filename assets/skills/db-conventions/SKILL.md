@@ -1,6 +1,6 @@
 ---
 name: db-conventions
-description: 数据库设计通用约定——表命名、主键选择、审计字段、逻辑删除、索引命名、状态字段、操作人来源链路。技术栈无关（不绑定具体 SQL 方言）。
+description: 数据库设计通用约定——表命名、主键选择、审计字段、逻辑删除、索引命名、确定性标记（状态/类别）与字典字段、操作人来源链路。技术栈无关（不绑定具体 SQL 方言）。
 capabilities: ["db-design", "architecture"]
 ---
 
@@ -12,7 +12,8 @@ capabilities: ["db-design", "architecture"]
 |----|------|------|
 | 表名前缀 | `{project_prefix}_` + 业务域名 | 如 `{project_prefix}_order`、`{project_prefix}_order_item` |
 | 主键 | UUID | 全局唯一，不含业务含义 |
-| 状态字段 | 整数 (SMALLINT/INT) | 实体层映射为枚举，禁止业务代码直接判断数值 |
+| 状态/类别等确定性标记 | TINYINT | 确定性取值集（码集固定，非字典管理） |
+| 字典类标记 | VARCHAR（原值 code） | 非确定性取值集，由字典动态管理 |
 | 半结构化字段 | JSON / JSONB | 建索引（如 GIN）加速查询 |
 
 数据库类型和具体 SQL 语法由项目技术栈确定。

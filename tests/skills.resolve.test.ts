@@ -152,7 +152,7 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
       expect(r.skillNames.length).toBeGreaterThan(0)
     }
     expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
-    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "quality-gate", "dev-practices"])
+    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "quality-gate", "dev-practices", "db-design"])
     expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
     expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "efficiency", "dev-practices"])
     expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
