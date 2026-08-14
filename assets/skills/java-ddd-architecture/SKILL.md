@@ -442,8 +442,9 @@ public class SearchProviderClient {                 // infrastructure/acl 实现
 | 18 | ACL 只允许 infrastructure → domain 方向，领域模型不依赖外部模型 | 外部模型污染领域层 |
 | 19 | 外部系统命名禁止上浮——application 接口方法、DTO 类名/字段名、interfaces 层 DTO 禁止出现外部系统名（第三方/遗留系统/中间件名），须用领域语义命名；外部系统名仅限 infrastructure（ACL/适配器/配置） | 接口契约污染、架构腐化 |
 | 20 | 命名须体现语义并遵循统一语言——类/方法/字段命名与术语表一致，禁止泛化命名（如 process/handle/data）掩盖真实意图，禁止同名不同义造成混淆 | 可读性下降、概念混淆 |
+| 21 | 禁止另起一套逻辑——同类能力已有既有实现时须复用或扩展，确需平行引入（新旧并存）时须附带既有实现的迁移方案 | 同类能力多套方案并存、技术债累积 |
 
-**声明**：上表同时适用于四层与六边形两种风格。六边形风格下"domain"指内核（domain + application 合并语义），多数规则表述不变——规则 1（内核零框架依赖）、规则 2（依赖方向不可逆）、规则 3、规则 8、规则 9、规则 16、规则 18、规则 19、规则 20 在两种风格下均一致。仅 Port 定义位置相关条目注明差异：规则 17 的领域事件契约仍在内核（domain/model/event）定义、事件 handler 实现仍在 infrastructure；Repository、EventPublisher、OrderGenerationPort 等 Port 接口在四层下固定定义于 domain，六边形下可为 domain（driven port）或 application（driving port），但全项目须一致。
+**声明**：上表同时适用于四层与六边形两种风格。六边形风格下"domain"指内核（domain + application 合并语义），多数规则表述不变——规则 1（内核零框架依赖）、规则 2（依赖方向不可逆）、规则 3、规则 8、规则 9、规则 16、规则 18、规则 19、规则 20、规则 21 在两种风格下均一致。仅 Port 定义位置相关条目注明差异：规则 17 的领域事件契约仍在内核（domain/model/event）定义、事件 handler 实现仍在 infrastructure；Repository、EventPublisher、OrderGenerationPort 等 Port 接口在四层下固定定义于 domain，六边形下可为 domain（driven port）或 application（driving port），但全项目须一致。
 
 ## Port / Adapter 模式
 
