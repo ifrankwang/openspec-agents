@@ -49,6 +49,23 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
     expect([...r.generic, ...r.techStackOnly].sort()).toEqual([...r.skillNames].sort())
   })
 
+  test("architecture 命中技术债识别 skill（generic/techStackOnly 分组）", () => {
+    const r = resolveSkillsForCapabilities(["architecture"])
+    expect(r.skillNames).toContain("technical-debt")
+    expect(r.skillNames).toContain("java-technical-debt")
+    expect(r.generic).toContain("technical-debt")
+    expect(r.generic).not.toContain("java-technical-debt")
+    expect(r.techStackOnly).toContain("java-technical-debt")
+  })
+
+  test("其他维度 tag 不命中技术债识别 skill（归口边界防误伤）", () => {
+    for (const cap of ["maintainability", "security", "performance", "style", "db-design", "api-design", "api-testing", "dev-practices"]) {
+      const r = resolveSkillsForCapabilities([cap])
+      expect(r.skillNames).not.toContain("technical-debt")
+      expect(r.skillNames).not.toContain("java-technical-debt")
+    }
+  })
+
   test("无匹配 tag → 三列表均为空", () => {
     const r = resolveSkillsForCapabilities(["no-such-capability"])
     expect(r.skillNames).toEqual([])
