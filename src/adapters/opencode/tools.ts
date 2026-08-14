@@ -52,7 +52,7 @@ export const status = tool({
 
 export const complete_task_group = tool({
   description:
-    "完成任务组收尾：合并 task-group 分支到 baseBranch → 清理 worktree 与分支。合并冲突时中止并返回 blocked（保留 worktree/分支）。",
+    "完成任务组收尾：合并 task-group 分支到 baseBranch → 清理 worktree 与分支。须在收尾验证（verify_cleanup）通过后调用。合并冲突时中止并返回 blocked（保留 worktree/分支）。",
   args: jsonSchemaToZod(completeTaskGroupSchema).shape as any,
   async execute(args, context) {
     return completeTaskGroupExecute({ change_id: args.change_id as string }, makeCtx(context))

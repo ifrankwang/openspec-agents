@@ -15,7 +15,7 @@ import { __setGitRunner } from "../src/core/git"
 import { setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool,
-  driveToVerifyTask, driveToQuality, submitQualityPassed,
+  driveToVerifyTask, driveToQuality, submitQualityPassed, submitCleanupPassed,
   taskItemOf, taskListOf, blockersOf, metaOf, readItem,
 } from "./helpers-workflow"
 
@@ -108,13 +108,18 @@ describe("阶段驱动助手", () => {
     } finally { teardown(root) }
   })
 
-  test("driveToQuality + submitQualityPassed：推进到 verify_quality 后 5 维提交到 done", async () => {
+  test("driveToQuality + submitQualityPassed：推进到 verify_quality 后 5 维提交到 verify_cleanup，收尾验证后 done", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx, item } = await driveToQuality(wt, CID)
       expect(item.currentStep).toBe("verify_quality")
 
       await submitQualityPassed(ctx, CID)
+      const atCleanup = readItem(wt, CID)
+      expect(atCleanup.phase).toBe("review")
+      expect(atCleanup.currentStep).toBe("verify_cleanup")
+
+      await submitCleanupPassed(ctx, CID)
       const done = readItem(wt, CID)
       expect(done.phase).toBe("done")
       expect(done.currentStep).toBeNull()

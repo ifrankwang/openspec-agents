@@ -177,6 +177,7 @@ const INTERPOLATION_ALLOWED_KEYS = new Set([
   "allowed_directories",
   "allowed_packages",
   "notes",
+  "base_branch",
 ])
 
 /**

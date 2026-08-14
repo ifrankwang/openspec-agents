@@ -114,7 +114,7 @@ describe("task.yaml 加载", () => {
     expect(wf.phases.map((p) => p.name)).toEqual(["todo", "in_progress", "review"])
     const expectedSteps = [
       "analyze", "implement",
-      "verify_tool", "verify_task", "verify_quality",
+      "verify_tool", "verify_task", "verify_quality", "verify_cleanup",
     ]
     const stepIds = wf.phases.flatMap((p) => p.steps.map((s) => s.id))
     expect(stepIds).toEqual(expectedSteps)

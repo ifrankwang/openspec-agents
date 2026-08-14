@@ -338,7 +338,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
     } finally { teardown(root) }
   })
 
-  test("三个 review step 全 passed 且 task children 终态 → 收口 done，currentStep 置 null", async () => {
+  test("四个 review step 全 passed 且 task children 终态 → 收口 done，currentStep 置 null", async () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
@@ -350,6 +350,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
           "implement:openspec-developer": "passed",
           "verify_tool:openspec-reviewer-tool": "passed",
           "verify_task:openspec-reviewer-task": "passed",
+          "verify_cleanup:openspec-developer": "passed",
         }
         for (const d of DIMENSION_AGENTS) {
           item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
@@ -365,7 +366,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
     } finally { teardown(root) }
   })
 
-  test("全 passed 但存在未终态 task child → 停在 verify_quality（不收口 done）", async () => {
+  test("全 passed（含 verify_cleanup）但存在未终态 task child → 停在 verify_quality（不收口 done）", async () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
@@ -375,6 +376,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.tags = {
           "verify_tool:openspec-reviewer-tool": "passed",
           "verify_task:openspec-reviewer-task": "passed",
+          "verify_cleanup:openspec-developer": "passed",
         }
         for (const d of DIMENSION_AGENTS) {
           item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
@@ -441,11 +443,16 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
         expect(readItem(wt, CID).currentStep).toBe("verify_quality")
       }
-      // 最后一维提交 → 全部维度已 passed → 聚合推进 done（task children 经 driveToQuality 已终态）
+      // 最后一维提交 → 全部维度已 passed → 聚合推进 verify_cleanup（task children 经 driveToQuality 已终态）
       await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed" },
         ctx.dims["maintainability"]
       )
+      item = readItem(wt, CID)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_cleanup")
+      // developer 收尾验证通过 → done
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
       item = readItem(wt, CID)
       expect(item.phase).toBe("done")
       expect(item.currentStep).toBeNull()
@@ -650,13 +657,17 @@ describe("B7. verify_quality 维度 gate", () => {
     } finally { teardown(root) }
   })
 
-  test("全部 5 维提交 → done 终态；之后任意维度不再被分派", async () => {
+  test("全部 5 维提交 → verify_cleanup；developer 收尾验证通过后 done 终态；之后任意维度不再被分派", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
       for (const d of DIMENSION_AGENTS) {
         await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
       }
+      const atCleanup = readItem(wt, CID)
+      expect(atCleanup.phase).toBe("review")
+      expect(atCleanup.currentStep).toBe("verify_cleanup")
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
       const done = readItem(wt, CID)
       expect(done.phase).toBe("done")
       expect(done.currentStep).toBeNull()
@@ -694,7 +705,7 @@ describe("B7.5. verify_quality 聚合判定", () => {
     } finally { teardown(root) }
   })
 
-  test("全部 5 维 passed 才推进 done（多 agent 聚合通过）", async () => {
+  test("全部 5 维 passed 才推进 verify_cleanup（多 agent 聚合通过），收尾验证后 done", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
@@ -704,6 +715,8 @@ describe("B7.5. verify_quality 聚合判定", () => {
       }
       await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["security"])
       await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["maintainability"])
+      expect(readItem(wt, CID).currentStep).toBe("verify_cleanup")
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
       expect(readItem(wt, CID).phase).toBe("done")
     } finally { teardown(root) }
   })
@@ -909,14 +922,17 @@ describe("B10. dev 提交后 review 层按报源层精化重置", () => {
       expect(archView).toContain("# ⛔ 当前 step 阻塞中，等待编排处理")
       expect(archView).not.toContain("本层待裁定豁免申请")
 
-      // 补交 dismissed + verdict=passed → 豁免解除 → 阻塞解除 → 正常推进 done
+      // 补交 dismissed + verdict=passed → 豁免解除 → 阻塞解除 → 正常推进 verify_cleanup
       await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
         ctx.dims["style"]
       )
       const after = readItem(wt, CID)
       expect(after.children.find((c: any) => c.externalId === "7").phase).toBe("cancelled")
-      expect(after.phase).toBe("done")
+      expect(after.currentStep).toBe("verify_cleanup")
+      // developer 收尾验证通过 → done
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
+      expect(readItem(wt, CID).phase).toBe("done")
     } finally { teardown(root) }
   })
 })
@@ -1025,11 +1041,15 @@ describe("D2. failed 维度 issue 全终态且无在途豁免 → 自动翻 pass
           children: [], labels: [], severity: "Low",
         })
       })
-      // 其余 4 维提交 passed → 聚合判定时 style 翻盘为 passed，全部非 pending → 推进到 done
+      // 其余 4 维提交 passed → 聚合判定时 style 翻盘为 passed，全部非 pending → 推进 verify_cleanup
       for (const d of DIMENSION_AGENTS) {
         if (d === "style") continue
         await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
       }
+      const atCleanup = readItem(wt, CID)
+      expect(atCleanup.currentStep).toBe("verify_cleanup")
+      // developer 收尾验证通过 → done
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
       const done = readItem(wt, CID)
       expect(done.phase).toBe("done")
       expect(done.currentStep).toBeNull()
@@ -1156,29 +1176,36 @@ describe("D1. 维度名下有在途豁免申请 → 聚合等待期重新唤起�
         },
         ctx.dims["style"]
       )
-      // performance 提交 → 全部非 pending，聚合判定含 architecture 翻盘 → 整体推进 done
+      // performance 提交 → 全部非 pending，聚合判定含 architecture 翻盘 → 整体推进 verify_cleanup
       await agent_submit.execute({ change_id: CID, step_id: "verify_quality", verdict: "passed" }, ctx.dims["performance"])
+      const atCleanup = readItem(wt, CID)
+      expect(atCleanup.currentStep).toBe("verify_cleanup")
+      expect(atCleanup.children.find((c: any) => c.id === "issue:7").phase).toBe("cancelled")
+      expect(atCleanup.children.find((c: any) => c.id === "issue:8").phase).toBe("done")
+      // developer 收尾验证通过 → done
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
       const done = readItem(wt, CID)
       expect(done.phase).toBe("done")
       expect(done.currentStep).toBeNull()
-      expect(done.children.find((c: any) => c.id === "issue:7").phase).toBe("cancelled")
-      expect(done.children.find((c: any) => c.id === "issue:8").phase).toBe("done")
     } finally { teardown(root) }
   })
 })
 
 describe("B1/B3. giveup 自动推进与 blockers 处理", () => {
-  test("末位 step（verify_quality）giveup → 自动推进 done 可收尾 + blockers 置 resolved", async () => {
+  test("末位 step（verify_cleanup）giveup → 自动推进 done 可收尾 + blockers 置 resolved", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToQuality(wt, CID)
+      // 5 维全 passed → 推进到末位 step verify_cleanup
+      await submitQualityPassed(ctx, CID)
+      expect(readItem(wt, CID).currentStep).toBe("verify_cleanup")
       rewriteItem(wt, (item) => {
         item.metadata["_checkpoint"] = true
         item.metadata["_retryCount"] = 10
         item.metadata["blockers"] = [{ id: "b1", status: "awaiting_user", description: "外部依赖未就绪" }]
       })
       const r = await agent_submit.execute(
-        { change_id: CID, step_id: "verify_quality", verdict: "passed", checkpoint_decision: "giveup" },
+        { change_id: CID, step_id: "verify_cleanup", verdict: "passed", checkpoint_decision: "giveup" },
         ctx.orch
       )
       expect(r).toContain("giveup")

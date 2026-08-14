@@ -447,4 +447,9 @@ git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.p
 - issues：统一 issue 结构列表（每条携带 dimension）
 - 修复/豁免归属：已修复条目与申请豁免条目按需列出对应 issue id
 
-完成后清理隔离环境：`docker compose -p <namespace> down`（不影响其他 change 的容器）。
+完成后清理隔离环境：
+
+1. **删除本 change 隔离项目**：先经 Web API 查询确认项目存在（`/api/projects/search?project=<项目原key>-<namespace>`），确认存在后调用 `/api/projects/delete?project=<项目原key>-<namespace>` 删除；delete 返回 404（项目不存在）视为已删除（幂等）。admin 凭据按第 6 节「admin 凭据来源」回退链取得。项目删除后如需重扫，由「判断 project 存在性并预创建」节的 search-then-create 逻辑自动重建，无需人工干预。
+2. `docker compose -p <namespace> down`（不影响其他 change 的容器）。
+
+清理后自检：无残留服务进程、无残留隔离容器、无残留隔离扫描分析项目（按隔离标识查询不存在），全部无残留即通过。

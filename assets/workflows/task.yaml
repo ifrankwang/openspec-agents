@@ -1,5 +1,5 @@
 # task workflow：OpenSpec change 的通用任务流转
-# 对应现有编排阶段：分析（todo）→ 实现（in_progress）→ 三重审查（review）
+# 对应现有编排阶段：分析（todo）→ 实现（in_progress）→ 三重审查+收尾验证（review）
 # 语义归属：step 级 instructions/constraints 定义各 step 专属语义；
 # 跨所有 step 共享内容收敛到顶层 common（step 自动继承）；非 step 归属的引擎状态文案不进配置。
 # 占位符 {{key}} 经 interpolateText 注入动态值，缺值保留原文。
@@ -112,7 +112,7 @@ phases:
           on_pass: verify_quality
           on_fail: implement
         instructions:
-          - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷"
+          - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷"
           - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约"
           - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"
@@ -138,7 +138,7 @@ phases:
           - id: openspec-reviewer-maintainability
             capability_tags: [maintainability, efficiency, tool-improvement]
         transitions:
-          on_pass: done
+          on_pass: verify_cleanup
           on_fail: implement
         instructions:
           - "加载匹配维度 skill，以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）；顺带发现的非本轮缺陷按本维度严重级别标准报 issue，禁止静默丢弃"
@@ -152,3 +152,23 @@ phases:
           - "禁止运行确定性工具检查（包括但不限于 linter/formatter/静态分析/编译/测试/架构约束检查等）；运行权归 tool review 层，本约束不排斥基于已加载 skill 做工具化可行性判断并提交工具改进 issue"
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit；不得 edit/write 任何文件，仅输出审查报告"
           - "即使无 issue 也必须提交 verdict=passed；passed=false 时必须有至少一个归属本维度的 Low+ issue 作为理由"
+      - id: verify_cleanup
+        agents:
+          - id: openspec-developer
+            capability_tags: [cleanup, api-testing, dev-practices, efficiency]
+        transitions:
+          on_pass: done
+          on_fail: verify_cleanup
+        instructions:
+          - "将基准分支（{{base_branch}}）最新代码合并进当前工作分支（git merge 基准分支），解决合并冲突；修复范围仅限合并冲突涉及文件与回归失败定位文件（改动仅用于解决合并引入的问题，可超出现有执行边界，禁止借机扩大范围）"
+          - "合并后回归复验：按已加载的开发实践规范执行构建验证；按已加载的接口测试规范启动服务并执行接口测试；全部通过才算通过，不分失败来源（含基准分支新代码引入的失败）"
+          - "按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的扫描分析项目；无对应 skill 规范时跳过并在申报中注明"
+          - "清理后确认工作分支 git status 干净（含未跟踪文件）"
+          - "逐项申报 validation_steps（completed + 证据；未执行项以 completed=false + 结构化 skip_reason 申报：{\"item\":\"<必做项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}）"
+          - "自报 issue 必须在本 step 内收敛至终态（修复后自行复核通过，或申请豁免后自行裁定）后再提交；报 issue 时显式声明归因维度 dimension（该维度仅作归因标签，不代表对应维度 reviewer 会复核此 issue）"
+          - "存在无法解决的残留或回归失败 → verdict=failed 并报 Low+ issue（显式声明归因维度 dimension）"
+          - "完成后调用 opx_agent_submit 提交裁决"
+        constraints:
+          - "可 bash 执行构建/测试/清理命令；禁止 edit/write 任何 {{worktree_path}} 之外的文件"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question"
+          - "禁止提报与收尾验证无关的 issue"

@@ -336,6 +336,8 @@ function mergeBoundaryInto(item: WorkItem, expansion: NonNullable<AgentSubmitPar
  * - verify_tool：本次 new_children 含 Low+，或存在未终态的 Low+ tool 报源层阻塞 child
  * - verify_quality：本次 new_children 含 Low+ 且维度属于当前提交 agent，或存在未终态的 Low+ quality 报源层
  *   阻塞 child 且 dimension 属于当前提交 agent 维度（新报与遗留理由均按维度过滤，F3；报源层由 source 反推）
+ * - verify_cleanup：本次 new_children 含 Low+，或存在未终态的 Low+ 阻塞 child（不按维度/报源层过滤——
+ *   收尾层须对全部残留阻塞负责，任何层的遗留阻塞都构成不通过理由）
  * 理由判定在 dedupeNewChildren 之后调用（F4）：传入的 newChildren 为已去重的 accepted，重复新报不构成理由。
  * 不满足即抛错，handleReviewParams 在 submitForStep 之前调用，零状态变更。
  */
@@ -359,6 +361,9 @@ function assertFailedHasReason(
   } else if (stepId === "verify_tool") {
     layerName = "工具层"
     hasReason = hasNewBlocking || existingBlocking.some((c) => resolveChildIssueFields(c).sourcePhase === "tool")
+  } else if (stepId === "verify_cleanup") {
+    layerName = "收尾层"
+    hasReason = hasNewBlocking || existingBlocking.length > 0
   } else {
     const dimension = agentToReviewDimension(agent)
     layerName = dimension ? `AI 审查层(${dimension})` : "AI 审查层"

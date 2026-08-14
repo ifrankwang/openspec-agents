@@ -7,7 +7,7 @@
  * 1. init 相关绿用例（base_branch 自动推导 / 显式 base_branch / detached HEAD /
  *    isolationNamespace 生成与补全）——直接测 init 工具，与新流相关
  * 2. 新流完整端到端 happy path 回归（init→analyze→implement→verify_tool→verify_task→
- *    verify_quality→done→complete_task_group），覆盖全流程状态机推进
+ *    verify_quality→verify_cleanup→done→complete_task_group），覆盖全流程状态机推进
  *
  * 驱动统一走 helpers-workflow（经 opx_agent_submit 推进状态机），
  * 状态断言走 readItem / taskListOf / metadata。
@@ -20,7 +20,7 @@ import { generateIsolationNamespace } from "../src/core/namespace"
 import { init, set_worktree, complete_task_group } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
-  setupToAnalyze, driveToQuality, submitQualityPassed, readItem, taskListOf,
+  setupToAnalyze, driveToQuality, submitQualityPassed, submitCleanupPassed, readItem, taskListOf,
 } from "./helpers-workflow"
 
 const CID = "test-flow"
@@ -108,7 +108,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
 })
 
 describe("新流端到端 happy path", () => {
-  test("init→analyze→implement→verify_tool→verify_task→verify_quality→done→complete_task_group", async () => {
+  test("init→analyze→implement→verify_tool→verify_task→verify_quality→verify_cleanup→done→complete_task_group", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
@@ -122,6 +122,10 @@ describe("新流端到端 happy path", () => {
       expect(item.currentStep).toBe("verify_quality")
 
       await submitQualityPassed(ctx, CID)
+      expect(readItem(wt, CID).phase).toBe("review")
+      expect(readItem(wt, CID).currentStep).toBe("verify_cleanup")
+
+      await submitCleanupPassed(ctx, CID)
       const done = readItem(wt, CID)
       expect(done.phase).toBe("done")
       expect(done.currentStep).toBeNull()

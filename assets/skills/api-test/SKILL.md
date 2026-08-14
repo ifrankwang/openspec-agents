@@ -25,25 +25,26 @@ API 测试素材独立于项目源代码目录（不放入 src/test/ 等构建�
 API 测试脚本使用 IntelliJ IDEA HTTP Client（.http 文件）格式。每个场景以 `###` 分隔。
 
 ```http
-### 正常路径：创建资源
-POST {{BASE_URL}}/api/v1/resources
+### 正常路径：创建订单
+POST {{BASE_URL}}/api/v1/orders
 Content-Type: application/json
 Authorization: Bearer {{TOKEN}}
 
-{"name": "测试数据"}
+{"orderNo": "SO202608140001", "customerName": "华东供应链", "amount": 12800.50, "status": "CREATED"}
 
 > {%
-    client.test("创建资源返回 201", function() {
+    client.test("创建订单返回 201", function() {
         client.assert(response.status === 201, "期望 201，实际 " + response.status);
+        client.assert(response.body.data.orderNo === "SO202608140001", "订单号回显不一致");
     });
 %}
 
-### 边界：缺必填字段
-POST {{BASE_URL}}/api/v1/resources
+### 边界：缺必填字段（缺 orderNo）
+POST {{BASE_URL}}/api/v1/orders
 Content-Type: application/json
 Authorization: Bearer {{TOKEN}}
 
-{}
+{"customerName": "华东供应链"}
 
 > {%
     client.test("缺必填字段返回 4xx", function() {
@@ -51,12 +52,12 @@ Authorization: Bearer {{TOKEN}}
     });
 %}
 
-### 边界：非法值
-POST {{BASE_URL}}/api/v1/resources
+### 边界：非法值（orderNo 为空串）
+POST {{BASE_URL}}/api/v1/orders
 Content-Type: application/json
 Authorization: Bearer {{TOKEN}}
 
-{"name": ""}
+{"orderNo": "", "customerName": "华东供应链"}
 
 > {%
     client.test("非法值返回 4xx", function() {
@@ -101,7 +102,7 @@ API 测试脚本运行前需获取有效认证凭证。常见模式：
 2. **MUST** 准备 SQL 前置数据（写入本 change 的隔离容器内 DB）
 3. **MUST** 启动服务（端口用编排会话建议端口：`--server.port=<建议端口>`，避免并发 change 端口冲突）
 4. API 测试脚本（BASE_URL 使用上述端口）
-5. **MUST** 停止服务并清理隔离环境（`docker compose -p <namespace> down`）
+5. **MUST** 停止服务并清理隔离环境（`docker compose -p <namespace> down`），随后幂等自检：本 change 隔离标识下无残留容器（`docker compose -p <namespace> ps` 为空）、建议端口无进程监听
 ```
 
 以上第 1、2、3、5 条为 MUST：隔离（独立 compose 项目名、隔离 DB、建议端口、down 清理）是并发安全硬约束，不适用本文件开头「项目规范优先」的推荐豁免。
@@ -120,8 +121,15 @@ API 测试脚本必须覆盖所有新增/变更接口：
 |------|---------|
 | 正常路径 | 按 spec 请求结构传入合法值，验证响应状态码(2xx) 和响应结构 |
 | 关键边界 | 缺必填字段 → 4xx；非法值(空串/超长/类型错误) → 4xx；极值 → 正确响应或合理错误 |
+| 业务闭环 | spec 含列表/详情/状态流转/删除接口时，测试须端到端闭环：创建后用返回标识在列表/详情检索成功、状态变更后可见性反映、删除/停用后不可见 |
 
 spec 描述为多个行为一并发生的（如状态变更与数据入队），每个行为都须有断言证据；断言范围不限于响应状态码与响应结构，须覆盖变更引发的真实行为（状态落库、消息入队、下游可消费等连带效果）。
+
+「业务闭环」与「一并操作行为组」划界：行为组=同一请求内多个行为同时发生的断言；闭环=跨请求链路的可见性验证（创建 → 检索 → 变更 → 删除），二者互补，均须覆盖。
+
+## 测试数据
+
+http 请求体与 SQL 前置数据均按 spec 业务语义构造：使用真实字段值与业务含义明确的数据（如按 spec 字段语义构造的订单号、状态名、业务名称），禁止无意义占位值（如「测试数据」「aaa」「test1」）。列表/详情检索断言须基于真实业务标识（创建接口返回的 id/编码），使检索结果可预期、可追溯。
 
 ## 适用范围
 

@@ -187,11 +187,16 @@ export async function driveToQuality(wt: string, cid: string, opts: DriveOpts = 
   return { ctx, item: readItem(wt, cid, opts.groupId ?? "1") }
 }
 
-/** 5 维 quality reviewer 逐一提交 verify_quality passed，推进到 done（配合 driveToQuality 使用）。 */
+/** 5 维 quality reviewer 逐一提交 verify_quality passed（配合 driveToQuality 使用）。 */
 export async function submitQualityPassed(ctx: AgentCtx, cid: string): Promise<void> {
   for (const d of DIMENSION_AGENTS) {
     await agent_submit.execute({ change_id: cid, step_id: "verify_quality", verdict: "passed" }, ctx.dims[d])
   }
+}
+
+/** developer 提交 verify_cleanup passed（收尾验证通过，推进到 done；配合 submitQualityPassed 使用）。 */
+export async function submitCleanupPassed(ctx: AgentCtx, cid: string): Promise<void> {
+  await agent_submit.execute({ change_id: cid, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
 }
 
 /**

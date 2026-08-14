@@ -418,7 +418,7 @@ describe("giveup 无法无痕绕过覆盖度核对", () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
-  test("非质量门 step（verify_quality 末位）giveup → 无理由放行推进 done（不误伤）", async () => {
+  test("非质量门 step（verify_quality）giveup → 无理由放行推进 verify_cleanup（不误伤）", async () => {
     const root = `/tmp/mdg-g6-${Date.now()}`
     const wt = setupWorkspace(root, CID)
     const fakeGit = new FakeGitRunner()
@@ -441,7 +441,9 @@ describe("giveup 无法无痕绕过覆盖度核对", () => {
         makeCtx(`openspec-reviewer-${DIMENSION_AGENTS[0]}`, wt),
       )
       expect(r).toContain("giveup")
-      expect(readItem(wt).phase).toBe("done")
+      // verify_quality 不再是末位 step：giveup 后沿 on_pass 推进到 verify_cleanup
+      expect(readItem(wt).phase).toBe("review")
+      expect(readItem(wt).currentStep).toBe("verify_cleanup")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

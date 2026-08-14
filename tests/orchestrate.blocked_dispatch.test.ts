@@ -155,14 +155,19 @@ describe("exempt 漏带链路：blocked 分派报源 reviewer 并 exempt-only �
       expect(out).toContain("豁免申请中 1")
       expect(out).toContain("分派子代理：`openspec-reviewer-style`")
 
-      // exempt-only 补交（重复提交守卫放行）→ child cancelled → 推进 done
+      // exempt-only 补交（重复提交守卫放行）→ child cancelled → 推进 verify_cleanup
       await agent_submit.execute(
         { change_id: CID, step_id: "verify_quality", verdict: "passed", exempt_adjudications: [{ issue_id: "7", action: "dismissed" }] },
         ctx.dims["style"]
       )
       const after = readItem(wt, CID)
       expect(after.children.find((c: any) => c.externalId === "7").phase).toBe("cancelled")
-      expect(after.phase).toBe("done")
+      expect(after.currentStep).toBe("verify_cleanup")
+
+      // developer 收尾验证通过 → done
+      await agent_submit.execute({ change_id: CID, step_id: "verify_cleanup", verdict: "passed" }, ctx.dev)
+      const done = readItem(wt, CID)
+      expect(done.phase).toBe("done")
     } finally { teardown(root) }
   })
 })

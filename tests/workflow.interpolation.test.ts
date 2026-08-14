@@ -347,7 +347,7 @@ describe("step 操作层指引补全", () => {
   test("verify_task：五项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_task" })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
-    expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量 ④审查测试代码质量")
+    expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量")
     expect(out).toContain("⑤业务行为真实性")
     // 仅测试代码变更豁免②③：instructions 追加的豁免 bullet 正常渲染（skip_reason 须结构化申报）
     expect(out).toContain("本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据")

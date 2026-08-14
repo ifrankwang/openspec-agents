@@ -1,10 +1,10 @@
 # openspec-orchestrate
 
-agent 无关的 OpenSpec change 编排内核：workflow 引擎驱动的任务流转、阻塞升级、隔离开发与三层 Review 门禁。内核不绑定任何 agent 工具，opencode / claude code / codex / zcode 通过统一契约（MCP Server + 各 agent 原生接入形态：配置注入或官方插件包）接入同一套编排状态机。
+agent 无关的 OpenSpec change 编排内核：workflow 引擎驱动的任务流转、阻塞升级、隔离开发与三层 Review 门禁+收尾验证。内核不绑定任何 agent 工具，opencode / claude code / codex / zcode 通过统一契约（MCP Server + 各 agent 原生接入形态：配置注入或官方插件包）接入同一套编排状态机。
 
 ## 架构
 
-`analyze → implement → verify_tool → verify_task → verify_quality → done → 收尾`
+`analyze → implement → verify_tool → verify_task → verify_quality → verify_cleanup → done → 收尾`
 
 编排由 workflow 引擎按 step 驱动，各 step 的裁决统一通过 `opx_agent_submit` 提交。
 
@@ -12,20 +12,22 @@ agent 无关的 OpenSpec change 编排内核：workflow 引擎驱动的任务流
 
 每个 task WorkItem 由 workflow 引擎按 step 驱动执行：
 
-`todo(analyze) → in_progress(implement) → review(verify_tool → verify_task → verify_quality) → done`
+`todo(analyze) → in_progress(implement) → review(verify_tool → verify_task → verify_quality → verify_cleanup) → done`
 
 | Phase | step | 目标 |
 |------|------|------|
 | todo | analyze | 架构师校验需求、设计、任务与实施前提，输出执行边界 |
 | in_progress | implement | developer 实施任务、验证改动，提交时声明完成/阻塞 |
-| review | verify_tool → verify_task → verify_quality | 依次执行工具、任务与质量门禁 |
+| review | verify_tool → verify_task → verify_quality → verify_cleanup | 依次执行工具、任务、质量门禁与收尾验证 |
 | done | （终态） | 全部审核通过，由 `opx_orch_complete_task_group` 收尾合并分支 |
 
 编排者职责由各 agent 的主代理承载（无独立 orchestrator 子代理角色）：主代理只分派子代理，不编写代码、不审查、不测试。每次子代理返回后，主代理调用 `opx_status`；该工具是下一步调度的唯一事实源。
 
-Review 阶段依次执行 tool、task、quality 三层门禁；verify_tool 依据上次工具检查以来的变更检测结果，无代码/配置变更时直接提交通过，有变更时运行全量工具检查，或经审查确认变更仅为注释/文档性且无逻辑影响后免全量提交；免全量时该轮不执行确定性质量扫描，由 dev 本地构建与后续任务/质量门禁兜底。质量门 skill 在 frontmatter 声明机器可读的必做清单（`must_do`，与正文必做检查表格一一对应）；verify_tool 提交 passed 时 `validation_steps` 须逐项覆盖该必做清单（completed=true 附结果，或 completed=false 以结构化 `skip_reason` 申报降级理由：JSON 含 item/category/adjudication，adjudication 取值 user_response/unattended_auto/env_unavailable），遗漏必做项或缺结构化降级理由的提交被门禁拒绝——未声明 `must_do` 的 skill 与解析不到质量门 skill 的 step 自动豁免；无变更直提/注释性变更免全量分支以 step 名首段为 `no_change` 的条目申报整体豁免必做清单。任一 step 裁决 failed 回退 implement 修复（analyze 失败回退 analyze 重查）。某 step 重试次数达到上限（默认 10 次）且仍存在未解决 children 时引擎进入检查点态，由编排者经 `opx_agent_submit` 的 `checkpoint_decision` 决策：`continue` 重置该 step 重试继续，`giveup` 放弃遗留 issue（置 cancelled）并将该 step 标记完成，随后自动沿状态机推进——末位 step 直接落 done 可收尾，非末位 step 落下一个待执行 step，同时把未解决 blockers 置为已解决，避免放弃后无法收尾；giveup 前对质量门 step 先核对必做清单覆盖度，未覆盖项须经 `checkpoint_skip_reasons` 逐项提供结构化降级理由，缺理由拒绝 giveup（杜绝放弃审查后无痕推进收尾的绕过通道）。需用户拍板的需求/设计问题由架构师在 analyze step 直接向用户确认（有人值守）或自行裁决（无人值守），确认/裁决后当场继续、不留档；确属阻塞的缺口由架构师上报 blocker，同环节继续复核至完成。quality reviewer 对可工具化的 pattern 在报业务 issue 的同时须报工具改进 issue，通过调整确定性质量扫描工具配置（规则收紧/新增规则）统一收敛同类问题，减少人工重复审查。
+Review 阶段依次执行 tool、task、quality 三层门禁与收尾验证（verify_cleanup）：三层门禁通过后由 developer 将基准分支最新代码合并进工作分支（git merge，解决合并冲突，修复范围仅限合并冲突与回归失败定位文件）、回归复验（按开发实践规范构建验证 + 按接口测试规范启动服务执行接口测试，不分失败来源，含基准分支新代码引入的失败）、按清理规范幂等清理隔离环境（停止残留服务实例、清理隔离容器/隔离数据库、删除隔离扫描分析项目）并确认工作分支 git status 干净（含未跟踪文件），自报 issue 在本 step 内自裁收敛后提交。verify_tool 依据上次工具检查以来的变更检测结果，无代码/配置变更时直接提交通过，有变更时运行全量工具检查，或经审查确认变更仅为注释/文档性且无逻辑影响后免全量提交；免全量时该轮不执行确定性质量扫描，由 dev 本地构建与后续任务/质量门禁兜底。质量门 skill 在 frontmatter 声明机器可读的必做清单（`must_do`，与正文必做检查表格一一对应）；verify_tool 提交 passed 时 `validation_steps` 须逐项覆盖该必做清单（completed=true 附结果，或 completed=false 以结构化 `skip_reason` 申报降级理由：JSON 含 item/category/adjudication，adjudication 取值 user_response/unattended_auto/env_unavailable），遗漏必做项或缺结构化降级理由的提交被门禁拒绝——未声明 `must_do` 的 skill 与解析不到质量门 skill 的 step 自动豁免；无变更直提/注释性变更免全量分支以 step 名首段为 `no_change` 的条目申报整体豁免必做清单。任一 step 裁决 failed 回退 implement 修复（analyze 失败回退 analyze 重查，verify_cleanup 失败自指重试）。某 step 重试次数达到上限（默认 10 次）且仍存在未解决 children 时引擎进入检查点态，由编排者经 `opx_agent_submit` 的 `checkpoint_decision` 决策：`continue` 重置该 step 重试继续，`giveup` 放弃遗留 issue（置 cancelled）并将该 step 标记完成，随后自动沿状态机推进——末位 step 直接落 done 可收尾，非末位 step 落下一个待执行 step，同时把未解决 blockers 置为已解决，避免放弃后无法收尾；giveup 前对质量门 step 先核对必做清单覆盖度，未覆盖项须经 `checkpoint_skip_reasons` 逐项提供结构化降级理由，缺理由拒绝 giveup（杜绝放弃审查后无痕推进收尾的绕过通道）。需用户拍板的需求/设计问题由架构师在 analyze step 直接向用户确认（有人值守）或自行裁决（无人值守），确认/裁决后当场继续、不留档；确属阻塞的缺口由架构师上报 blocker，同环节继续复核至完成。quality reviewer 对可工具化的 pattern 在报业务 issue 的同时须报工具改进 issue，通过调整确定性质量扫描工具配置（规则收紧/新增规则）统一收敛同类问题，减少人工重复审查。
 
-issue 与任务共享 phase 体系：reviewer 提报 → todo → developer 修复并经 `fixed_issue_ids` 上报 → review（待复核）→ 报 issue 的 reviewer 复核裁定（谁提谁裁定）：通过置 done，驳回回 todo 并累计修复未过次数（≥2 须先 5-Why 根因分析）。done/cancelled 终态由复核（verify_* 各层）、豁免裁定或检查点 giveup 置入；developer 提交修复只进入 review 待复核，不直接置终态。多 agent 聚合 step（verify_quality 5 维并行）中，维度名下有未裁定豁免申请时会在聚合等待期重新唤起报源 reviewer 履行裁定权；维度名下 blocking issue 已全部终态且无在途豁免申请时该维度自动视为通过，避免 failed 维度永不重派导致聚合无法收敛。
+两条收尾边界：①中途放弃的 change（未走 `opx_orch_complete_task_group` 收尾）无自动清理通道，残留的隔离环境由编排者按隔离标识手动清理；②回退重审时「变更范围」（baseRef..HEAD）会包含收尾合并引入的基准分支代码，审查时注意区分；verify_cleanup 删除扫描分析项目属环境清理，不等于平台状态豁免（跨 change 持续豁免仍须经 exempt_issue_ids → 报源 reviewer 裁定 dismissed 的流程）。
+
+issue 与任务共享 phase 体系：reviewer 提报 → todo → developer 修复并经 `fixed_issue_ids` 上报 → review（待复核）→ 报 issue 的 reviewer 复核裁定（谁提谁裁定）：通过置 done，驳回回 todo 并累计修复未过次数（≥2 须先 5-Why 根因分析）。done/cancelled 终态由复核（verify_* 各层）、豁免裁定或检查点 giveup 置入；developer 提交修复只进入 review 待复核，不直接置终态（例外：verify_cleanup 收尾验证中 developer 自报 issue 由自己复核收敛至终态）。多 agent 聚合 step（verify_quality 5 维并行）中，维度名下有未裁定豁免申请时会在聚合等待期重新唤起报源 reviewer 履行裁定权；维度名下 blocking issue 已全部终态且无在途豁免申请时该维度自动视为通过，避免 failed 维度永不重派导致聚合无法收敛。
 
 具体阶段流转、工具参数、状态与门禁规则以 `src/core/` 与 `assets/workflows/` 实现为准。README 不重复这些细节，避免文档与代码漂移。
 

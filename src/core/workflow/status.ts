@@ -517,6 +517,7 @@ function renderAgentWorking(
   if (rec.stepId) stepCtx["step_id"] = rec.stepId
   stepCtx["phase"] = item.phase
   stepCtx["agent"] = ctxAgent
+  stepCtx["base_branch"] = state.baseBranch
   const boundary = readExecutionBoundary(item)
   if (boundary) {
     stepCtx["allowed_directories"] = boundary.allowed_directories.join(", ")
@@ -582,7 +583,7 @@ function renderAgentWorking(
 }
 
 /** step.id → 上下文渲染类型映射：verify_* 与 review_* 语义一一对应，渲染路由由 step.id 推导。 */
-type StepContextKind = "analyze" | "implement" | "review_tool" | "review_task" | "review_quality"
+type StepContextKind = "analyze" | "implement" | "review_tool" | "review_task" | "review_quality" | "review_cleanup"
 
 const STEP_ID_TO_CONTEXT_KIND: Record<string, StepContextKind> = {
   analyze: "analyze",
@@ -590,6 +591,7 @@ const STEP_ID_TO_CONTEXT_KIND: Record<string, StepContextKind> = {
   verify_tool: "review_tool",
   verify_task: "review_task",
   verify_quality: "review_quality",
+  verify_cleanup: "review_cleanup",
 }
 
 /** step.id 推导上下文渲染类型，未命中返回 undefined（优雅降级不渲染该区块）。 */
@@ -617,6 +619,9 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       break
     case "review_quality":
       lines.push(...renderQualityChildren(item, ctxAgent, exemptionCtx))
+      break
+    case "review_cleanup":
+      lines.push(...renderCleanupChildren(item, ctxAgent, exemptionCtx))
       break
   }
   return lines
@@ -698,14 +703,7 @@ function renderDeveloperChildren(item: WorkItem, ctxAgent: string, exemptionCtx?
   // 仅 issue child 进入修复清单（task child 不得混入 issue 渲染）
   const toFix = issueChildrenOf(item).filter((c) => isAgentOwnedIssue(c, ctxAgent))
   if (toFix.length === 0) return lines
-  const blocking = toFix.filter((c) => isBlockingSeverity(c.severity))
-  const info = toFix.filter((c) => !isBlockingSeverity(c.severity))
-  if (blocking.length > 0) {
-    lines.push(...renderChildrenSection("Issue (待修复 · Low 及以上，必办)", blocking, exemptionCtx))
-  }
-  if (info.length > 0) {
-    lines.push(...renderChildrenSection("Issue (待修复 · Info，建议修复，不阻塞提交)", info, exemptionCtx))
-  }
+  renderTodoFixBlocks(lines, toFix, exemptionCtx)
   const highRefix = toFix.filter((c) => typeof c.metadata["refix_count"] === "number" && (c.metadata["refix_count"] as number) >= 2)
   if (highRefix.length > 0) {
     lines.push("## ⚠️ 修复多次未过的 issue", "")
@@ -920,6 +918,28 @@ function renderQualityChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: 
   return lines
 }
 
+/** verify_cleanup step：developer 收尾视角。
+ *  - 待修复：todo 态 issue（isAgentOwnedIssue 对 developer 仅命中 todo 态且非豁免申请）
+ *  - 自报待复核：报源为当前 agent（openspec-developer）的 review 态 issue——收尾阶段自报自裁，
+ *    经 recheck_adjudications 自行复核收敛（isAgentOwnedIssue 只命中 todo 态，此处显式补充）
+ *  - 自报待裁定豁免：报源为当前 agent 且带 exempt_request 标记——经 exempt_adjudications 自行裁定
+ */
+function renderCleanupChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
+  const issues = issueChildrenOf(item)
+  const lines: string[] = []
+  const toFix = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
+  renderTodoFixBlocks(lines, toFix, exemptionCtx)
+  const ownReview = issues.filter(
+    (c) => readIssueSource(c) === ctxAgent && c.phase === "review" && c.metadata[EXEMPT_REQUEST_KEY] === undefined,
+  )
+  lines.push(...renderChildrenSection("Issue (自报待复核 · 本 step 自行复核裁定)", ownReview, exemptionCtx))
+  const ownPending = issues.filter(
+    (c) => readIssueSource(c) === ctxAgent && c.metadata[EXEMPT_REQUEST_KEY] !== undefined,
+  )
+  lines.push(...renderChildrenSection("Issue (自报豁免申请 · 待自行裁定)", ownPending, exemptionCtx))
+  return lines
+}
+
 /** 调用者 agent → 审查维度（DIMENSION_AGENT_MAP 反查）。 */
 function agentToDimension(agent: string): Dimension | undefined {
   return agentToReviewDimension(agent)
@@ -932,6 +952,18 @@ function renderChildrenSection(title: string, children: WorkItem[], exemptionCtx
   for (const c of children) lines.push(renderChildIssue(c, exemptionCtx))
   lines.push("")
   return lines
+}
+
+/** 待修复 issue 区块渲染（implement 与 verify_cleanup 两处待修复清单共用）：blocking/info 拆分后渲染同标题区块。 */
+function renderTodoFixBlocks(lines: string[], toFix: WorkItem[], exemptionCtx?: ExemptionHintCtx): void {
+  const blocking = toFix.filter((c) => isBlockingSeverity(c.severity))
+  const info = toFix.filter((c) => !isBlockingSeverity(c.severity))
+  if (blocking.length > 0) {
+    lines.push(...renderChildrenSection("Issue (待修复 · Low 及以上，必办)", blocking, exemptionCtx))
+  }
+  if (info.length > 0) {
+    lines.push(...renderChildrenSection("Issue (待修复 · Info，建议修复，不阻塞提交)", info, exemptionCtx))
+  }
 }
 
 /** 逐条 issue 的豁免相关只读提示（a：tool 层无规则名提示；b：疑似行号漂移提示）。纯渲染，不写任何状态。

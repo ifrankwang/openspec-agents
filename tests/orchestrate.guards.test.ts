@@ -598,8 +598,18 @@ describe("G9.3. 裁定驳回一致性守卫", () => {
       expect(child7.metadata["exempt_request"]).toBeUndefined()
       const child9 = item.children.find((c: any) => c.externalId === "9")
       expect(child9.phase).toBe("done")
-      expect(item.phase).toBe("done")
-      expect(item.currentStep).toBeNull()
+      // verify_quality passed 后推进到 verify_cleanup（收尾验证），不再直接 done
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_cleanup")
+
+      // developer 提交 verify_cleanup passed → 收尾验证通过落 done
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_cleanup", verdict: "passed" },
+        makeCtx("openspec-developer", wt)
+      )
+      const done = readItem(wt, CID)
+      expect(done.phase).toBe("done")
+      expect(done.currentStep).toBeNull()
     } finally { teardown(root) }
   })
 })
