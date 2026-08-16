@@ -1,1 +1,25 @@
-schema: spec-driven
+schema: spec-driven-orchestrate
+
+context: |
+  项目技术背景、架构约定与工程规范以项目根目录 AGENTS.md 为准。
+  本文件仅承载 OpenSpec 流程的通用规则；与项目相关的特化约束
+  （技术栈、分层架构、数据库约定、质量门、方法论选择等）一律写入
+  项目 AGENTS.md，生成与复核子代理会被指示读取它。
+
+rules:
+  specs:
+    - 数据行为需求（如"系统 SHALL 持久化 X 含审计字段"）放 spec；物理 DDL 放 design.md。
+    - MODIFIED 的需求描述直接给出变更后的终态契约表述（"系统 SHALL 使用 Y"），供归档合并时原样落入主 spec；禁止以"原 X 改为 Y"的历史对比充当主 spec 内容。
+    - 同一语义只保留一条需求：修改已有需求用 MODIFIED，不得以新标题重复描述同一能力。
+  tasks:
+    - 真跨组依赖应拆为独立前置 change，在组标题下用 `> **前置 change：**` 标注，组间不可并行。
+
+operations:
+  archive:
+    guidance:
+      - 归档前必须完成变更同步：delta 与主 spec 有差异时禁止直接归档。
+      - 主 spec 只描述当前契约：应用 MODIFIED 时把"原 X 改为 Y"式描述改写为终态表述，已废弃组件（表/类/接口/端点）不得保留在主 spec。
+      - delta 出现移除/废弃/不再语义时，必须在主 spec 删除对应需求或场景，并在 delta spec 补写 `## REMOVED Requirements` 保持可追溯。
+      - 同一语义只保留一条需求：与已有需求重叠时合并，不得新增重复标题。
+      - 同步收敛：同步完成后主 spec 须完整反映 delta——ADDED 已存在、MODIFIED 为终态、REMOVED 已消失。
+      - 归档前运行 `openspec validate` 校验 MODIFIED 与主 spec 一致性，并核对主 spec 无变更式表述残留、无 REMOVED 残留、无重复需求、无空 spec 目录、无残留 TBD；未通过先修复。

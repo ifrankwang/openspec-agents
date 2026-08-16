@@ -7,3 +7,4 @@ dist
 .codegraph
 openspec/states/
 .opencode/.orchestrate_state/
+.zcode/plans/
