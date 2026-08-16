@@ -678,6 +678,25 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  test("implement：developer 视图 skill 加载清单包含五个质量维度的维度规范类 skill（提交前自检依据）", async () => {
+    const root = `/tmp/wf-dev-caps-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    const d = await driveToImplement(wt)
+
+    const output = await status.execute({ change_id: CID }, d)
+    expect(output).toContain("## Skill 加载清单")
+    // developer 的 capability_tags 含 style/architecture/performance/security/maintainability
+    // → 与 reviewer 同源的维度规范类 skill 进入加载清单
+    expect(output).toContain("`java-code-style`")
+    expect(output).toContain("`java-ddd-architecture`")
+    expect(output).toContain("`java-code-performance`")
+    expect(output).toContain("`security-baseline`")
+    expect(output).toContain("`java-code-maintainability`")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("analyze step：blockers 渲染（awaiting_user/resolved + 处理指引）", async () => {
     const root = `/tmp/wf-m1d-d-${Date.now()}`
     const wt = freshWt(root)
