@@ -305,6 +305,8 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("需用户拍板的问题由你直接确认，不提交用户确认型 blocker")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需用户拍板时使用）")
     expect(out).toContain("只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节")
+    // 架构脉络阅览许可（架构演进审查配套约束）：原文前缀保留，追加句生效
+    expect(out).toContain("评估整体架构契合与重构历史逻辑贴合时，可阅览项目整体结构与既有实现建立架构脉络（不含其它任务组设计文档），审查结论仍聚焦当前方案，不扩散为对既有代码的全面审查")
     // notes 规范展开
     expect(out).toContain("notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空")
   })

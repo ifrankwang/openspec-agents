@@ -58,6 +58,20 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
     expect(r.techStackOnly).toContain("java-technical-debt")
   })
 
+  test("architecture 命中架构演进审查 skill（generic 组）", () => {
+    const r = resolveSkillsForCapabilities(["architecture"])
+    expect(r.skillNames).toContain("architecture-evolution")
+    expect(r.generic).toContain("architecture-evolution")
+    expect(r.techStackOnly).not.toContain("architecture-evolution")
+  })
+
+  test("其他维度 tag 不命中架构演进审查 skill（归口边界防误伤）", () => {
+    for (const cap of ["maintainability", "security", "performance", "style", "db-design", "api-design", "api-testing", "dev-practices", "efficiency"]) {
+      const r = resolveSkillsForCapabilities([cap])
+      expect(r.skillNames).not.toContain("architecture-evolution")
+    }
+  })
+
   test("其他维度 tag 不命中技术债识别 skill（归口边界防误伤）", () => {
     for (const cap of ["maintainability", "security", "performance", "style", "db-design", "api-design", "api-testing", "dev-practices"]) {
       const r = resolveSkillsForCapabilities([cap])
