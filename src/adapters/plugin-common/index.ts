@@ -1,19 +1,17 @@
 /**
  * 多 agent 插件包共享生成器（DRY）：zcode 与 claude code 的官方插件机制格式同构——
  * 插件目录 + 清单目录内 plugin.json（组件目录 agents/skills/.mcp.json 等与清单目录同级，
- * 仅 plugin.json 放清单目录内）、MCP 模板变量 ${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR}、
- * marketplace.json 按相对路径 source 分发。差异仅为清单目录名与 marketplace 文件位置，
- * 由各适配器以参数声明（manifestDirName / marketplaceFile）。
+ * 仅 plugin.json 放清单目录内）、MCP 模板变量 ${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR}。
+ * 差异仅为清单目录名，由各适配器以参数声明（manifestDirName）。
  *
  * 生成产物为一个完整插件目录：plugin.json 清单 + agents/*.md（从 assets/agents 转换、
  * 排除主代理模板、frontmatter 仅保留 name/description）+ skills/<名>/（含 orchestrator 与
  * reference/ 附属文件）+ assets/workflows/（task.yaml workflow 定义，bundle 内按部署深度
  * 逐级上溯探测读取）+ .mcp.json（stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认
  * 无人值守）+ .mcp-server/cli.mjs 自包含 bundle（node 直接执行，不依赖 node_modules）。
- * 配套 marketplace.json（相对路径 source），用户本地安装即生效，Disable/Uninstall 整体消失。
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync } from "node:fs"
-import { join, relative, dirname, basename } from "node:path"
+import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import * as yaml from "js-yaml"
 import { parseAgentMd, resolve, EXCLUDED_AGENTS } from "../agent-md.ts"
@@ -21,11 +19,8 @@ import { parseAgentMd, resolve, EXCLUDED_AGENTS } from "../agent-md.ts"
 export const PLUGIN_NAME = "openspec-agents"
 export const PLUGIN_DESCRIPTION =
   "OpenSpec change 编排：opx_* 编排工具（MCP）+ 编排子代理 + orchestrator skill，非 OpenCode agent 默认无人值守"
-export const MARKETPLACE_NAME = "openspec-agents-marketplace"
 /** plugin.json author（package.json 无 author 字段，取固定值）。 */
 export const PLUGIN_AUTHOR = "openspec-agents maintainers"
-/** marketplace.json 顶层 owner.name（claude/zcode 校验器均要求必填）。 */
-export const MARKETPLACE_OWNER = "openspec-agents"
 
 function readPkgVersion(): string {
   return (JSON.parse(readFileSync(resolve("package.json"), "utf-8")) as { version: string }).version
@@ -175,56 +170,4 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
   )
 
   return { pluginDir: outDir, version, agents, skills }
-}
-
-export interface PluginMarketplaceParams {
-  /** 已生成的插件目录（含 <manifestDirName>/plugin.json） */
-  pluginDir: string
-  /** marketplace.json 输出位置 */
-  marketplaceFile: string
-  /** 清单目录名（与构建插件包时的 manifestDirName 一致） */
-  manifestDirName: string
-}
-
-/**
- * 生成 marketplace.json 到 marketplaceFile。
- * source 用相对路径字符串（官方最常见形态：marketplace 所在仓库内子目录），
- * 用户「Add marketplace」选 marketplace 所在目录即可，source 解析到本机生成的插件目录
- * （产物不入库，clone 后需先本地生成）；团队分发需在目标环境先运行对应
- * bun run <agent>:plugin 生成产物后本地安装，github source 分发为未来评估项。
- *
- * source 相对 marketplace root（仓库根）解析而非 marketplace 文件所在目录：
- * zcode 的 marketplace.json 在仓库根（<root>/marketplace.json），claude code 的在
- * 仓库根 .claude-plugin/ 子目录（<root>/.claude-plugin/marketplace.json）。以
- * basename(dirname(marketplaceFile)) 是否等于清单目录名区分两种布局取 root。
- */
-export function writePluginMarketplace({ pluginDir, marketplaceFile, manifestDirName }: PluginMarketplaceParams): void {
-  const manifest = JSON.parse(readFileSync(join(pluginDir, manifestDirName, "plugin.json"), "utf-8")) as {
-    version: string
-  }
-  const marketplaceDir = dirname(marketplaceFile)
-  const marketplaceRoot = basename(marketplaceDir) === manifestDirName ? dirname(marketplaceDir) : marketplaceDir
-  const source = `./${relative(marketplaceRoot, pluginDir)}`
-  mkdirSync(marketplaceDir, { recursive: true })
-  writeFileSync(
-    marketplaceFile,
-    JSON.stringify(
-      {
-        name: MARKETPLACE_NAME,
-        description: "openspec-agents 官方插件市场：OpenSpec change 编排插件",
-        owner: { name: MARKETPLACE_OWNER },
-        plugins: [
-          {
-            name: PLUGIN_NAME,
-            source,
-            description: PLUGIN_DESCRIPTION,
-            version: manifest.version,
-          },
-        ],
-      },
-      null,
-      2,
-    ) + "\n",
-    "utf-8",
-  )
 }

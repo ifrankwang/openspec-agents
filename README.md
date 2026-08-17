@@ -31,9 +31,9 @@ OpenSpec 把需求、设计、任务拆解成规范文档后，实施阶段仍�
 
 适合对质量、可控性要求高，且愿意用成本换稳定产出的实施场景。
 
-## 使用方式
+## 接入方式
 
-项目已为各 Agent 工具提供原生插件/适配器，普通使用时直接按对应工具的原生机制接入即可，无需手动拼装或启动 MCP Server。
+项目已为各 Agent 工具提供官方插件/适配器，普通使用时直接按对应工具的原生机制接入即可，无需手动拼装或启动 MCP Server。
 
 依赖：Node.js ≥ 23.6（或 Bun）、git。
 
@@ -49,19 +49,33 @@ bun run typecheck
 各 Agent 接入：
 
 - **OpenCode**：以 npm 插件形式加载，自动注入 agent/skill 与 `opx_*` 工具。
-- **Claude Code**：`bun run claude:plugin` 生成官方插件包，再通过 `claude plugin marketplace add ./` + `claude plugin install openspec-agents` 安装。
-- **ZCode**：`bun run zcode:plugin` 生成官方插件包，再在 GUI 中添加 marketplace 并安装。
-- **Codex**：调用 `injectCodexAgents(repoRoot)` 与 `injectCodexMcp(repoRoot, "<serverEntry>")` 注入原生 agent/MCP 配置。
+  ```bash
+  npm install -D @ifrankwang/openspec-agents
+  ```
+  然后在 OpenCode 配置中加载 `@ifrankwang/openspec-agents` 插件。
+
+- **Claude Code**：通过官方插件市场安装。
+  ```bash
+  claude plugin marketplace add https://github.com/ifrankwang/claude-code-plugins
+  claude plugin install openspec-agents@ifrankwang
+  ```
+
+- **Codex**：通过官方插件市场安装。
+  ```bash
+  codex plugin marketplace add https://github.com/ifrankwang/codex-plugins
+  codex plugin add openspec-agents@ifrankwang
+  ```
+
+- **ZCode**：在 ZCode 插件页添加市场 `ifrankwang/zcode-plugins`，然后安装 `openspec-agents`。
 
 ## 常用命令
 
 | 命令 | 说明 |
 |------|------|
-| `bun test` | 运行测试 |
+| `bun test` | 运行所有测试 |
 | `bun run typecheck` | TypeScript 类型检查 |
-| `bun run claude:plugin` | 生成 Claude Code 插件包 |
-| `bun run zcode:plugin` | 生成 ZCode 插件包 |
-| `npm run sync` | 同步源码到本机安装缓存 |
+| `bun run build:plugins` | 构建 Claude Code / Codex / ZCode 插件包（CI/内部使用） |
+| `bun run sync` | 同步本地最新开发版本到各 harness 插件缓存 |
 
 ## 项目结构
 

@@ -1,7 +1,6 @@
 /**
  * claude code 适配器：Claude Code 官方插件包生成（Plugin 机制，code.claude.com/docs/en/plugins）。
- * 复用共享生成器 src/adapters/plugin-common/，差异参数：清单目录 .claude-plugin/、
- * marketplace 位于仓库根 .claude-plugin/marketplace.json。
+ * 复用共享生成器 src/adapters/plugin-common/，差异参数：清单目录 .claude-plugin/。
  *
  * 与 zcode 同构的官方插件形态：安装/启用/禁用/卸载均为 CLI 或会话内命令
  * （claude plugin marketplace add + claude plugin install，或 /plugin marketplace add + /plugin install），
@@ -16,15 +15,11 @@
 import { resolve } from "../agent-md.ts"
 import {
   buildPluginPackage,
-  writePluginMarketplace,
   type PluginPackageResult,
 } from "../plugin-common/index.ts"
 
 /** 默认插件包输出目录（dist/ 已 gitignore，生成物不入库）。 */
 export const CLAUDE_CODE_PLUGIN_DIR = resolve("dist", "claude-code-plugin")
-/** 默认 marketplace.json 输出位置（仓库根 .claude-plugin/ 下，随仓库入库；source 为相对路径，仅作本地安装源）。 */
-export const CLAUDE_CODE_MARKETPLACE_FILE = resolve(".claude-plugin", "marketplace.json")
-
 const MANIFEST_DIR_NAME = ".claude-plugin"
 
 export type ClaudeCodePluginBuildResult = PluginPackageResult
@@ -37,18 +32,4 @@ export type ClaudeCodePluginBuildResult = PluginPackageResult
  */
 export function buildClaudeCodePlugin(outDir: string = CLAUDE_CODE_PLUGIN_DIR): ClaudeCodePluginBuildResult {
   return buildPluginPackage({ outDir, manifestDirName: MANIFEST_DIR_NAME })
-}
-
-/**
- * 生成 marketplace.json 到 marketplaceFile（默认仓库根 .claude-plugin/marketplace.json）。
- * source 用相对路径字符串（官方最常见形态：marketplace 所在仓库内子目录），
- * 用户「claude plugin marketplace add」选 marketplace 所在目录即可，source 解析到本机生成的
- * dist/claude-code-plugin/（产物不入库，clone 后需先本地生成）；团队分发需在目标环境先运行
- * bun run claude:plugin 生成产物后本地安装，github source 分发为未来评估项。
- */
-export function writeClaudeCodeMarketplace(
-  pluginDir: string = CLAUDE_CODE_PLUGIN_DIR,
-  marketplaceFile: string = CLAUDE_CODE_MARKETPLACE_FILE,
-): void {
-  writePluginMarketplace({ pluginDir, marketplaceFile, manifestDirName: MANIFEST_DIR_NAME })
 }

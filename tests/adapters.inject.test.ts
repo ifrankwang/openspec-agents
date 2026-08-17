@@ -34,8 +34,8 @@ function freshRepo(name: string): string {
 }
 
 describe("claude-code 适配器", () => {
-  test("生成 Claude Code 官方插件包（plugin.json/agents/skills/.mcp.json/marketplace.json）", async () => {
-    const { buildClaudeCodePlugin, writeClaudeCodeMarketplace } = await import("../src/adapters/claude-code/index")
+  test("生成 Claude Code 官方插件包（plugin.json/agents/skills/.mcp.json）", async () => {
+    const { buildClaudeCodePlugin } = await import("../src/adapters/claude-code/index")
     const pluginDir = join(TMP_ROOT, "claude-code-plugin")
     rmSync(pluginDir, { recursive: true, force: true })
     try {
@@ -85,27 +85,10 @@ describe("claude-code 适配器", () => {
       expect(existsSync(join(pluginDir, ".mcp-server", "cli.mjs"))).toBe(true)
       await import(pathToFileURL(join(pluginDir, ".mcp-server", "cli.mjs")).href)
 
-      // marketplace.json：位于 .claude-plugin/ 下、name 合法、source 相对 marketplace root
-      // 指向插件目录、owner 必填、版本一致
-      const marketFile = join(TMP_ROOT, ".claude-plugin", "marketplace.json")
-      writeClaudeCodeMarketplace(pluginDir, marketFile)
-      const market = JSON.parse(readFileSync(marketFile, "utf-8"))
-      expect(market.name).toMatch(/^[a-z0-9][a-z0-9-]{0,127}$/)
-      expect(market.plugins).toHaveLength(1)
-      expect(market.plugins[0].name).toBe("openspec-agents")
-      expect(market.plugins[0].source).toBe("./claude-code-plugin")
-      expect(market.plugins[0].source).not.toContain("..")
-      expect(market.owner).toEqual({ name: expect.any(String) })
-      expect(market.plugins[0].version).toBe(manifest.version)
-
-      // claude plugin validate 门禁（本机有 claude CLI 时）：plugin.json 与 marketplace.json 均须通过
-      const pluginCheck = claudeValidate(pluginDir)
-      const marketCheck = claudeValidate(marketFile)
-      if (!hasClaudeCli()) {
-        console.warn("本机无 claude CLI，跳过 claude plugin validate 门禁")
-      } else {
+      // claude plugin validate 门禁（本机有 claude CLI 时）
+      if (hasClaudeCli()) {
+        const pluginCheck = claudeValidate(pluginDir)
         expect(pluginCheck.status, `plugin.json 校验失败：\n${pluginCheck.output}`).toBe(0)
-        expect(marketCheck.status, `marketplace.json 校验失败：\n${marketCheck.output}`).toBe(0)
       }
     } finally {
       rmSync(pluginDir, { recursive: true, force: true })
@@ -135,11 +118,39 @@ describe("codex 适配器", () => {
       removeCodexInjection(repo)
     }
   })
+
+  test("生成 Codex 官方插件包（plugin.json/agents/skills/.mcp.json）", async () => {
+    const { buildCodexPlugin } = await import("../src/adapters/codex/index")
+    const pluginDir = join(TMP_ROOT, "codex-plugin")
+    rmSync(pluginDir, { recursive: true, force: true })
+    try {
+      const result = buildCodexPlugin(pluginDir)
+      const manifest = JSON.parse(readFileSync(join(pluginDir, ".codex-plugin", "plugin.json"), "utf-8"))
+      expect(manifest.name).toMatch(/^[a-z0-9][a-z0-9-]{0,127}$/)
+      expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/)
+      expect(manifest.skills).toBe("./skills/")
+      expect(manifest.mcpServers).toBe("./.mcp.json")
+      expect(manifest.interface?.displayName).toBeTruthy()
+      expect(result.agents).toContain("openspec-developer")
+      expect(result.agents).not.toContain("openspec-main")
+
+      const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
+      const entry = mcp.mcpServers["openspec-agents"]
+      expect(entry.command).toBe("node")
+      expect(entry.args[0]).toBe("./.mcp-server/cli.mjs")
+      expect(entry.args).toContain("--unattended")
+
+      expect(existsSync(join(pluginDir, ".mcp-server", "cli.mjs"))).toBe(true)
+      await import(pathToFileURL(join(pluginDir, ".mcp-server", "cli.mjs")).href)
+    } finally {
+      rmSync(pluginDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("zcode 适配器", () => {
-  test("生成 ZCode 官方插件包（plugin.json/agents/skills/.mcp.json/marketplace.json）", async () => {
-    const { buildZcodePlugin, writeZcodeMarketplace } = await import("../src/adapters/zcode/index")
+  test("生成 ZCode 官方插件包（plugin.json/agents/skills/.mcp.json）", async () => {
+    const { buildZcodePlugin } = await import("../src/adapters/zcode/index")
     const pluginDir = join(TMP_ROOT, "zcode-plugin")
     rmSync(pluginDir, { recursive: true, force: true })
     try {
@@ -189,23 +200,6 @@ describe("zcode 适配器", () => {
       expect(existsSync(join(pluginDir, ".mcp-server", "cli.mjs"))).toBe(true)
       await import(pathToFileURL(join(pluginDir, ".mcp-server", "cli.mjs")).href)
 
-      // marketplace.json：name 合法、source 为相对路径指向插件目录、owner 必填
-      const marketFile = join(TMP_ROOT, "marketplace.json")
-      writeZcodeMarketplace(pluginDir, marketFile)
-      const market = JSON.parse(readFileSync(marketFile, "utf-8"))
-      expect(market.name).toMatch(/^[a-z0-9][a-z0-9._-]{0,127}$/)
-      expect(market.plugins).toHaveLength(1)
-      expect(market.plugins[0].name).toBe("openspec-agents")
-      expect(market.plugins[0].source).toBe("./zcode-plugin")
-      expect(market.plugins[0].source).not.toContain("..")
-      expect(market.owner).toEqual({ name: expect.any(String) })
-      expect(market.plugins[0].version).toBe(manifest.version)
-
-      // claude 校验器对 zcode marketplace 同样适用（本机有 claude CLI 时）
-      if (hasClaudeCli()) {
-        const marketCheck = claudeValidate(marketFile)
-        expect(marketCheck.status, `zcode marketplace 校验失败：\n${marketCheck.output}`).toBe(0)
-      }
     } finally {
       rmSync(pluginDir, { recursive: true, force: true })
     }
