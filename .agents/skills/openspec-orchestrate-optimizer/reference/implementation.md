@@ -8,7 +8,7 @@
 
 ## 执行模式
 
-- **默认模式**：所有变更在当前目录执行，按既有收尾流程完成。
+- **默认模式**：所有变更在当前目录执行，按项目收尾流程（独立 skill）完成。
 - **Worktree 模式**：仅用户明确要求 worktree 隔离时启用。从启动分支创建隔离 worktree 与实施分支：`git worktree add -b <实施分支> <worktree路径> <启动分支>`。创建失败立即停止并报告。
 
 ## 串行流水线
@@ -20,28 +20,7 @@
    - 纯文档改动（`assets/agents/*.md`、`assets/skills/*/SKILL.md`、本 skill 文件）→ 跳过自动化测试，由复核子代理验证
    - 识别每个实施项是否创建了新场景——有为新场景增测试；无则说明理由且不留缺口
 2. **复核子代理**：审查变更正确性、设计原则合规（AGENTS.md 治理原则所有要点）、测试覆盖，并对照实施项清单逐条核验行为完整性（每个行为真实发生，非仅状态标记），识别部分实现。复核不通过 → 回环到第 1 步重做，迭代上限 3 次。超限则停止并报告。
-3. **收尾子代理**（在用户确认门禁后）：
-
-   版本变更规则：
-
-   | 变更类型 | 版本变动 |
-   |---------|---------|
-   | 改流程/新增能力/改工具行为 | minor（0.Y.z → 0.Y+1.0） |
-   | 纯文档措辞/bug 修正/注释 | patch（0.Y.z → 0.Y.z+1） |
-
-   **默认模式：**
-   - 更新受影响文档，融入现有结构，用结论式叙述，禁止变更式表达
-   - 修改 `package.json` 版本号
-   - `git add -A` → `git commit`（从 `git log` 自推仓库风格）→ `git push`；push 失败向用户报告并停止
-   - 项目根目录执行 `bun run sync`
-
-   **Worktree 模式：**
-   - 在原仓库检出启动分支：`git checkout <启动分支>`
-   - 合并实施分支：`git merge <实施分支>`
-   - 更新受影响文档，修改 `package.json` 版本号
-   - `git add -A` → `git commit` → `git push origin <启动分支>`；push 失败向用户报告并停止
-   - 清理 worktree：`git worktree remove <worktree路径>` && `git branch -d <实施分支>`
-   - 项目根目录执行 `bun run sync`
+3. **收尾子代理**（在用户确认门禁后）：按项目收尾流程（独立 skill）执行（`test & repair` → 改版本 → `sync` → commit & tag version & push）。Worktree 模式先合并实施分支并清理 worktree，再按同一流程执行。
 
 ## 用户确认门禁
 
@@ -56,6 +35,7 @@
 执行模式: <默认|worktree>
 版本变更: <旧版本> → <新版本> (<minor|patch>)
 Commit: <hash>
+Tag: <tag>
 Push: <成功|失败(原因)>
 同步: <成功|失败(原因)>
 ```
