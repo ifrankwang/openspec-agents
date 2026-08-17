@@ -1,6 +1,6 @@
 ## Why
 
-当前 openspec-orchestrate 以 OpenCode 插件形态运行：6 个 opx_* 工具用 OpenCode 专属链式 API（tool.schema）定义，agent/skill 注入绑定 OpenCode 配置模型（config.agent / config.skills.paths），编排者角色 openspec-orchestrator 依赖 OpenCode 的 primary/subagent 模型与 task 分派工具。这导致工具无法接入 claude code、codex、zcode 等其他 agent。目标是把编排能力改造成 agent 无关的插件/工具，各 agent 通过统一契约接入同一套编排状态机与流程。
+当前 openspec-agents 以 OpenCode 插件形态运行：6 个 opx_* 工具用 OpenCode 专属链式 API（tool.schema）定义，agent/skill 注入绑定 OpenCode 配置模型（config.agent / config.skills.paths），编排者角色 openspec-orchestrator 依赖 OpenCode 的 primary/subagent 模型与 task 分派工具。这导致工具无法接入 claude code、codex、zcode 等其他 agent。目标是把编排能力改造成 agent 无关的插件/工具，各 agent 通过统一契约接入同一套编排状态机与流程。
 
 ## What Changes
 

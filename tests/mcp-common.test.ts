@@ -42,7 +42,7 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
       const { server, port } = await startMcpServer({ worktree, port: 0 })
       servers.push(server)
       const client = await connectClient(`http://127.0.0.1:${port}/mcp`)
-      expect(client.getServerVersion()?.name).toBe("openspec-orchestrate")
+      expect(client.getServerVersion()?.name).toBe("openspec-agents")
       expect(client.getServerVersion()?.version).toBe(PKG_VERSION)
       const { tools } = await client.listTools()
       const names = tools.map((t) => t.name)

@@ -71,7 +71,7 @@ describe("claude-code 适配器", () => {
 
       // .mcp.json：stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认无人值守（官方模板变量）
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
-      const entry = mcp.mcpServers["openspec-orchestrate"]
+      const entry = mcp.mcpServers["openspec-agents"]
       expect(entry.type).toBe("stdio")
       expect(entry.command).toBe("node")
       expect(entry.args[0]).toBe("${CLAUDE_PLUGIN_ROOT}/.mcp-server/cli.mjs")
@@ -92,7 +92,7 @@ describe("claude-code 适配器", () => {
       const market = JSON.parse(readFileSync(marketFile, "utf-8"))
       expect(market.name).toMatch(/^[a-z0-9][a-z0-9-]{0,127}$/)
       expect(market.plugins).toHaveLength(1)
-      expect(market.plugins[0].name).toBe("openspec-orchestrate")
+      expect(market.plugins[0].name).toBe("openspec-agents")
       expect(market.plugins[0].source).toBe("./claude-code-plugin")
       expect(market.plugins[0].source).not.toContain("..")
       expect(market.owner).toEqual({ name: expect.any(String) })
@@ -128,7 +128,7 @@ describe("codex 适配器", () => {
 
       injectCodexMcp(repo, "/abs/path/mcp-server.js")
       const cfg = readFileSync(join(repo, ".codex", "config.toml"), "utf-8")
-      expect(cfg).toContain("[mcp_servers.openspec-orchestrate]")
+      expect(cfg).toContain("[mcp_servers.openspec-agents]")
       expect(cfg).toContain('command = "node"')
       expect(cfg).toContain("--unattended")
     } finally {
@@ -175,7 +175,7 @@ describe("zcode 适配器", () => {
 
       // .mcp.json：stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认无人值守
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
-      const entry = mcp.mcpServers["openspec-orchestrate"]
+      const entry = mcp.mcpServers["openspec-agents"]
       expect(entry.type).toBe("stdio")
       expect(entry.command).toBe("node")
       expect(entry.args[0]).toBe("${CLAUDE_PLUGIN_ROOT}/.mcp-server/cli.mjs")
@@ -195,7 +195,7 @@ describe("zcode 适配器", () => {
       const market = JSON.parse(readFileSync(marketFile, "utf-8"))
       expect(market.name).toMatch(/^[a-z0-9][a-z0-9._-]{0,127}$/)
       expect(market.plugins).toHaveLength(1)
-      expect(market.plugins[0].name).toBe("openspec-orchestrate")
+      expect(market.plugins[0].name).toBe("openspec-agents")
       expect(market.plugins[0].source).toBe("./zcode-plugin")
       expect(market.plugins[0].source).not.toContain("..")
       expect(market.owner).toEqual({ name: expect.any(String) })
@@ -231,7 +231,7 @@ describe("zcode 适配器", () => {
       )
       try {
         const serverInfo = client.getServerVersion()
-        expect(serverInfo?.name).toBe("openspec-orchestrate")
+        expect(serverInfo?.name).toBe("openspec-agents")
         expect(serverInfo?.version).toBe(result.version)
       } finally {
         await client.close()

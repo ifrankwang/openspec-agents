@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — Quality Reviewer（安全维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从注入防护、凭证管理、文件上传校验、日志脱敏等维度审查，使用统一严重级别，仅关注 security 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
+description: OpenSpec 编排流程专用 — Quality Reviewer（安全维度）。仅在 openspec-agents 工作流内由编排者分派使用。从注入防护、凭证管理、文件上传校验、日志脱敏等维度审查，使用统一严重级别，仅关注 security 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
 mode: subagent
 hidden: true
 steps: 200

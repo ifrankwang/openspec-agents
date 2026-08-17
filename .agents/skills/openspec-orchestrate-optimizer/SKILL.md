@@ -1,5 +1,5 @@
 ---
-name: openspec-orchestrate-optimizer
+name: openspec-agents-optimizer
 description: 编排框架分析与优化——问题诊断（5-Why）和改进分析（现状-差距-方案）的标准规范与流程。
 capabilities: ["orchestration-analysis"]
 ---

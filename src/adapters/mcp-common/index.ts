@@ -83,7 +83,7 @@ export async function startMcpServer(opts: McpServerOptions): Promise<{ server: 
     }
     if (req.method === "GET") {
       res.writeHead(200, { "content-type": "application/json;charset=utf-8" })
-      res.end(JSON.stringify({ name: "openspec-orchestrate", status: "ok" }))
+      res.end(JSON.stringify({ name: "openspec-agents", status: "ok" }))
       return
     }
     res.writeHead(405, { "content-type": "text/plain;charset=utf-8" })
@@ -105,7 +105,7 @@ export async function startMcpServer(opts: McpServerOptions): Promise<{ server: 
         server.listen(p, hostname, () => resolve())
       })
       started = true
-      console.log(`[mcp] openspec-orchestrate MCP server http://${hostname}:${p}/mcp（worktree: ${opts.worktree}）`)
+      console.log(`[mcp] openspec-agents MCP server http://${hostname}:${p}/mcp（worktree: ${opts.worktree}）`)
       break
     } catch {
       continue

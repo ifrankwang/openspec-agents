@@ -71,12 +71,12 @@ export function injectCodexMcp(repoRoot: string, serverEntry: string): void {
   mkdirSync(dirname(target), { recursive: true })
   const existing = existsSync(target) ? readFileSync(target, "utf-8") : ""
   const block = [
-    `[mcp_servers.openspec-orchestrate]`,
+    `[mcp_servers.openspec-agents]`,
     `command = "node"`,
     `args = ["${tomlEscape(serverEntry)}", "--transport", "stdio", "--worktree", ".", "--unattended"]`,
   ].join("\n")
   // 已存在同名 server 块则整体替换，否则追加
-  const re = /\[mcp_servers\.openspec-orchestrate\][\s\S]*?(?=\n\[|\n*$)/m
+  const re = /\[mcp_servers\.openspec-agents\][\s\S]*?(?=\n\[|\n*$)/m
   const next = re.test(existing) ? existing.replace(re, block) : `${existing.trimEnd()}\n\n${block}\n`
   writeFileSync(target, next, "utf-8")
 }

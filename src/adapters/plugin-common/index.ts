@@ -18,14 +18,14 @@ import { spawnSync } from "node:child_process"
 import * as yaml from "js-yaml"
 import { parseAgentMd, resolve, EXCLUDED_AGENTS } from "../agent-md.ts"
 
-export const PLUGIN_NAME = "openspec-orchestrate"
+export const PLUGIN_NAME = "openspec-agents"
 export const PLUGIN_DESCRIPTION =
   "OpenSpec change 编排：opx_* 编排工具（MCP）+ 编排子代理 + orchestrator skill，非 OpenCode agent 默认无人值守"
-export const MARKETPLACE_NAME = "openspec-orchestrate-marketplace"
+export const MARKETPLACE_NAME = "openspec-agents-marketplace"
 /** plugin.json author（package.json 无 author 字段，取固定值）。 */
-export const PLUGIN_AUTHOR = "openspec-orchestrate maintainers"
+export const PLUGIN_AUTHOR = "openspec-agents maintainers"
 /** marketplace.json 顶层 owner.name（claude/zcode 校验器均要求必填）。 */
-export const MARKETPLACE_OWNER = "openspec-orchestrate"
+export const MARKETPLACE_OWNER = "openspec-agents"
 
 function readPkgVersion(): string {
   return (JSON.parse(readFileSync(resolve("package.json"), "utf-8")) as { version: string }).version
@@ -211,7 +211,7 @@ export function writePluginMarketplace({ pluginDir, marketplaceFile, manifestDir
     JSON.stringify(
       {
         name: MARKETPLACE_NAME,
-        description: "openspec-orchestrate 官方插件市场：OpenSpec change 编排插件",
+        description: "openspec-agents 官方插件市场：OpenSpec change 编排插件",
         owner: { name: MARKETPLACE_OWNER },
         plugins: [
           {

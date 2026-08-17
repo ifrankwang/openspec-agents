@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 将本地源码同步到本机已存在的全部 openspec-orchestrate 安装缓存。
+# 将本地源码同步到本机已存在的全部 openspec-agents 安装缓存。
 # 支持三类缓存目标（按实际存在的目录发现，发现即同步）：
 #   1) opencode GitHub 插件缓存（node_modules 形态）——直接 rsync 源码
 #   2) ZCode / Claude Code 插件缓存（marketplace 安装缓存，打包产物形态）——
@@ -45,7 +45,7 @@ RSYNC_EXCLUDES=(
 )
 
 # ---- 1) opencode 插件缓存（node_modules 形态，直接同步源码） ----
-# 发现目标：~/.cache/opencode/packages/*/node_modules/openspec-orchestrate
+# 发现目标：~/.cache/opencode/packages/*/node_modules/openspec-agents
 CACHE_ROOTS=(
   "$HOME/.cache/opencode/packages"
   "$HOME/Library/Caches/opencode/packages"
@@ -71,12 +71,12 @@ for root in "${CACHE_ROOTS[@]}"; do
         "$target/"
       found=$((found + 1))
     fi
-  done < <(find "$root" -type d -path "*/node_modules/openspec-orchestrate" 2>/dev/null)
+  done < <(find "$root" -type d -path "*/node_modules/openspec-agents" 2>/dev/null)
 done
 
 # ---- 2) ZCode / Claude Code 插件缓存（打包产物形态，先打包再同步） ----
 # 发现目标：
-#   权威记录 —— ~/.zcode/cli/plugins/installed_plugins.json 中 name=openspec-orchestrate 的 installPath
+#   权威记录 —— ~/.zcode/cli/plugins/installed_plugins.json 中 name=openspec-agents 的 installPath
 #   fallback —— 扫描 cache 目录下 {marketplace}/{plugin}/{version} 形态的所有版本目录
 # 同步方式：按缓存内清单目录名（.claude-plugin / .zcode-plugin）判定打包命令，产物 rsync 到安装目录。
 
@@ -134,7 +134,7 @@ for state_file in "$HOME/.zcode/cli/plugins/installed_plugins.json" "$HOME/.clau
     if [ -n "$install_path" ] && [ -d "$install_path" ]; then
       sync_plugin_cache "$install_path" || true
     fi
-  done < <(node -e 'const d = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf-8")); for (const p of d.plugins ?? []) { if (p.name === "openspec-orchestrate" && p.installPath) console.log(p.installPath) }' "$state_file" 2>/dev/null)
+  done < <(node -e 'const d = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf-8")); for (const p of d.plugins ?? []) { if (p.name === "openspec-agents" && p.installPath) console.log(p.installPath) }' "$state_file" 2>/dev/null)
 done
 
 # fallback：扫描 cache 目录下 {marketplace}/{plugin}/{version} 形态的所有版本目录
@@ -146,11 +146,11 @@ for root in "${PLUGIN_CACHE_ROOTS[@]}"; do
       [ -d "$version_dir" ] || continue
       sync_plugin_cache "${version_dir%/}" || true
     done
-  done < <(find "$root" -maxdepth 2 -type d -name "openspec-orchestrate" 2>/dev/null)
+  done < <(find "$root" -maxdepth 2 -type d -name "openspec-agents" 2>/dev/null)
 done
 
 # ---- 3) ZCode 市场克隆（安装源快照，直接同步源码） ----
-# 发现目标：~/.zcode/cli/plugins/marketplaces/openspec-orchestrate-marketplace
+# 发现目标：~/.zcode/cli/plugins/marketplaces/openspec-agents-marketplace
 # 市场克隆作为安装源：marketplace.json 的 source 指向 dist/ 打包产物，同步前须确保产物新鲜
 # （若本机无任何插件缓存触发过打包，则主动打一次 claude:plugin）。
 # exclude 运行时目录（node_modules/.git/.codegraph/.worktree/.opencode/openspec/states/），
@@ -181,11 +181,11 @@ for root in "${MARKETPLACE_ROOTS[@]}"; do
       "$PROJECT_DIR/" \
       "$target/"
     found=$((found + 1))
-  done < <(find "$root" -maxdepth 1 -type d -name "openspec-orchestrate-marketplace" 2>/dev/null)
+  done < <(find "$root" -maxdepth 1 -type d -name "openspec-agents-marketplace" 2>/dev/null)
 done
 
 if [ "$found" -eq 0 ]; then
-  echo "ERROR: 未发现 openspec-orchestrate 安装缓存。"
+  echo "ERROR: 未发现 openspec-agents 安装缓存。"
   echo "先以插件形式运行一次对应 agent（或安装目标包）以创建缓存目录。"
   exit 1
 fi

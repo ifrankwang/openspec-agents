@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — Quality Reviewer（架构维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从分层依赖、接口设计、依赖注入、数据对象不可变性等维度审查，使用统一严重级别，仅关注 architecture 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
+description: OpenSpec 编排流程专用 — Quality Reviewer（架构维度）。仅在 openspec-agents 工作流内由编排者分派使用。从分层依赖、接口设计、依赖注入、数据对象不可变性等维度审查，使用统一严重级别，仅关注 architecture 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
 mode: subagent
 hidden: true
 steps: 200

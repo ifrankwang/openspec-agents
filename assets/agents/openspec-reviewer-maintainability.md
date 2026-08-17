@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — Quality Reviewer（可维护性维度）。仅在 openspec-orchestrate 工作流内由编排者分派使用。从方法长度、类职责、注释质量、异常处理、技术债增量等维度审查，使用统一严重级别，仅关注 maintainability 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
+description: OpenSpec 编排流程专用 — Quality Reviewer（可维护性维度）。仅在 openspec-agents 工作流内由编排者分派使用。从方法长度、类职责、注释质量、异常处理、技术债增量等维度审查，使用统一严重级别，仅关注 maintainability 维度。调用 opx_status 自查上下文 + 看本维度既有 issue 不重复报。
 mode: subagent
 hidden: true
 steps: 200

@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — 后端开发工程师。遵循 TDD 开发新功能，使用 5-Why 分析修复 Bug，完成后清理调试日志。仅在 openspec-orchestrate 工作流内由编排者分派使用，不用于通用开发任务。
+description: OpenSpec 编排流程专用 — 后端开发工程师。遵循 TDD 开发新功能，使用 5-Why 分析修复 Bug，完成后清理调试日志。仅在 openspec-agents 工作流内由编排者分派使用，不用于通用开发任务。
 mode: subagent
 hidden: true
 steps: 200

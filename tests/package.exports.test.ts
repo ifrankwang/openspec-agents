@@ -2,7 +2,7 @@
  * package.json 发布形态测试（README 可执行性复核修复）：
  * opencode npm server 插件按 exports["./server"] 解析入口，缺失时退回 package main
  * （指向内核，导出大量非函数值）——opencode getLegacyPlugins 遇首个非函数导出即抛错、
- * 插件被静默跳过，导致 "plugin": ["openspec-orchestrate"] 不生效。
+ * 插件被静默跳过，导致 "plugin": ["openspec-agents"] 不生效。
  * 断言 ./server 子导出指向插件壳入口，且该入口全部导出均为 opencode 可接受的
  * 函数（或 { server: fn }）形态，保证插件按包名可被加载。
  */

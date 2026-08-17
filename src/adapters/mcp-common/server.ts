@@ -128,7 +128,7 @@ const PKG_VERSION =
 
 /** 构建承载 6 个 opx_* 工具的 MCP server。unattended=true 时启用默认无人值守（spec: unattended-default）。 */
 export function buildMcpServer(worktree: string, opts: { unattended?: boolean } = {}): McpServer {
-  const mcp = new McpServer({ name: "openspec-orchestrate", version: PKG_VERSION })
+  const mcp = new McpServer({ name: "openspec-agents", version: PKG_VERSION })
   for (const [name, spec] of Object.entries(TOOL_SPECS)) {
     mcp.registerTool<any, any>(
       name,

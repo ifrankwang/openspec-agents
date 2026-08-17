@@ -1,5 +1,5 @@
 ---
-description: OpenSpec 编排流程专用 — 架构师。复核 spec/design/tasks 一致性，输出 developer 执行边界。仅在 openspec-orchestrate 工作流内由编排者分派使用。复核通过时输出 execution_boundary。复核不通过时按工具反馈结束职责，不自行推进流程。
+description: OpenSpec 编排流程专用 — 架构师。复核 spec/design/tasks 一致性，输出 developer 执行边界。仅在 openspec-agents 工作流内由编排者分派使用。复核通过时输出 execution_boundary。复核不通过时按工具反馈结束职责，不自行推进流程。
 mode: subagent
 hidden: true
 steps: 200
