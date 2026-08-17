@@ -71,7 +71,7 @@ function findOpenCodeTargets(roots: string[]): string[] {
   const targets: string[] = []
   for (const root of roots.map(expandHome)) {
     if (!isDir(root)) continue
-    for (const dir of findDirs(root, 6, (d) => basename(d) === "openspec-agents" && isDir(join(d, "package.json")))) {
+    for (const dir of findDirs(root, 6, (d) => basename(d) === "openspec-agents" && existsSync(join(d, "package.json")))) {
       targets.push(dir)
     }
   }
@@ -106,6 +106,14 @@ function rsync(src: string, dest: string): void {
   }
 }
 
+function installDependencies(pkgDir: string): void {
+  console.log(`[opencode] installing dependencies -> ${pkgDir}`)
+  const r = spawnSync("bun", ["install", "--production"], { cwd: pkgDir, stdio: "inherit" })
+  if (r.status !== 0) {
+    throw new Error(`bun install failed: ${pkgDir}`)
+  }
+}
+
 function buildFor(harness: string): void {
   if (harness === "claude") {
     buildClaudeCodePlugin(CLAUDE_CODE_PLUGIN_DIR)
@@ -127,6 +135,7 @@ function syncTarget(target: SyncTarget): number {
     for (const dest of targets) {
       console.log(`[opencode] syncing workspace -> ${dest}`)
       rsync(PROJECT_ROOT, dest)
+      installDependencies(dest)
       found++
     }
     return found

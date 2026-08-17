@@ -7,7 +7,7 @@
 | `bun test` | 运行所有测试 |
 | `bun run typecheck` | TypeScript 类型检查（tsc --noEmit） |
 | `bun run build:plugins` | 构建 Claude Code / Codex / ZCode 插件包（CI/内部使用） |
-| `bun run sync` | 同步本地最新开发版本到各 harness 插件缓存 |
+| `bun run sync` | 同步本地最新开发版本到各 harness 插件缓存，并安装/刷新依赖 |
 
 tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/`。
 
