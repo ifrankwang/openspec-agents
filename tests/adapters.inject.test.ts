@@ -71,7 +71,7 @@ describe("claude-code 适配器", () => {
 
       // .mcp.json：stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认无人值守（官方模板变量）
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
-      const entry = mcp.mcpServers["openspec-agents"]
+      const entry = mcp.mcpServers["opx"]
       expect(entry.type).toBe("stdio")
       expect(entry.command).toBe("node")
       expect(entry.args[0]).toBe("${CLAUDE_PLUGIN_ROOT}/.mcp-server/cli.mjs")
@@ -80,6 +80,7 @@ describe("claude-code 适配器", () => {
       expect(entry.args).toContain("--worktree")
       expect(entry.args).toContain("${CLAUDE_PROJECT_DIR}")
       expect(entry.args).toContain("--unattended")
+      expect(entry.args).toContain("--strip-opx-prefix")
 
       // MCP server bundle：产物存在且可被 node 解析（结构正确性边界，不实际启动 server）
       expect(existsSync(join(pluginDir, ".mcp-server", "cli.mjs"))).toBe(true)
@@ -111,9 +112,10 @@ describe("codex 适配器", () => {
 
       injectCodexMcp(repo, "/abs/path/mcp-server.js")
       const cfg = readFileSync(join(repo, ".codex", "config.toml"), "utf-8")
-      expect(cfg).toContain("[mcp_servers.openspec-agents]")
+      expect(cfg).toContain("[mcp_servers.opx]")
       expect(cfg).toContain('command = "node"')
       expect(cfg).toContain("--unattended")
+      expect(cfg).toContain("--strip-opx-prefix")
     } finally {
       removeCodexInjection(repo)
     }
@@ -135,10 +137,11 @@ describe("codex 适配器", () => {
       expect(result.agents).not.toContain("openspec-main")
 
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
-      const entry = mcp.mcpServers["openspec-agents"]
+      const entry = mcp.mcpServers["opx"]
       expect(entry.command).toBe("node")
       expect(entry.args[0]).toBe("./.mcp-server/cli.mjs")
       expect(entry.args).toContain("--unattended")
+      expect(entry.args).toContain("--strip-opx-prefix")
 
       expect(existsSync(join(pluginDir, ".mcp-server", "cli.mjs"))).toBe(true)
       await import(pathToFileURL(join(pluginDir, ".mcp-server", "cli.mjs")).href)
@@ -186,7 +189,7 @@ describe("zcode 适配器", () => {
 
       // .mcp.json：stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认无人值守
       const mcp = JSON.parse(readFileSync(join(pluginDir, ".mcp.json"), "utf-8"))
-      const entry = mcp.mcpServers["openspec-agents"]
+      const entry = mcp.mcpServers["opx"]
       expect(entry.type).toBe("stdio")
       expect(entry.command).toBe("node")
       expect(entry.args[0]).toBe("${CLAUDE_PLUGIN_ROOT}/.mcp-server/cli.mjs")
@@ -195,6 +198,7 @@ describe("zcode 适配器", () => {
       expect(entry.args).toContain("--worktree")
       expect(entry.args).toContain("${CLAUDE_PROJECT_DIR}")
       expect(entry.args).toContain("--unattended")
+      expect(entry.args).toContain("--strip-opx-prefix")
 
       // MCP server bundle：产物存在且可被 node 解析（结构正确性边界，不实际启动 server）
       expect(existsSync(join(pluginDir, ".mcp-server", "cli.mjs"))).toBe(true)

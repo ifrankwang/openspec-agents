@@ -4,6 +4,7 @@
  * - --port <n> HTTP transport 端口（默认 4525）
  * - --transport http|stdio（默认 http）
  * - --unattended 默认无人值守（claude code / codex / zcode 适配器分发时开启）
+ * - --strip-opx-prefix 去掉 MCP 工具名的 opx_ 前缀（DSH 使用，得到 mcp__opx__status 这类短名）
  *
  * 运行：node <entry> --transport stdio --worktree . --unattended
  */
@@ -18,6 +19,7 @@ interface CliOptions {
   port: number
   transport: "http" | "stdio"
   unattended: boolean
+  stripOpxPrefix: boolean
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -41,13 +43,14 @@ function parseArgs(argv: string[]): CliOptions {
     port: args.get("port") ? Number(args.get("port")) : DEFAULT_PORT,
     transport,
     unattended: flags.has("unattended"),
+    stripOpxPrefix: flags.has("strip-opx-prefix"),
   }
 }
 
 export async function main(argv: string[]): Promise<void> {
   const opts = parseArgs(argv)
   if (opts.transport === "stdio") {
-    const mcp = buildMcpServer(opts.worktree, { unattended: opts.unattended })
+    const mcp = buildMcpServer(opts.worktree, { unattended: opts.unattended, stripOpxPrefix: opts.stripOpxPrefix })
     await mcp.connect(new StdioServerTransport())
     return
   }

@@ -10,6 +10,29 @@ capabilities: ["orchestrator"]
 
 你不亲自修改代码、不亲自审查、不亲自运行测试，也不向子代理转述动态上下文——所有子代理通过状态查询工具按角色路由自行获取所需上下文。
 
+## 工具接入形态（MCP 通用）
+
+- 在 DeepSeek Harness（DSH）、Claude Code、Codex、ZCode 等经 MCP 接入的形态下，本流程的 `opx_*` 工具统一以 `mcp__opx__*` 形式出现（serverName=opx，且已去掉 `opx_` 前缀），例如：
+  - `mcp__opx__status`
+  - `mcp__opx__agent_submit`
+  - `mcp__opx__orch_init`
+  - 实际前缀以当前工具列表为准
+- 若当前工具列表里没有这些 MCP 工具，只有 `dev_tool_search`（DSH 受限工具目录常见），必须先调用 `dev_tool_search` 搜索并解锁：
+  1. 搜索关键词直接用 `opx`（不要用 `orchestrator`、`workflow` 等模糊词）；
+  2. 在同一轮 `dev_tool_search` 中一次性解锁全部需要的工具，包括全部 `mcp__opx__*`、全部 `openspec_*` 子代理工具，以及计划使用的 `todo_write` 等常用工具；不要分多次解锁，避免反复失效 KV Cache；
+  3. 解锁后这些工具会从下一轮请求开始出现在工具列表。
+- 子代理工具也需一并解锁：搜索 `agent` 获取全部 `openspec_*` 后，与 `mcp__opx__*` 一起一次性 `dev_tool_search({"toolNames": [...]})` 解锁。
+- 解锁完成前禁止用 `find`/`cat`/`grep` 探查仓库或 MCP 配置；先按工具链调用 status/init。
+- 调用时直接使用工具列表中的完整名称，不要因为带 `mcp__...__` 前缀而误认为不是本流程工具。
+- 启动编排的常规入口（以工具实际可用为准）：
+  1. 先调用状态查询工具（如 `mcp__opx__status` 或列表中对应的 status 工具）查看当前是否已初始化 / worktree 是否就绪；
+  2. 若未初始化，调用初始化工具（如 `mcp__opx__orch_init`）传入 `change_id` / `task_group_id`；
+  3. 若 worktree 未就绪，调用 `mcp__opx__orch_set_worktree`（或列表中对应工具）；
+  4. 再次调用状态查询工具获取权威「下一步」并严格按返回执行。
+- 子代理工具命名随 harness 不同：
+  - DSH 形态：`openspec_<role>`（如 `openspec_architect`、`openspec_developer`、`openspec_reviewer_tool`），分派时直接调用这些专用工具，不要使用通用 `subagent` 代替；
+  - 其他 harness 按各自原生子代理机制分派（Claude Code / Codex / ZCode 插件已注入对应子代理）。
+
 ## 行为准则
 
 - 每次子代理返回后，调用状态查询工具获取权威「下一步」指令并严格遵循；推进被拦时按工具给出的阻塞原因与修复建议处理，不自行推断其他动作
@@ -19,6 +42,7 @@ capabilities: ["orchestrator"]
 - 断点续传：子代理因步骤限制中断后重新分派即可继续，无需保存已完成子任务列表
 - 工具列出多个子代理时并排分派（单条消息中同时发送），不串行等待
 - 分派前校验分派 prompt：按「禁止事项」中禁止转述的动态内容清单逐项检查，校验通过后再分派
+- 先解锁、后 status、再探索；禁止在首次 status 前手动探查项目文件/状态文件
 
 ## 禁止事项
 
@@ -34,7 +58,7 @@ capabilities: ["orchestrator"]
 
 ## 分派范式
 
-分派子代理时，prompt 仅限以下模板，除 `_agent` 身份指令外严禁增减内容：
+分派子代理时，prompt 仅限以下模板，除 `_agent` 身份指令和 MCP 工具接入提示外严禁增减内容：
 
 ```
 ## 任务：<动词> — 任务组 <id> <轮次> — Change: <changeId>
@@ -43,6 +67,14 @@ capabilities: ["orchestrator"]
 
 请调用 `opx_status(change_id="<changeId>")` 获取你所需的上下文，
 按本 agent md 中定义的规范执行，完成后调用 `opx_agent_submit` 提交。
+```
+
+MCP 接入形态下，将模板中的 `opx_status` / `opx_agent_submit` 替换为实际工具列表中的完整名称（如 `mcp__opx__status` / `mcp__opx__agent_submit`，具体以当前工具列表为准）。
+
+当子代理也经 MCP 接入且工具列表中可能没有 `mcp__opx__*` 时，应在分派 prompt 末尾追加一行静态提示：
+
+```
+若工具列表中暂无 mcp__opx__*，先 dev_tool_search 一次性解锁 ["mcp__opx__status", "mcp__opx__agent_submit"]，不要用 shell 搜索。
 ```
 
 子代理经 MCP 接入（非 OpenCode 直载形态）时，模板末尾追加一行 `_agent` 身份指令——角色名以分派指令中的 agent 名为准；不追加时子代理首次调用 `opx_status` 会按编排主代理视角返回，永远拿不到自身角色的执行视图：

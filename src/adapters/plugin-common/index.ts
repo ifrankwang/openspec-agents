@@ -22,7 +22,7 @@ export const PLUGIN_DESCRIPTION =
 /** plugin.json author（package.json 无 author 字段，取固定值）。 */
 export const PLUGIN_AUTHOR = "openspec-agents maintainers"
 
-function readPkgVersion(): string {
+export function readPkgVersion(): string {
   return (JSON.parse(readFileSync(resolve("package.json"), "utf-8")) as { version: string }).version
 }
 
@@ -30,7 +30,7 @@ function readPkgVersion(): string {
  * 构建 MCP server 自包含 bundle（node cli.ts 直跑依赖 node_modules，插件安装后无此环境，
  * 故 bundle 单文件至插件包内，node 直接执行）。打包依赖本机 bun CLI（spawnSync("bun")）。
  */
-function bundleMcpServer(pluginDir: string): void {
+export function bundleMcpServer(pluginDir: string): void {
   const out = join(pluginDir, ".mcp-server", "cli.mjs")
   mkdirSync(join(pluginDir, ".mcp-server"), { recursive: true })
   // dashboard 页面资源随 bundle 同目录放置（page.ts 按此布局探测）
@@ -55,7 +55,7 @@ function bundleMcpServer(pluginDir: string): void {
 }
 
 /** 转换 agents：从 assets/agents/*.md 取子代理（排除主代理模板），frontmatter 仅保留 name/description。 */
-function buildAgents(targetDir: string): string[] {
+export function buildAgents(targetDir: string): string[] {
   const agentsRoot = resolve("assets", "agents")
   const injected: string[] = []
   for (const file of readdirSync(agentsRoot)) {
@@ -80,7 +80,7 @@ function buildAgents(targetDir: string): string[] {
 }
 
 /** 复制 skills：整个 skill 目录（SKILL.md + reference/ 等附属文件），含 orchestrator skill。 */
-function buildSkills(targetDir: string): string[] {
+export function buildSkills(targetDir: string): string[] {
   const skillsRoot = resolve("assets", "skills")
   const injected: string[] = []
   for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
@@ -91,6 +91,11 @@ function buildSkills(targetDir: string): string[] {
     injected.push(entry.name)
   }
   return injected
+}
+
+/** 复制 workflow 定义到插件包（bundle 内按部署深度逐级上溯探测读取）。 */
+export function copyWorkflows(targetDir: string): void {
+  cpSync(resolve("assets", "workflows"), join(targetDir, "assets", "workflows"), { recursive: true })
 }
 
 export interface PluginPackageParams {
@@ -123,7 +128,7 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
   bundleMcpServer(outDir)
   // workflow 定义随包分发：bundle 内 TASK_WORKFLOW_PATH 按部署深度逐级上溯探测
   // assets/workflows/task.yaml，插件根（dist/cache 形态）上溯 1 级即命中
-  cpSync(resolve("assets", "workflows"), join(outDir, "assets", "workflows"), { recursive: true })
+  copyWorkflows(outDir)
 
   writeFileSync(
     join(outDir, manifestDirName, "plugin.json"),
@@ -149,7 +154,7 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
     JSON.stringify(
       {
         mcpServers: {
-          [PLUGIN_NAME]: {
+          opx: {
             type: "stdio",
             command: "node",
             args: [
@@ -159,6 +164,7 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
               "--worktree",
               "${CLAUDE_PROJECT_DIR}",
               "--unattended",
+              "--strip-opx-prefix",
             ],
           },
         },

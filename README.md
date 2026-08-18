@@ -15,7 +15,7 @@ OpenSpec 把需求、设计、任务拆解成规范文档后，实施阶段仍�
 
 ## 特色
 
-- **Agent 无关**：内核不绑定具体 Agent，opencode / claude code / codex / zcode 通过各自原生插件/适配器接入同一套状态机。
+- **Agent 无关**：内核不绑定具体 Agent，opencode / claude code / codex / zcode / deepseek harness 通过各自原生插件/适配器接入同一套状态机。
 - **Workflow 驱动**：步骤、角色、门禁在 workflow 中声明，`opx_status` 是下一步调度的唯一事实源。
 - **多 Agent 团队**：主代理编排，子代理按角色分工，避免单一大模型从头写到尾失控。
 - **强 Review 门禁**：tool / task / quality 三层审查 + 收尾验证，问题可回退、可豁免、可检查点决策。
@@ -68,20 +68,34 @@ bun run typecheck
 
 - **ZCode**：在 ZCode 插件页添加市场 `ifrankwang/zcode-plugins`，然后安装 `openspec-agents`。
 
+- **DeepSeek Harness（DSH）**：通过 DSH 的 bundle 插件机制接入。发布到 npm 后可直接安装：
+  ```bash
+  dsh plugin --profile web add @ifrankwang/openspec-agents
+  ```
+  本地开发时也可使用构建产物：
+  ```bash
+  bun run build:plugins
+  dsh plugin --profile web add ./dist/deepseek-harness-plugin
+  ```
+  安装后重启 `dsh web`：
+  - `opx_*` 会以 `mcp__opx__*`（如 `mcp__opx__status`、`mcp__opx__agent_submit`） 原生工具出现；
+  - `assets/skills` 会作为额外 skill 根被扫描；
+  - 每个子代理会注册为 DSH 原生 subagent 工具，例如 `openspec_architect`、`openspec_developer`、`openspec_reviewer_tool`、`openspec_reviewer_task`、`openspec_reviewer_architecture` 等，编排主代理可直接分派。
+
 ## 常用命令
 
 | 命令 | 说明 |
 |------|------|
 | `bun test` | 运行所有测试 |
 | `bun run typecheck` | TypeScript 类型检查 |
-| `bun run build:plugins` | 构建 Claude Code / Codex / ZCode 插件包（CI/内部使用） |
+| `bun run build:plugins` | 构建 Claude Code / Codex / ZCode / DeepSeek Harness 插件包（CI/内部使用） |
 | `bun run sync` | 同步本地最新开发版本到各 harness 插件缓存，并安装/刷新依赖 |
 
 ## 项目结构
 
 ```
 src/core/                  — Agent 无关内核（状态机、工具执行器、状态持久化）
-src/adapters/              — opencode / claude-code / codex / zcode / mcp 适配层
+src/adapters/              — opencode / claude-code / codex / zcode / deepseek-harness / mcp 适配层
 assets/agents/             — Agent 定义
 assets/skills/             — 内置 skill（含 orchestrator）
 assets/workflows/          — workflow 定义

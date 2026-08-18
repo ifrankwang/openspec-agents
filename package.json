@@ -1,6 +1,6 @@
 {
   "name": "@ifrankwang/openspec-agents",
-  "version": "0.119.1",
+  "version": "0.120.0",
   "type": "module",
   "main": "./src/core/index.ts",
   "exports": {
@@ -36,6 +36,14 @@
       "import": "./src/adapters/zcode/index.ts",
       "types": "./src/adapters/zcode/index.ts"
     },
+    "./deepseek-harness": {
+      "import": "./src/adapters/deepseek-harness/index.ts",
+      "types": "./src/adapters/deepseek-harness/index.ts"
+    },
+    "./dsh": {
+      "import": "./src/adapters/deepseek-harness/index.ts",
+      "types": "./src/adapters/deepseek-harness/index.ts"
+    },
     "./mcp": {
       "import": "./src/adapters/mcp-common/index.ts",
       "types": "./src/adapters/mcp-common/index.ts"
@@ -47,11 +55,15 @@
   },
   "files": [
     "src",
-    "assets"
+    "assets",
+    "dsh",
+    ".mcp-server"
   ],
   "scripts": {
     "sync": "bun scripts/sync.ts",
     "build:plugins": "bun scripts/build-plugins.ts",
+    "build:dsh": "bun scripts/build-dsh-root.ts",
+    "prepack": "bun run build:dsh",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
@@ -64,6 +76,11 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "js-yaml": "^4.1.0",
     "@opencode-ai/plugin": "^1.17.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    }
   },
   "publishConfig": {
     "access": "public"

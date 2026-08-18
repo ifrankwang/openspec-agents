@@ -40,6 +40,15 @@ describe("package.json 发布形态", () => {
     expect(pkg.exports["./zcode"]?.types).toBe("./src/adapters/zcode/index.ts")
   })
 
+  test("./deepseek-harness 与 ./dsh 子导出指向 DSH 适配器", () => {
+    expect(pkg.exports["./deepseek-harness"]).toBeDefined()
+    expect(pkg.exports["./deepseek-harness"]?.import).toBe("./src/adapters/deepseek-harness/index.ts")
+    expect(pkg.exports["./deepseek-harness"]?.types).toBe("./src/adapters/deepseek-harness/index.ts")
+    expect(pkg.exports["./dsh"]).toBeDefined()
+    expect(pkg.exports["./dsh"]?.import).toBe("./src/adapters/deepseek-harness/index.ts")
+    expect(pkg.exports["./dsh"]?.types).toBe("./src/adapters/deepseek-harness/index.ts")
+  })
+
   test("插件壳入口全部导出均为 opencode 可接受的函数形态", async () => {
     const mod = (await import("../src/adapters/opencode/index.ts")) as Record<string, unknown>
     const entries = Object.values(mod)

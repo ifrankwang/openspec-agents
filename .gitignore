@@ -2,6 +2,8 @@ node_modules
 .DS_Store
 bun.lock
 dist
+.mcp-server
+dsh/
 .worktree/
 .worktrees/
 .codegraph

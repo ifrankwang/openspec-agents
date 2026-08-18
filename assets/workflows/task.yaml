@@ -11,6 +11,8 @@ max_retries: 10
 common:
   instructions:
     - "非 OpenCode 直载形态（经 MCP 接入的 agent 客户端）调用 opx_* 工具时，须携带 `_agent` 参数并传自身角色名（如 openspec-developer）；缺省会被视为编排主代理视角，将拿不到自身角色的执行视图与操作指引"
+    - "若当前工具列表中的编排工具带有 `mcp__<server>__` 前缀（MCP 接入形态，如 DeepSeek Harness / Claude Code / Codex / ZCode），调用时使用工具列表中的完整名称，例如 `mcp__opx__status`、`mcp__opx__agent_submit`；若工具列表中没有这些工具且存在 `dev_tool_search`，先用 `dev_tool_search` 搜索 `opx` 并一次性解锁全部需要的工具（含 `todo_write`）；禁止用 shell 查找 opx/openspec/MCP 配置"
+    - "首次调用 opx_status 前不要探查仓库结构或状态文件；工具未解锁时只用 dev_tool_search 解锁，解锁后立即调用 opx_status"
     - "调用 opx_status 获取动态上下文（{{worktree_path}}、变更范围、上轮会话摘要）"
     - "按 Skill 加载清单加载匹配的 skill 并遵循其全部规范"
     - "读取 `{{worktree_path}}/openspec/changes/{{change_id}}/` 下的相关文档：tasks.md（任务清单，按行内 `[spec:xxx]` 溯源定位 specs/ 下相关 spec.md）、design.md、proposal.md"

@@ -73,12 +73,12 @@ export function injectCodexMcp(repoRoot: string, serverEntry: string): void {
   mkdirSync(dirname(target), { recursive: true })
   const existing = existsSync(target) ? readFileSync(target, "utf-8") : ""
   const block = [
-    `[mcp_servers.openspec-agents]`,
+    `[mcp_servers.opx]`,
     `command = "node"`,
-    `args = ["${tomlEscape(serverEntry)}", "--transport", "stdio", "--worktree", ".", "--unattended"]`,
+    `args = ["${tomlEscape(serverEntry)}", "--transport", "stdio", "--worktree", ".", "--unattended", "--strip-opx-prefix"]`,
   ].join("\n")
   // 已存在同名 server 块则整体替换，否则追加
-  const re = /\[mcp_servers\.openspec-agents\][\s\S]*?(?=\n\[|\n*$)/m
+  const re = /\[mcp_servers\.opx\][\s\S]*?(?=\n\[|\n*$)/m
   const next = re.test(existing) ? existing.replace(re, block) : `${existing.trimEnd()}\n\n${block}\n`
   writeFileSync(target, next, "utf-8")
 }
@@ -137,7 +137,7 @@ export function buildCodexPlugin(outDir: string = CODEX_PLUGIN_DIR): PluginPacka
     JSON.stringify(
       {
         mcpServers: {
-          [PLUGIN_NAME]: {
+          opx: {
             command: "node",
             args: [
               "./.mcp-server/cli.mjs",
@@ -146,6 +146,7 @@ export function buildCodexPlugin(outDir: string = CODEX_PLUGIN_DIR): PluginPacka
               "--worktree",
               ".",
               "--unattended",
+              "--strip-opx-prefix",
             ],
             cwd: ".",
           },
