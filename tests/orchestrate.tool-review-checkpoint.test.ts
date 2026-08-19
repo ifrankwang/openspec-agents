@@ -129,7 +129,7 @@ describe("tool review 检查点增量端到端", () => {
       expect(discretionView).toContain("git -C")
       expect(discretionView).toContain("cp-1..HEAD")
       expect(discretionView).toContain("跳过全量工具检查")
-      expect(discretionView).toContain("仅注释/文档性")
+      expect(discretionView).toContain("仅为注释/文档性且无逻辑影响")
       // 有检查点形态口径标注：本次为「自上次工具检查（cp-1..HEAD）」增量区间，与「变更范围」baseRef..HEAD 累计口径不同
       expect(discretionView).toContain("自上次工具检查（cp-1..HEAD）")
       expect(discretionView).toContain("与上方「变更范围」（")

@@ -144,7 +144,7 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).toContain("若存在未提交变更，另用 `git status` / `git diff` 查看工作区改动")
     // 裁量语义操作指引（task.yaml 追加句渲染：有变更分支审查证据后可免全量）
     expect(out).toContain("跳过全量工具检查")
-    expect(out).toContain("仅注释/文档性")
+    expect(out).toContain("仅为注释/文档性且无逻辑影响")
   })
 
   test("分支③ 无检查点且无基线基准（边缘）：不渲染 diff 命令，仅渲染文件清单与口径标注", () => {

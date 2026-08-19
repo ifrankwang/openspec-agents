@@ -125,6 +125,10 @@ PMD 违规输出格式：
 
 `target/pmd.xml` 被 `<suppressedviolation>` 污染（全量规则集 + 抑制配置时）时，改用自定义 ruleset 生成的干净报告，或读取 `mvn pmd:check` 非 -q 形态 console 输出中的 `[WARNING] PMD Failure` 行。
 
+### 覆盖范围
+
+PMD 全量报告中的每条违规均须纳入问题清单，不因文件不在本次修改范围或经基线对比确认为存量而省略。
+
 ### 测量与复现
 
 pom 中 maven-pmd-plugin 显式配置的 `<rulesets>` 会覆盖命令行 `-Dpmd.rulesets`，修改生效规则集须改 pom 配置，勿用命令行参数覆盖。
