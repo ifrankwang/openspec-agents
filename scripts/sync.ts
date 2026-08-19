@@ -9,7 +9,7 @@
  *
  * 新增 harness 时请扩展 scripts/sync-targets.ts。
  */
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve, basename } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -18,6 +18,7 @@ import { buildClaudeCodePlugin, CLAUDE_CODE_PLUGIN_DIR } from "../src/adapters/c
 import { buildCodexPlugin, CODEX_PLUGIN_DIR } from "../src/adapters/codex/index.ts"
 import { buildZcodePlugin, ZCODE_PLUGIN_DIR } from "../src/adapters/zcode/index.ts"
 import { buildDeepSeekHarnessPlugin, DEEP_SEEK_HARNESS_PLUGIN_DIR } from "../src/adapters/deepseek-harness/index.ts"
+import { buildDshRootAssets } from "./build-dsh-root.ts"
 
 const PROJECT_ROOT = resolve(import.meta.dir, "..")
 const PLUGIN_DIRS: Record<string, string> = {
@@ -141,6 +142,24 @@ function findDshProfileTargets(roots: string[], packageName: string): string[] {
   return [...new Set(targets)]
 }
 
+/** 查找 DSH profile 中以 link 方式安装（符号链接指向本仓库）的 openspec-agents 包目录。 */
+function findDshLinkedInstalls(roots: string[], packageName: string): string[] {
+  const out: string[] = []
+  for (const root of roots.map(expandHome)) {
+    if (!isDir(root)) continue
+    const dirs = findDirs(root, 6, (d) => {
+      if (basename(d) !== basename(packageName)) return false
+      try {
+        return lstatSync(d).isSymbolicLink() && realpathSync(d) === realpathSync(PROJECT_ROOT)
+      } catch {
+        return false
+      }
+    })
+    out.push(...dirs)
+  }
+  return [...new Set(out)]
+}
+
 function rsync(src: string, dest: string): void {
   const args = ["-a", "--delete", ...RSYNC_EXCLUDES, `${src}/`, `${dest}/`]
   const r = spawnSync("rsync", args, { stdio: "inherit" })
@@ -189,6 +208,14 @@ function syncTarget(target: SyncTarget): number {
   if (target.kind === "dsh-profile") {
     if (!target.packageName || !target.build) {
       throw new Error(`invalid dsh-profile target: ${target.harness}`)
+    }
+    // link 安装形态：node_modules 中的包是符号链接直接指向本仓库，DSH 运行时读的是本仓库
+    // 根产物（.mcp-server/cli.mjs + dsh/cordis.patch.yml），重建根产物即完成同步；
+    // 不做 rsync 复制（复制会污染源码仓库，isProjectRootDir 过滤也保证 link 目标不进 targets）。
+    const linkedInstalls = findDshLinkedInstalls(roots, target.packageName)
+    if (linkedInstalls.length > 0) {
+      console.log(`[${target.harness}] rebuilding root DSH bundle for ${linkedInstalls.length} linked install(s)`)
+      buildDshRootAssets(PROJECT_ROOT)
     }
     const targets = findDshProfileTargets(roots, target.packageName)
     if (targets.length > 0) {
