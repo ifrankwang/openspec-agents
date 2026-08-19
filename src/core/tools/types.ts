@@ -5,7 +5,7 @@ export interface ToolContext {
   agent: string
   /** 编排视角角色判定：true 表示调用者承担编排者职责（各 agent 主代理），替代 agent 名硬编码 openspec-orchestrator。 */
   orchestrator?: boolean
-  /** 调用者 agent 身份是否显式声明：MCP 形态下为是否携带 `_agent` 参数，OpenCode 直载形态恒为 true。
+  /** 调用者 agent 身份是否显式声明：MCP 形态下为是否携带 `_agent` 参数。
    *   false 且落入编排视角时，opx_status 视图渲染补传 `_agent` 的身份提示（MCP 子代理首查死锁兜底）。 */
   identityDeclared?: boolean
   remote?: boolean

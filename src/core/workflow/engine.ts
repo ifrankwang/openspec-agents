@@ -12,11 +12,14 @@ import { reviewLayerFromMetadata, readIssueSource } from "../constants.ts"
 
 const TERMINAL_PHASES: WorkItemPhase[] = ["done", "cancelled"]
 
-/** review 三个验证 step → 其可裁定的 issue 报源层（层感知门禁归因依据）。 */
+/** review 验证 step → 其可裁定的 issue 报源层（层感知门禁归因依据）。
+ *  quality_review（simple 合并审查 step）按 quality 层口径——由 simple 审查者（openspec-reviewer）上报的
+ *  issue 归入 quality 层，blocking issue 终态才可 pass（与 full 模式 verify_quality 语义一致）。 */
 export const REVIEW_STEP_TO_LAYER: Record<string, "tool" | "task" | "quality"> = {
   verify_tool: "tool",
   verify_task: "task",
   verify_quality: "quality",
+  quality_review: "quality",
 }
 
 /** 读取 issue child 的报源层（source 反推，source_phase 仅作历史兜底，缺省 tool）。 */

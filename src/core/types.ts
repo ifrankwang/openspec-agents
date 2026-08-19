@@ -27,6 +27,9 @@ export type OrchestrateStatus = "not_started" | "in_progress" | "completed"
 export type DimensionVerdict = "pending" | "passed" | "failed"
 export type QualityLayerProgress = Record<ReviewDimension, DimensionVerdict>
 
+/** 流程模式：full（默认，analyze → implement → 三重审查+收尾验证）或 simple（implement → quality_review → done）。 */
+export type WorkflowMode = "full" | "simple"
+
 export interface ExecutionBoundary {
   allowed_directories: string[]
   allowed_packages: string[]
@@ -132,4 +135,7 @@ export interface OrchestrateState {
   createdAt: string
   updatedAt: string
   unattended?: boolean
+  /** 变更开始时固化的流程模式（opx_orch_init 从 <repo>/openspec/workflow.yaml 读取后写入）。
+   *  缺失即旧变更，一律按 full 处理（读时兜底，不写回）；已存在的 state 不再被配置改动覆盖。 */
+  mode?: WorkflowMode
 }

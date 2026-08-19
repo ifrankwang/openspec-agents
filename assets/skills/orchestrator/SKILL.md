@@ -30,7 +30,7 @@ capabilities: ["orchestrator"]
   3. 若 worktree 未就绪，调用 `mcp__opx__orch_set_worktree`（或列表中对应工具）；
   4. 再次调用状态查询工具获取权威「下一步」并严格按返回执行。
 - 子代理工具命名随 harness 不同：
-  - DSH 形态：`openspec_<role>`（如 `openspec_architect`、`openspec_developer`、`openspec_reviewer_tool`），分派时直接调用这些专用工具，不要使用通用 `subagent` 代替；
+  - DSH 形态：`openspec_developer` / `openspec_reviewer` 两个物理子代理（`openspec_<role>`，物理 agent 已收敛，9 种逻辑身份经 `_agent` 参数承载），分派时直接调用这些专用工具，不要使用通用 `subagent` 代替；
   - 其他 harness 按各自原生子代理机制分派（Claude Code / Codex / ZCode 插件已注入对应子代理）。
 
 ## 行为准则
@@ -77,13 +77,13 @@ MCP 接入形态下，将模板中的 `opx_status` / `opx_agent_submit` 替换�
 若工具列表中暂无 mcp__opx__*，先 dev_tool_search 一次性解锁 ["mcp__opx__status", "mcp__opx__agent_submit"]，不要用 shell 搜索。
 ```
 
-子代理经 MCP 接入（非 OpenCode 直载形态）时，模板末尾追加一行 `_agent` 身份指令——角色名以分派指令中的 agent 名为准；不追加时子代理首次调用 `opx_status` 会按编排主代理视角返回，永远拿不到自身角色的执行视图：
+子代理经 MCP 接入时，模板末尾追加一行 `_agent` 身份指令——角色名以分派指令中的 agent 名为准；不追加时子代理首次调用 `opx_status` 会按编排主代理视角返回，永远拿不到自身角色的执行视图：
 
 ```
 请以 `_agent` 参数传自身角色名调用 `opx_*` 工具（`_agent: "<角色名>"`，如 `_agent: "openspec-developer"`）。
 ```
 
-OpenCode 直载形态无需追加（工具按会话 agent 自动推导身份）。
+full 模式 verify_quality 以 5 个逻辑身份并行审查：同一物理审查者（openspec-reviewer）被多次分派，每次分派以不同 `_agent` 身份指令承载对应逻辑身份（如 `_agent: "openspec-reviewer-style"`、`_agent: "openspec-reviewer-architecture"`），分派指令中的角色名以 `opx_status` 返回的 agent 名为准；多个逻辑身份在单条消息中并排分派，无需串行等待。各 harness 均经 MCP 接入，一律追加 `_agent` 身份指令（直载形态已移除）。
 
 不包含任何 task/issue 明细、文件清单、执行边界具体值等动态内容——一切交给状态查询工具。
 

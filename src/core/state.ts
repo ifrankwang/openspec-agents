@@ -271,6 +271,9 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     createdAt: legacy.createdAt,
     updatedAt: legacy.updatedAt,
     unattended: legacy.unattended,
+    // 透传固化模式：state 已存在（重复初始化/切换任务组/recovery）时沿用既有 mode，
+    // 缺 mode 的旧变更保持缺省（消费端读时兜底 full，不在此写回）
+    mode: legacy.mode,
   }
   if (needsUpgrade) {
     // 迁移产物一次性落盘固定单轨形态，避免每次读取都重建（首次写新目录前幂等迁移旧数据）

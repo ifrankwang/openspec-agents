@@ -1,0 +1,6 @@
+# 每项目每变更的流程模式选择（与 openspec/config.yaml 同级，属项目配置而非插件内容）：
+#   mode: full    —— 完整流程（analyze → implement → 三重审查 + 收尾验证），默认值
+#   mode: simple  —— 简化流程（implement → quality_review → done）
+# 模式在变更开始时（opx_orch_init 新建状态）固化；已开始的变更不受本文件后续改动影响；
+# 文件缺失视为 full。mode 值域外或 YAML 解析失败会报错。
+mode: full

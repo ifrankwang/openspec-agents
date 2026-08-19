@@ -13,6 +13,7 @@ import type {
 } from "./types.ts"
 import { WORK_ITEM_PHASES, stepAgentIds } from "./types.ts"
 import { DIMENSION_AGENT_MAP } from "../constants.ts"
+import type { OrchestrateState, WorkflowMode } from "../types.ts"
 
 const SPECIAL_TRANSITIONS = ["done", "halt"] as const
 const PHASE_NAMES = new Set<string>(WORK_ITEM_PHASES)
@@ -23,30 +24,76 @@ export interface LoadedWorkflow extends WorkflowConfig {
 }
 
 /**
- * 定位 task.yaml：源码（src/core/workflow/ 上溯 3 级=仓库根）、插件包 dist 形态
+ * 定位 assets/workflows/<fileName>：源码（src/core/workflow/ 上溯 3 级=仓库根）、插件包 dist 形态
  * （dist/zcode-plugin/.mcp-server/ 上溯 1 级=插件根）与 ZCode 缓存嵌套形态
  * （cache/<marketplace>/<plugin>/<version>/.mcp-server/ 上溯 1 级=版本目录）部署深度不同，
- * 故从模块所在目录逐级上溯探测 assets/workflows/task.yaml，首个命中即采用（首中即用）。
+ * 故从模块所在目录逐级上溯探测，首个命中即采用（首中即用）。
  * bundle 单文件合并后 import.meta.url 指向部署位置（cli.mjs），源码形态指向本文件自身，两者自然成立。
  */
-export function resolveTaskWorkflowPath(moduleUrl: string): string {
+function resolveWorkflowFilePath(moduleUrl: string, fileName: string): string {
   const startDir = dirname(fileURLToPath(moduleUrl))
   let dir = startDir
   let probed = 0
   for (;;) {
-    const candidate = pathResolve(dir, "assets", "workflows", "task.yaml")
+    const candidate = pathResolve(dir, "assets", "workflows", fileName)
     if (existsSync(candidate)) return candidate
     probed++
     const parent = dirname(dir)
     if (parent === dir) break // 到达文件系统根
     dir = parent
   }
-  throw new Error(`workflow 文件缺失：从 ${startDir} 上溯 ${probed} 级未找到 assets/workflows/task.yaml`)
+  throw new Error(`workflow 文件缺失：从 ${startDir} 上溯 ${probed} 级未找到 assets/workflows/${fileName}`)
+}
+
+export function resolveTaskWorkflowPath(moduleUrl: string): string {
+  return resolveWorkflowFilePath(moduleUrl, "task.yaml")
 }
 
 // 模块加载期求值，workflow 缺失即启动抛错（fail-fast）：opx_* 工具全部依赖 workflow，缺失时
 // server 无可用性，启动即抛比首次调用才报错更早且可读（可读错误替代原生 ENOENT）。
 export const TASK_WORKFLOW_PATH = resolveTaskWorkflowPath(import.meta.url)
+/** simple 流程文件（implement → quality_review → done），与 task.yaml 同目录随插件 bundle 分发。 */
+export const SIMPLE_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "task-simple.yaml")
+
+/**
+ * 按 state.mode 选择 workflow 文件：simple → task-simple.yaml，其余（full 或旧 state 缺 mode）→ task.yaml。
+ * 旧 state 无 mode 字段一律按 full 处理（读时兜底，不写回），与 D2 固化语义一致。
+ */
+export function resolveWorkflowPath(state: Pick<OrchestrateState, "mode">): string {
+  return state.mode === "simple" ? SIMPLE_WORKFLOW_PATH : TASK_WORKFLOW_PATH
+}
+
+/** 项目级模式配置文件路径（<worktree>/openspec/workflow.yaml，与 openspec/config.yaml 同级）。 */
+const WORKFLOW_MODE_CONFIG_FILE = "openspec/workflow.yaml"
+
+/**
+ * 读取项目级流程模式配置（<worktree>/openspec/workflow.yaml）：
+ * - 文件缺失 → "full"（缺省）
+ * - YAML 解析失败 → 抛错
+ * - 顶层非 YAML 映射对象 → 抛错
+ * - mode 字段缺失 → "full"（缺省）
+ * - mode 值域外（非 full/simple）→ 抛错
+ * 仅由 opx_orch_init 新建 state 时调用；已存在的 state 不读配置，沿用既有 mode。
+ */
+export function readWorkflowModeConfig(worktree: string): WorkflowMode {
+  const configPath = pathResolve(worktree, WORKFLOW_MODE_CONFIG_FILE)
+  if (!existsSync(configPath)) return "full"
+  let raw: unknown
+  try {
+    raw = yaml.load(readFileSync(configPath, "utf-8"))
+  } catch (err) {
+    fail(`${WORKFLOW_MODE_CONFIG_FILE} 解析失败：${(err as Error).message}`)
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail(`${WORKFLOW_MODE_CONFIG_FILE} 配置非法：顶层必须是 YAML 映射对象`)
+  }
+  const mode = (raw as { mode?: unknown }).mode
+  if (mode === undefined) return "full"
+  if (mode !== "full" && mode !== "simple") {
+    fail(`${WORKFLOW_MODE_CONFIG_FILE} 配置非法：mode 值域为 full/simple，收到 ${JSON.stringify(mode)}`)
+  }
+  return mode
+}
 
 const workflowFileCache = new Map<string, LoadedWorkflow>()
 

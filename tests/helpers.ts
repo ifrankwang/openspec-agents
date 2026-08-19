@@ -285,3 +285,23 @@ export function teardown(tmpRoot: string): void {
     }
   }
 }
+
+// ─── Simple 模式构造 ───
+
+/**
+ * simple 模式一次性构造（变更组 2+ 流程测试共用，避免重复样板）：
+ * 写 <worktree>/openspec/workflow.yaml(mode: simple) → opx_orch_init 固化 mode → opx_orch_set_worktree。
+ * 注：lifecycle 的初始 step 模式感知（组 3.1）落地后，init 直接把活跃 task WorkItem 落为
+ * simple 初始态（phase=in_progress、currentStep=implement），无需再手工改写。
+ */
+export async function initSimpleWorktree(
+  wt: string,
+  changeId: string,
+  taskGroupId = "1",
+): Promise<void> {
+  writeFileSync(join(wt, "openspec", "workflow.yaml"), "mode: simple\n", "utf-8")
+  const { init, set_worktree } = await import("../src/adapters/opencode/tools")
+  const orch = makeOrchCtx(wt)
+  await init.execute({ change_id: changeId, task_group_id: taskGroupId }, orch)
+  await set_worktree.execute({ change_id: changeId }, orch)
+}

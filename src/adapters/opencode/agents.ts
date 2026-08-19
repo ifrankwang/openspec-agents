@@ -21,22 +21,7 @@ function mapPermission(
 
 const AGENTS_ROOT = resolve("assets", "agents")
 
-/** 已知主代理名集合：注入的 openspec-main + 用户既有 primary agent + opencode 默认主代理 "primary"。 */
-const primaryAgents = new Set<string>(["primary"])
-
-/** 编排视角角色判定：调用者是否为主代理（承担编排者职责），替代 agent 名硬编码。 */
-export function isPrimaryAgent(agent: string): boolean {
-  return primaryAgents.has(agent)
-}
-
 export function injectAgents(config: Record<string, unknown>): void {
-  // 探测主代理名：config.agent 中 mode=primary 的条目（用户自定义 + 注入的主代理模板）
-  const existingAgents = (config.agent as Record<string, unknown>) ?? {}
-  for (const [name, cfg] of Object.entries(existingAgents)) {
-    if (typeof cfg === "object" && cfg !== null && (cfg as Record<string, unknown>).mode === "primary") {
-      primaryAgents.add(name)
-    }
-  }
   if (existsSync(AGENTS_ROOT)) {
     const files = readdirSync(AGENTS_ROOT).filter((f) => f.endsWith(".md"))
     for (const file of files) {
@@ -59,10 +44,6 @@ export function injectAgents(config: Record<string, unknown>): void {
       }
       const perm = mapPermission(frontmatter)
       if (perm) agentConfig.permission = perm
-
-      if (frontmatter.mode === "primary") {
-        primaryAgents.add(name)
-      }
 
       const existingAgentsMap = (config.agent as Record<string, unknown>) ?? {}
       const existingAgent = existingAgentsMap[name] as Record<string, unknown> | undefined

@@ -269,9 +269,9 @@ describe("common + step 语义渲染", () => {
   test("analyze：constraints（blocker 走 barrier 不入配置语义）+ instructions", () => {
     const item = makeItem({ phase: "todo", currentStep: "analyze" })
     const out = renderWorking(item, "analyze", "openspec-architect")
-    // analyze 有自己的 constraints（与 common 合并）
+    // analyze 有自己的 constraints（与 common 合并）；edit 边界与 blocker 处置属架构师身份职责语义（openspec-developer.md 承载），不在此重复
     expect(out).toContain("## 约束")
-    expect(out).toContain("仅可 edit 修复 md 文档；设计/架构验证问题与信息缺口一律走 blocker")
+    expect(out).toContain("只审当前任务组范围")
     expect(out).toContain("所有 edit/write 操作限定在 /wt 内")
     // instructions：common 继承 + step 追加
     expect(out).toContain("存在缺口时提交 blocker（category: architecture_design / info_gap），不以假设替代确认")

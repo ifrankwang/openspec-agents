@@ -1,5 +1,5 @@
 import path from "path"
-import type { TaskItem, TaskStatus } from "../types.ts"
+import type { TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
@@ -10,7 +10,7 @@ import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFro
 import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
-import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.ts"
+import { loadWorkflowFile, resolveWorkflowPath, readWorkflowModeConfig, type LoadedWorkflow } from "../workflow/loader.ts"
 import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags } from "../workflow/engine.ts"
 import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
@@ -131,11 +131,17 @@ function firstUnpassedReviewStep(item: WorkItem, workflow: LoadedWorkflow): stri
  * - review：review/verify_*（增量合并——已 passed 的审查标记保留、failed 重置为 pending，currentStep
  *   前移到第一个未全 passed 的子层；review_layer 决定强制前置哪些子层）、analyze+implement 已 passed、
  *   task children 保留既有进度（无则 done——review 恢复时子任务应视为已验证，否则 G21 remaining 会让 implement 无法提交）
+ * simple 分支（mode === "simple"，3.2）：无 analyze / verify_* step，task_analysis / dev_impl 均落
+ *   in_progress/implement（task_analysis 重置 task children 全 todo，dev_impl 保留既有进度）；review 落
+ *   review/quality_review——implement 置 passed、quality_review 的 failed tag 删除回 pending（passed 保留）、
+ *   task children 缺省 done；reset_steps / review_layer 参数在 simple 下接受但空操作（值域校验不变，
+ *   simple 无对应 verify step 可操作，文档标注无效）。
  */
 function applyRecoveryState(
   item: WorkItem,
   recovery: InitParams["recovery"],
   parsedTasks: ParsedTask[],
+  mode?: WorkflowMode,
 ): void {
   // 恢复重建为已知状态后清除残留推进阻塞原因，避免 orchestrator 视图展示过期信息
   delete item.metadata["_advance_block_reason"]
@@ -143,6 +149,37 @@ function applyRecoveryState(
   resetInternalRetryCount(item)
   // 清除检查点标记残留：恢复重建为已知状态后 _checkpoint 已无意义（checkpoint 态属于中断中的 step）。
   delete item.metadata["_checkpoint"]
+  if (mode === "simple") {
+    const phase = recovery?.phase
+    if (!phase || phase === "task_analysis" || phase === "dev_impl") {
+      // simple 无 analyze：无 recovery（全新初始化）/ task_analysis / dev_impl 均落 in_progress/implement。
+      // tags 整体重置——不残留 implement:openspec-developer passed（否则 dev 不会重派，恢复失去意义）。
+      item.phase = "in_progress"
+      item.currentStep = "implement"
+      item.tags = {}
+      if (!phase || phase === "task_analysis") {
+        // 重置 task children 全 todo（全新开始）
+        syncTaskChildren(item, parsedTasks, { forceOpen: true })
+      } else {
+        // dev_impl 保留既有进度（无则 todo）
+        syncTaskChildren(item, parsedTasks, { defaultStatus: "todo" })
+      }
+      return
+    }
+    // review 分支：恢复进 review 时 implement 必然已通过
+    item.phase = "review"
+    item.tags["implement:openspec-developer"] = "passed"
+    // quality_review 的 failed tag 删除回 pending（passed 保留——已审查通过无需重跑）
+    for (const key of Object.keys(item.tags)) {
+      if (key.startsWith("quality_review:")) {
+        if (item.tags[key] !== "passed") delete item.tags[key]
+      }
+    }
+    // reset_steps / review_layer 在 simple 下接受但空操作（值域校验在 assertValidRecovery 不变）
+    item.currentStep = "quality_review"
+    syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
+    return
+  }
   const phase = recovery?.phase
   if (!phase || phase === "task_analysis") {
     item.phase = "todo"
@@ -181,8 +218,9 @@ function applyRecoveryState(
   if (recovery?.review_layer === "quality") {
     item.tags["verify_task:openspec-reviewer-task"] = "passed"
   }
-  // currentStep 前移：显式指向第一个未全 passed 的 review step（已全 passed 的子层跳过）
-  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+  // currentStep 前移：显式指向第一个未全 passed 的 review step（已全 passed 的子层跳过）。
+  // 按 mode 选择 workflow 文件：simple 模式 review 阶段仅 quality_review 一个 step。
+  const workflow = loadWorkflowFile(resolveWorkflowPath({ mode }))
   item.currentStep = firstUnpassedReviewStep(item, workflow)
   // 全 passed 收口 done：三个 review step 全 passed 时，仅当 task children 全部终态才收口；
   // 存在未终态 task child 则停在 verify_quality（recommendForItem 会返回 blocked 而非 terminal，安全）。
@@ -293,6 +331,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       workItems: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      // 新建 state 时固化模式：读取 <worktree>/openspec/workflow.yaml（缺失视为 full，
+      // 值域外 / YAML 解析失败抛错）；state 已存在（recovery/重复初始化/切换任务组）不读配置，
+      // 沿用 state 既有 mode；旧 state 缺 mode 由消费端读时兜底 full，不写回。
+      mode: readWorkflowModeConfig(ctx.worktree),
     }
   } else {
     state.baseBranch = state.baseBranch || baseBranch
@@ -328,7 +370,15 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
           description: group.name,
           labels: ["openspec-change"],
         })
-        item.currentStep = "analyze"
+        // 新建 item 初始 step 模式感知（3.1）：simple 无 analyze step，初始 phase=in_progress、
+        // currentStep=implement（执行边界默认整个 worktree），否则 phaseStepMismatch 会拒绝执行；
+        // full 保持 todo/analyze 既有语义。
+        if (state.mode === "simple") {
+          item.phase = "in_progress"
+          item.currentStep = "implement"
+        } else {
+          item.currentStep = "analyze"
+        }
         syncTaskChildren(item, groupTasks, { defaultStatus: "todo" })
         refreshMeta(item)
         state.workItems.push(item)
@@ -382,7 +432,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       item.metadata["base_ref"] = null
     }
 
-    applyRecoveryState(item, args.recovery, groupTasks)
+    applyRecoveryState(item, args.recovery, groupTasks, state.mode)
     refreshMeta(item)
     if (!existing) state.workItems.push(item)
   }
@@ -537,7 +587,8 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
   }
 
   // 单轨：一律由工作流引擎推荐（recommendForItem）渲染动态视图，按调用者角色分流
-  const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+  // 按 state.mode 选择 workflow 文件（simple → task-simple.yaml；旧 state 缺 mode 兜底 full）
+  const workflow = loadWorkflowFile(resolveWorkflowPath(state))
   const rec = recommendForItem(item, workflow)
   const tg = findTaskGroup(state, state.taskGroupId)
   // 主仓库 openspec 污染诊断（56ddfe9 意图）：编排者分派视图展示主仓库污染，供编排者人工核对
@@ -637,7 +688,7 @@ export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolCo
   assertOrchestrator(ctx, "opx_orch_set_unattended")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
-  // enabled 缺省按 schema 声明 default=true 兜底（跨形态一致：opencode 直载透传 input 不应用 zod default）
+  // enabled 缺省按 schema 声明 default=true 兜底（透传 input 不应用 zod default）
   state.unattended = params.enabled ?? true
   await writeState(ctx.worktree, state)
   const status = state.unattended ? "开启" : "关闭"

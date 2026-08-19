@@ -144,6 +144,15 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
       expect(devText).toContain("**阶段**: in_progress | **step**: `implement`")
       expect(devText).not.toContain("编排进度")
 
+      // 物理 reviewer 身份（openspec-reviewer，quality 层）：同样按 _agent 路由到角色视图（非编排视角）
+      const rvView = await client.callTool({
+        name: "opx_status",
+        arguments: { change_id: CID, _agent: "openspec-reviewer" },
+      })
+      const rvText = (rvView.content as Array<{ text: string }>)[0].text
+      expect(rvText).not.toContain("编排进度")
+      expect(rvText).toContain("阶段门禁")
+
       // 未携带 _agent → 编排视角视图 + 补传身份提示
       const orchView = await client.callTool({
         name: "opx_status",

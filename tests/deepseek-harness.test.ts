@@ -37,16 +37,21 @@ describe("deepseek-harness 适配器", () => {
       expect(patch).toContain("./node_modules/@ifrankwang/openspec-agents/assets/skills")
       expect(patch).toContain("providerName: openspec-filesystem")
       // DSH 原生子代理工具：每个 assets/agents 子代理生成一个 dsh-tool-subagent 行
+      // （物理收敛为 developer / reviewer 两个，主代理模板不生成工具）
       expect(patch).toContain("@deepseek-ai/dsh-tool-subagent")
-      expect(patch).toContain("openspec-subagent-architect")
-      expect(patch).toContain("toolName: openspec_architect")
-      expect(patch).toContain("toolFilter:")
+      expect(patch).toContain("openspec-subagent-developer")
+      expect(patch).toContain("openspec-subagent-reviewer")
+      expect(patch).toContain("toolName: openspec_reviewer")
+      // 权限并集：两个物理 agent frontmatter 均为 edit: allow → denyEditTools 不设写工具过滤
+      expect(patch).not.toContain("toolFilter:")
       expect(patch.match(/id: openspec-subagent-/g)?.length).toBe(result.agents.length)
+      expect(patch.match(/id: openspec-subagent-/g)?.length).toBe(2)
 
       // agents：与其它插件包一致保留子代理 markdown（DSH 同时通过 subagent 工具加载）
-      expect(result.agents).toContain("openspec-architect")
+      expect(result.agents).toEqual(expect.arrayContaining(["openspec-developer", "openspec-reviewer"]))
+      expect(result.agents).toHaveLength(2)
       expect(result.agents).not.toContain("openspec-main")
-      expect(existsSync(join(pluginDir, "agents", "openspec-architect.md"))).toBe(true)
+      expect(existsSync(join(pluginDir, "agents", "openspec-reviewer.md"))).toBe(true)
 
       // skills：orchestrator 与 reference/ 附属文件递归复制
       expect(result.skills).toContain("orchestrator")
@@ -76,8 +81,9 @@ describe("deepseek-harness 适配器", () => {
     const { buildDshPatchContent } = await import("../src/adapters/deepseek-harness/index")
     const generated = buildDshPatchContent()
     expect(generated).toContain("@deepseek-ai/dsh-tool-subagent")
-    expect(generated).toContain("openspec-subagent-architect")
-    expect(generated).toContain("toolName: openspec_architect")
+    expect(generated).toContain("openspec-subagent-developer")
+    expect(generated).toContain("openspec-subagent-reviewer")
+    expect(generated).toContain("toolName: openspec_reviewer")
   })
 
   test("sync-targets 包含 deepseek-harness 目标", async () => {

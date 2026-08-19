@@ -22,11 +22,13 @@ export function agentToReviewDimension(agent: string): ReviewDimension | undefin
   return (Object.keys(DIMENSION_AGENT_MAP) as ReviewDimension[]).find((d) => DIMENSION_AGENT_MAP[d] === agent)
 }
 
-/** agent → issue 报源层（tool/task/quality）：tool/task reviewer 直接映射，quality reviewer 经维度反查命中即 quality。其余 agent 返回 undefined。 */
+/** agent → issue 报源层（tool/task/quality）：tool/task reviewer 直接映射，quality reviewer 经维度反查命中即 quality。
+ *  openspec-reviewer（simple 模式合并审查者）映射到 quality 层；full 模式不会分派该身份，该映射只对 simple 生效。其余 agent 返回 undefined。 */
 export function agentToReviewLayer(agent: string | undefined): ReviewLayer | undefined {
   if (!agent) return undefined
   if (agent === "openspec-reviewer-tool") return "tool"
   if (agent === "openspec-reviewer-task") return "task"
+  if (agent === "openspec-reviewer") return "quality"
   if (agentToReviewDimension(agent)) return "quality"
   return undefined
 }

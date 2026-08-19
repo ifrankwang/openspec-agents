@@ -13,10 +13,11 @@ import { join, dirname } from "node:path"
 import { parseAgentMd, resolve, EXCLUDED_AGENTS } from "../agent-md.ts"
 import { buildPluginPackage, PLUGIN_NAME, PLUGIN_DESCRIPTION, PLUGIN_AUTHOR, type PluginPackageResult } from "../plugin-common/index.ts"
 
-/** codex agent 工具白名单（按职责收敛，审查/分析角色不含写文件工具）。 */
+/** codex agent 工具白名单（按职责收敛，其余身份统一走 default 白名单）。 */
 const AGENT_TOOLS: Record<string, string[]> = {
-  "openspec-architect": ["read", "grep", "glob", "ls", "bash", "web"],
   "openspec-developer": ["read", "grep", "glob", "ls", "bash", "apply_patch", "web"],
+  // 审查者仅可直改文档/注释，需要 apply_patch；逻辑类修改一律只报（openspec-reviewer.md 角色约束）
+  "openspec-reviewer": ["read", "grep", "glob", "ls", "bash", "apply_patch", "web"],
   default: ["read", "grep", "glob", "ls", "bash"],
 }
 

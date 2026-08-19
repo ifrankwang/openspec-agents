@@ -191,7 +191,7 @@ describe("S8: orchestrator 分派视图", () => {
       expect(out).toContain("`openspec-reviewer-security`")
       expect(out).toContain("`openspec-reviewer-maintainability`")
       expect(out).toContain("并排分派")
-      // 直载形态身份恒显式（会话 agent 推导）：编排视角视图不渲染 MCP 专属的 `_agent` 身份提示
+      // 身份显式声明的编排视角（测试直调壳显式构造 ctx）：不渲染 MCP 专属的 `_agent` 身份提示
       expect(out).not.toContain("_agent")
     } finally { teardown(root) }
   })

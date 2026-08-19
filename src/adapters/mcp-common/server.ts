@@ -73,7 +73,7 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   },
 }
 
-/** 附加 _agent 身份参数到 P1 schema（仅 MCP 暴露层；OpenCode 直载形态无此参数）。 */
+/** 附加 _agent 身份参数到 P1 schema（仅 MCP 暴露层）。 */
 function withAgentArg(schema: JSONSchema): JSONSchema {
   return {
     ...schema,

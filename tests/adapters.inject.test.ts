@@ -16,6 +16,27 @@ afterAll(() => {
   rmSync(TMP_ROOT, { recursive: true, force: true })
 })
 
+describe("物理 agent 定义收敛（权限并集）", () => {
+  test("assets/agents 仅剩 main 模板 + developer/reviewer 两个子代理，permission 取并集 edit: allow", async () => {
+    const { parseAgentMd, resolve } = await import("../src/adapters/agent-md")
+    const { readdirSync } = await import("node:fs")
+    const agentsDir = resolve("assets", "agents")
+    const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort()
+    expect(files).toEqual(["openspec-developer.md", "openspec-main.md", "openspec-reviewer.md"])
+
+    for (const name of ["openspec-developer", "openspec-reviewer"]) {
+      const { readFileSync } = await import("node:fs")
+      const { frontmatter } = parseAgentMd(readFileSync(join(agentsDir, `${name}.md`), "utf-8"))
+      const permission = frontmatter.permission as Record<string, unknown>
+      expect(permission.edit).toBe("allow")
+      expect(permission.bash).toBe("allow")
+    }
+    // architect 身份的 question 工具并入 developer 物理权限
+    const devFm = parseAgentMd(readFileSync(join(agentsDir, "openspec-developer.md"), "utf-8")).frontmatter
+    expect((devFm.permission as Record<string, unknown>).question).toBe("allow")
+  })
+})
+
 /** 本机有 claude CLI 时接入官方校验器门禁；无 CLI 环境跳过（测试保持可移植）。 */
 function claudeValidate(target: string): { status: number; output: string } {
   const r = spawnSync("claude", ["plugin", "validate", target], { encoding: "utf-8" })
@@ -51,13 +72,15 @@ describe("claude-code 适配器", () => {
       expect(manifest.mcpServers).toBeUndefined()
       expect(manifest.author).toEqual({ name: expect.any(String) })
 
-      // agents：子代理全量注入，排除主代理模板，frontmatter 仅保留 name/description
-      expect(result.agents).toContain("openspec-architect")
+      // agents：子代理全量注入（物理收敛为 developer / reviewer 两个），排除主代理模板，
+      // frontmatter 仅保留 name/description
+      expect(result.agents).toEqual(expect.arrayContaining(["openspec-developer", "openspec-reviewer"]))
+      expect(result.agents).toHaveLength(2)
       expect(result.agents).not.toContain("openspec-main") // 主代理是 claude code 本体，不注入
-      const archMd = readFileSync(join(pluginDir, "agents", "openspec-architect.md"), "utf-8")
-      expect(archMd.startsWith("---\nname: openspec-architect\n")).toBe(true)
-      expect(archMd).not.toContain("mode:")
-      expect(archMd).not.toContain("permission:")
+      const reviewerMd = readFileSync(join(pluginDir, "agents", "openspec-reviewer.md"), "utf-8")
+      expect(reviewerMd.startsWith("---\nname: openspec-reviewer\n")).toBe(true)
+      expect(reviewerMd).not.toContain("mode:")
+      expect(reviewerMd).not.toContain("permission:")
 
       // skills：orchestrator skill 与 reference/ 附属文件递归复制
       expect(result.skills).toContain("orchestrator")
@@ -109,6 +132,16 @@ describe("codex 适配器", () => {
       expect(devToml).toContain('description = "')
       expect(devToml).toContain("[instructions]")
       expect(devToml).toContain("apply_patch")
+
+      // 物理 agent 收敛为 developer + reviewer 两个；已删除的 openspec-architect 死条目不再生成 TOML
+      expect(agents).toHaveLength(2)
+      expect(agents).toContain("openspec-reviewer")
+      expect(existsSync(join(repo, ".codex", "agents", "openspec-architect.toml"))).toBe(false)
+      // reviewer 白名单：审查者可直改文档/注释（apply_patch）；developer 条目不变
+      const reviewerToml = readFileSync(join(repo, ".codex", "agents", "openspec-reviewer.toml"), "utf-8")
+      expect(reviewerToml).toContain('tools = ["read", "grep", "glob", "ls", "bash", "apply_patch", "web"]')
+      const devToolsLine = devToml.split("\n").find((l) => l.startsWith("tools = "))
+      expect(devToolsLine).toBe('tools = ["read", "grep", "glob", "ls", "bash", "apply_patch", "web"]')
 
       injectCodexMcp(repo, "/abs/path/mcp-server.js")
       const cfg = readFileSync(join(repo, ".codex", "config.toml"), "utf-8")
@@ -169,13 +202,15 @@ describe("zcode 适配器", () => {
       expect(manifest.mcpServers).toBeUndefined()
       expect(manifest.author).toEqual({ name: expect.any(String) })
 
-      // agents：子代理全量注入，排除主代理模板，frontmatter 仅保留 name/description
-      expect(result.agents).toContain("openspec-reviewer-task")
+      // agents：子代理全量注入（物理收敛为 developer / reviewer 两个），排除主代理模板，
+      // frontmatter 仅保留 name/description
+      expect(result.agents).toEqual(expect.arrayContaining(["openspec-developer", "openspec-reviewer"]))
+      expect(result.agents).toHaveLength(2)
       expect(result.agents).not.toContain("openspec-main")
-      const agentMd = readFileSync(join(pluginDir, "agents", "openspec-reviewer-task.md"), "utf-8")
-      expect(agentMd.startsWith("---\nname: openspec-reviewer-task\n")).toBe(true)
-      expect(agentMd).not.toContain("mode:")
-      expect(agentMd).not.toContain("permission:")
+      const devMd = readFileSync(join(pluginDir, "agents", "openspec-developer.md"), "utf-8")
+      expect(devMd.startsWith("---\nname: openspec-developer\n")).toBe(true)
+      expect(devMd).not.toContain("mode:")
+      expect(devMd).not.toContain("permission:")
 
       // skills：orchestrator skill 与 reference/ 附属文件递归复制
       expect(result.skills).toContain("orchestrator")

@@ -15,54 +15,73 @@ const mockInput = {
 }
 
 describe("OpenspecOrchestratePlugin", () => {
-  test("returns Hooks with config + tool", async () => {
+  test("returns Hooks with config hook only（直载工具注册已移除）", async () => {
     const hooks = await OpenspecOrchestratePlugin(mockInput as any)
     expect(hooks).toBeDefined()
     expect(typeof hooks.config).toBe("function")
-    expect(hooks.tool).toBeDefined()
+    // BREAKING（组 5.1）：直载工具注册移除，插件壳不再返回 tool 注册表
+    expect(hooks.tool).toBeUndefined()
   })
 
-  test("registers 6 opx_* tools", async () => {
+  test("config hook 注入 MCP server 配置（无直载工具注册）", async () => {
     const hooks = await OpenspecOrchestratePlugin(mockInput as any)
-    const names = Object.keys(hooks.tool!)
-    expect(names).toContain("opx_orch_init")
-    expect(names).toContain("opx_orch_set_worktree")
-    expect(names).toContain("opx_status")
-    expect(names).toContain("opx_orch_complete_task_group")
-    expect(names).toContain("opx_orch_set_unattended")
-    expect(names).toContain("opx_agent_submit")
-    expect(names.length).toBe(6)
-    for (const n of names) {
-      expect(typeof hooks.tool![n].execute).toBe("function")
-    }
+    const config: Record<string, unknown> = { agent: {} }
+    await hooks.config!(config as any)
+
+    // 注入 opencode config 的 mcp 段（官方形态 { mcp: { <name>: { type: "local", command: [...] } } }）
+    const mcp = config.mcp as { opx: { type: string; command: string[] } }
+    expect(mcp).toBeDefined()
+    const entry = mcp["opx"]
+    expect(entry).toBeDefined()
+    expect(entry.type).toBe("local")
+    expect(entry.command[0]).toBe("node")
+    // stdio bundle 入口：包内 .mcp-server/cli.mjs（resolve 相对包根）
+    expect(entry.command[1]).toMatch(/\.mcp-server[/\\]cli\.mjs$/)
+    expect(entry.command).toContain("--transport")
+    expect(entry.command).toContain("stdio")
+    expect(entry.command).toContain("--worktree")
+    // --worktree 指向当前项目根（input.worktree）
+    expect(entry.command[entry.command.indexOf("--worktree") + 1]).toBe(mockInput.worktree)
+    expect(entry.command).toContain("--unattended")
+    expect(entry.command).toContain("--strip-opx-prefix")
   })
 
-  test("config hook injects all 10 agents", async () => {
+  test("config hook 保留既有 mcp 配置（追加 opx server 不覆盖）", async () => {
+    const hooks = await OpenspecOrchestratePlugin(mockInput as any)
+    const config: Record<string, unknown> = {
+      mcp: { "existing-server": { type: "local", command: ["npx", "foo"] } },
+    }
+    await hooks.config!(config as any)
+    const mcp = config.mcp as Record<string, unknown>
+    expect(mcp["existing-server"]).toBeDefined()
+    expect((mcp["opx"] as { command: string[] }).command[1]).toMatch(/\.mcp-server[/\\]cli\.mjs$/)
+  })
+
+  test("config hook injects 2 physical subagents + main template", async () => {
     const hooks = await OpenspecOrchestratePlugin(mockInput as any)
     const config: Record<string, unknown> = { agent: {} }
     await hooks.config!(config as any)
 
     const agent = config.agent as Record<string, unknown>
     expect(agent["openspec-main"]).toBeDefined()
-    expect(agent["openspec-architect"]).toBeDefined()
     expect(agent["openspec-developer"]).toBeDefined()
-    expect(agent["openspec-reviewer-tool"]).toBeDefined()
-    expect(agent["openspec-reviewer-task"]).toBeDefined()
-    expect(agent["openspec-reviewer-style"]).toBeDefined()
-    expect(agent["openspec-reviewer-architecture"]).toBeDefined()
-    expect(agent["openspec-reviewer-performance"]).toBeDefined()
-    expect(agent["openspec-reviewer-security"]).toBeDefined()
-    expect(agent["openspec-reviewer-maintainability"]).toBeDefined()
+    expect(agent["openspec-reviewer"]).toBeDefined()
+    // 物理 agent 已收敛：9 个逻辑身份由 openspec-developer / openspec-reviewer 两个物理子代理承载
+    expect(Object.keys(agent).filter((n) => n.startsWith("openspec-"))).toHaveLength(3)
 
     // 主代理（openspec-main）承载编排者职责：mode=primary，可加载 skill
     const main = agent["openspec-main"] as Record<string, unknown>
     expect(main.mode).toBe("primary")
     expect((main.permission as Record<string, unknown>).skill).toBe("allow")
 
-    // Check reviewer agents have prompt body
-    const style = agent["openspec-reviewer-style"] as Record<string, unknown>
-    expect(typeof style.prompt).toBe("string")
-    expect((style.prompt as string).length).toBeGreaterThan(100)
+    // Check both physical subagents have prompt body and merged permission
+    const dev = agent["openspec-developer"] as Record<string, unknown>
+    expect(typeof dev.prompt).toBe("string")
+    expect((dev.prompt as string).length).toBeGreaterThan(100)
+    const reviewer = agent["openspec-reviewer"] as Record<string, unknown>
+    expect(typeof reviewer.prompt).toBe("string")
+    expect((reviewer.prompt as string).length).toBeGreaterThan(100)
+    expect((reviewer.permission as Record<string, unknown>).edit).toBe("allow")
   })
 
   test("config hook injects bundled skills path", async () => {

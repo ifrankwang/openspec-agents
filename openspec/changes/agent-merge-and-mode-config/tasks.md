@@ -69,7 +69,7 @@
 
 - [ ] 5.1 OpenCode 直载改 MCP 形态（BREAKING）：`src/adapters/opencode/tools.ts` 移除直载工具注册与 `makeCtx` 身份推导路径；插件壳改为注入 MCP server 配置（stdio bundle，`--worktree` 指向项目根），与 claude-code / zcode / codex 插件的 `.mcp.json` 形态一致；身份统一走 mcp-common 的 `_agent` 解析；MCP 配置键的具体形态按 opencode 官方插件 schema 实现时确认（design.md Open Questions，不影响其余 harness）[spec:agent-identity#逻辑身份经 _agent 参数承载]
 - [ ] 5.2 `src/adapters/opencode/agents.ts` 注入收敛为只注入 2 个物理子代理 + 主代理模板（扫描逻辑不变，文件收敛后自动生效，核对无其他适配改动）[spec:agent-definitions#仅两个物理 agent 定义]
-- [ ] 5.3 `src/adapters/codex/index.ts` 的 `AGENT_TOOLS` 新增 `openspec-reviewer` 条目：`"openspec-reviewer": ["read", "grep", "glob", "ls", "bash", "apply_patch", "web"]`（审查者可直改文档/注释需要 apply_patch；现状 7 个 reviewer 无独立条目、统一走 default 白名单，无需删除任何条目）；`openspec-developer` 条目不变 [spec:agent-identity#逻辑身份经 _agent 参数承载]
+- [ ] 5.3 `src/adapters/codex/index.ts` 的 `AGENT_TOOLS` 新增 `openspec-reviewer` 条目：`"openspec-reviewer": ["read", "grep", "glob", "ls", "bash", "apply_patch", "web"]`（审查者可直改文档/注释需要 apply_patch；现状 7 个 reviewer 无独立条目、统一走 default 白名单，无需删除任何条目）；`openspec-developer` 条目不变 [spec:agent-identity#逻辑身份经 _agent 参数承载]。注：实施同时移除 `AGENT_TOOLS` 中 openspec-architect 的死条目——已无对应 agent 文件（architect 逻辑身份由 openspec-developer 条目承载，读/写能力被该条目覆盖），保留只会继续悬挂无效引用
 - [ ] 5.4 测试：opencode 插件产物（无直载工具注册、注入 MCP server 配置）、codex agents TOML 工具白名单、各 harness 身份传递行为一致（mcp-common `resolveContext` 的 `_agent` 解析回归，含缺省视为编排视角）[spec:agent-identity]
 - [ ] 5.5 质量门：`bun run typecheck`、`bun test` 与 `bun run build:plugins`（全插件包构建）通过 [infra]
 

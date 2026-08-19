@@ -1,0 +1,85 @@
+# simple task workflow：simple 模式的 OpenSpec change 任务流转
+# 对应编排阶段：实现（in_progress）→ 合并审查（review）→ 完成（done）；无 analyze / verify_* / verify_cleanup 环节
+# 语义归属：step 级 instructions/constraints 定义各 step 专属语义；
+# 跨所有 step 共享内容收敛到顶层 common（step 自动继承）；非 step 归属的引擎状态文案不进配置。
+# 占位符 {{key}} 经 interpolateText 注入动态值，缺值保留原文。
+# 注意：simple 无 analyze 环节，execution_boundary 永不写入，step constraints 不得含
+# {{allowed_directories}} / {{allowed_packages}} / {{notes}} 边界占位符（缺值会原样渲染），执行边界默认整个 worktree。
+id: task-simple
+name: Simple Task Workflow
+max_retries: 10
+
+# 跨所有 step 共享的通用指引：渲染时 common 在前、step 在后合并进对应视图区块
+# 复用 task.yaml common 的 _agent 传递指引与「缺省视为编排视角」提示文案
+common:
+  instructions:
+    - "非 OpenCode 直载形态（经 MCP 接入的 agent 客户端）调用 opx_* 工具时，须携带 `_agent` 参数并传自身角色名（如 openspec-developer）；缺省会被视为编排主代理视角，将拿不到自身角色的执行视图与操作指引"
+
+phases:
+  - name: in_progress
+    steps:
+      - id: implement
+        agents:
+          - id: openspec-developer
+            capability_tags: [efficiency, api-testing, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability]
+        transitions:
+          on_pass: quality_review
+          on_fail: implement
+        instructions:
+          - "tasks.md 当前任务组任务项 + `[spec:xxx]` 溯源 specs/ 下相关 spec.md（需求细节与验收标准）；存在时读取 clarify.md（架构方向结论）"
+          - "按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界"
+          - "实施前识别 spec 描述的一并操作行为组（如状态变更与数据入队这类需同时发生的多个行为）；实施后逐项自证每个行为真实生效，禁止以单一状态字段的实现替代其他行为"
+          - "环境/基础设施问题（schema 缺失、DDL 未执行、依赖未安装）应通过 migration/初始化脚本等代码层面解决；仅生产级凭据、真实第三方资源、人工运维才走 blocker/豁免"
+          - "issue 指向文件的目录已并入执行边界，修复这些文件（含回归引入问题）不算越界；issue 的 file 字段指向 openspec/changes/ 下文档时，按该 issue 要求修复对应文档同样不算越界（仅限该 issue 指定文件，不得扩大范围）；可按 issue 的 suggestion 直接执行修复；reviewer 的 boundary_expansion 已并入边界"
+          - "按视图 Issue 清单分类实施：Low+ 必办，Info 建议修复不阻塞提交"
+          - "对修复未过次数≥2 的 issue 须先完成 5-Why 根因分析再动手，不得跳过分析直接改代码"
+          - "全部实现完成后先 git commit 再提交"
+          - "提交前按已加载的质量门类 skill 完成本地构建验证并核对覆盖率门禁达标后再提交"
+          - "提交前完成自检并经 self_check_results 汇总"
+          - "提交前按已加载的维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次变更文件逐项自检（聚焦本轮变更文件，不扩散全量代码），自检结论与工具检查结果一并汇总进 self_check_results；修复被驳回 issue 后再次提交前同样须按维度规范类 skill 对变更文件自检后再提交"
+          - "自检须覆盖已加载的维度规范类 skill 的全部检查点，self_check_results 按维度逐项列结论（通过/遗留及理由），禁止仅汇总工具检查结果"
+          - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；Info 级 issue 不阻塞提交，无需申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
+          - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
+          - "提交 opx_agent_submit：passed 时存在未完成或被驳回（open/rejected）的子任务必须全部列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1），全部子任务已验证时可省略；不可修 issue 申请豁免（exempt_issue_ids）"
+        constraints:
+          - "禁用 edit/write 修改 `{{worktree_path}}/openspec/changes/` 下任何文档（spec/design/tasks/clarify）；唯一例外：所提交 fixed_issue_ids 中某 issue 的 file 字段指向该目录下文档时，仅允许按该 issue 的要求修改对应文档，不得扩大范围；本约束为提示词级约束，工具层不校验实际改动的文件"
+          - "执行边界默认整个 worktree（无 analyze 环节，不生成边界白名单）"
+          - "生产路径禁止 stub/fake/空实现/硬编码成功"
+          - "提交前自检必须覆盖已加载的全部 skill（含维度规范类）检查点，不得以工具检查结果替代维度规范自检"
+          - "需以 verdict=failed + blocker 上报的条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
+          - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
+  - name: review
+    steps:
+      - id: quality_review
+        agents:
+          - id: openspec-reviewer
+            capability_tags: [quality-gate, api-testing, dev-practices, efficiency, style, architecture, performance, security, maintainability, tool-improvement]
+        transitions:
+          on_pass: done
+          on_fail: implement
+        instructions:
+          - "依据 opx_status 提供的变更检测结果分流：无代码/配置变更且本层无待复核/待裁定项 → 直接提交 passed，不运行全量工具检查，并以一条 step 名首段为 no_change 的 validation_steps 声明本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据）；无变更但有本层待复核/待裁定项 → 仅复核/裁定待处理项后提交，不跑全量工具扫描；有变更 → 加载质量门类 skill 获取工具清单与映射规则，按已加载质量门 skill 必做清单逐项执行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描——按必做清单中的对应项逐项执行并逐项申报），将工具输出映射为统一 issue 结构后提交"
+          - "「有变更」分支先审查上方「本次变更证据」区块的变更文件清单与区间 diff 内容后自行判断：若确认本次变更仅为注释/文档性且无逻辑影响（非注释掉代码、非结构性/格式化变更、非文件重命名），可自行决定跳过全量工具检查直接提交 passed（validation_steps 以 step=no_change 申报整体豁免必做清单）；无法确认或含逻辑/结构变更，必须顺序运行全部确定性工具检查；裁量仅免除全量工具扫描，不免除复核/裁定——本层 blocking issue 仍须处理至终态后提交"
+          - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷"
+          - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
+          - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约"
+          - "加载匹配维度 skill，以本轮 diff/变更文件为锚点结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）；顺带发现的非本轮缺陷按对应维度严重级别标准报 issue，禁止静默丢弃"
+          - "审查新 issue 前先查看视图「待复核」区块中的既有 issue（仅本审查者报源），避免语义重复"
+          - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
+          - "当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档"
+          - "报 issue 前先判断该问题能否通过调整确定性质量扫描工具配置（规则收紧/新增规则/配置增强）统一收敛：可工具化 → 双报业务 issue（file=违规现场）与工具改进 issue（file=规则/配置文件，suggestion 含规则草案+验证命令，末尾标 [tool_eligible]，且与业务 issue 同维度），两条 file 不同、方案不同，不构成语义重复，必须双报；工具改进 issue 目标文件在执行边界外时附 boundary_expansion（仅 verdict=failed 时可附）；不可工具化 → 仅报业务 issue。工具化判断细节与规则草案模板遵循已加载的工具改进类 skill，未加载工具改进类 skill 时仅报业务 issue、跳过工具改进环节；提交时在 validation_steps 中记录工具化判断结论"
+          - "默认只报不改：影响代码运行的逻辑类问题只上报、不直接修改；文档/注释等不影响代码运行的问题可直接修改；工具改进建议仅上报（含规则草案），实施由开发者完成"
+          - "复核自己报的已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
+          - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
+          - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"
+          - "报静态分析类 issue 时，rule 字段必填官方规则全名（命名格式遵循已加载的质量门类 skill 的规则导航索引），漏填将导致项目级豁免清单无法生效"
+          - "报静态分析类 issue 时，description 必须含：①复现命令（非静默形态，含必要开关）；②实测数据（命中类清单/计数）；③规则默认阈值与当前项目配置对比（引用可改的配置文件路径）"
+          - "按 opx_status 操作指引完成全部验证项，提交前将每项验证结果与证据填入 validation_steps 参数（未执行的项须填 skip_reason 注明原因），不得省略任何一项"
+          - "提交 opx_agent_submit，必带 verdict、verified_tasks（覆盖全部待验证 task）与 validation_steps（验证步骤执行摘要）"
+        constraints:
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行确定性工具检查、启动服务并执行验证命令"
+          - "只报不改：禁止 edit/write 影响代码运行的业务代码（逻辑类问题仅上报）；文档/注释等不影响代码运行的内容可直接修改"
+          - "即使无 issue / 无待验证 task 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
+          - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
+          - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
+          - "有实质变更时，工具检查及 issue 报告覆盖全量代码；非本轮变更文件的工具违规同样必须映射为 issue（命中项目级豁免清单的按 Info，不重新豁免；其余非本轮引入问题按原严重级别上报），不得以不在变更清单或未越界修改为由丢弃"

@@ -78,7 +78,7 @@ phases:
 
 - `REVIEW_STEP_TO_LAYER` 增加一行 `quality_review: "quality"`。该映射同时被 `stepCanPass`（本层 blocking issue 终态才可 pass）、`blockingStepChildren`（blocked 诊断）、`recommendForItem`（review step 补交推导 isReviewStep）、`renderBlocked`（待复核/待裁定区块）消费，一行改动全链联动。
 - 门禁口径确认：quality_review 按 quality 层口径——审查者 failed 时 on_fail 回 implement；passed 时本层 blocking issue 须已终态（审查者先经 `recheck_adjudications` 把自报 issue 复核至 done）。与 full 的 verify_quality 一致。
-- 单 agent step 的既有语义直接适用：`recommendAgents` 对非 passed 身份重派、`applyTransition(fail)` 自循环时 `clearStepTags` 清 implement tags 保证 dev 重派、`incrementRetry` 驱动检查点——「implement 失败自循环重试」「quality_review 失败回 implement 整步重审」零新增引擎逻辑。
+- 单 agent step 的既有语义直接适用：`recommendAgents` 对非 passed 身份重派（单 agent step 返回 tag 非 passed 的 agent，implement failed 后 dev 必然被重派）；`applyTransition(fail)` 的 tag 清理仅发生在跨 phase 回退（`clearStepTags` 清回退目标 step 的 tags，如 quality_review 回 implement），同 phase 自循环（如 implement on_fail: implement）只切换 currentStep、不清 tags，dev 重派由 `recommendAgents` 非 passed 分支保证；`incrementRetry` 驱动检查点——「implement 失败自循环重试」「quality_review 失败回 implement 整步重审」零新增引擎逻辑。
 - simple 模式不引入 verify_tool 的检查点增量检测分支（`renderToolChangesEvidence` / `_tool_review_checkpoint` 硬绑定 verify_tool step）：simple 每轮全量工具检查，换取实现简单；simple 的价值在轮次少而非扫描增量，后续如需可再增强。
 
 备选：为 quality_review 泛化"层由 workflow 配置声明"——被否：`REVIEW_STEP_TO_LAYER` 的 3 个值就是 3 个 verify step 的固有语义，扩展一行映射与"配置驱动"实现量相当，但后者要改 loader schema 与校验，连锁更大。

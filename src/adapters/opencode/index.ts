@@ -1,34 +1,41 @@
 import { type Plugin } from "@opencode-ai/plugin"
 import { injectSkills } from "./skills.ts"
 import { injectAgents } from "./agents.ts"
-
-import {
-  init,
-  set_worktree,
-  status,
-  complete_task_group,
-  set_unattended,
-  agent_submit,
-} from "./tools.ts"
+import { resolve } from "../agent-md.ts"
 
 /**
- * OpenCode 插件壳（兼容过渡入口）：配置注入（agent/skill）+ 工具直载。
- * dashboard/collector/poller 副作用已迁移至 MCP server 进程（src/adapters/mcp-common/），
- * OpenCode 建议切换为 MCP client 形态接入；插件壳保留兼容直到双轨验证完成。
+ * OpenCode 插件壳（MCP 形态）：配置注入（agent/skill）+ MCP server 配置注入（config.mcp）。
+ * 直载工具注册已移除（BREAKING，change agent-merge-and-mode-config 组 5.1）：
+ * - opx_* 工具统一经 MCP server 暴露（stdio bundle，--worktree 指向当前项目根），
+ *   与 claude-code / zcode / codex 插件的 .mcp.json 形态一致；
+ * - 身份不再由会话运行时推导，统一走 mcp-common 的 `_agent` 参数解析（缺省视为编排视角）。
+ * dashboard/collector/poller 副作用已迁移至 MCP server 进程（src/adapters/mcp-common/）。
  */
 export const OpenspecOrchestratePlugin: Plugin = async (input) => {
   return {
     config: async (config) => {
       injectAgents(config)
       injectSkills(config)
-    },
-    tool: {
-      opx_orch_init: init,
-      opx_orch_set_worktree: set_worktree,
-      opx_status: status,
-      opx_orch_complete_task_group: complete_task_group,
-      opx_orch_set_unattended: set_unattended,
-      opx_agent_submit: agent_submit,
+      // MCP server 声明：opencode config 的 mcp 段（官方形态
+      // { mcp: { <server>: { type: "local", command: [...] } } }，见 opencode docs/mcp-servers）。
+      // 入口为包内 .mcp-server/cli.mjs（prepack 构建的 MCP server 自包含 bundle），
+      // --worktree 指向当前项目根（input.worktree 即 opencode 打开的 git worktree 路径）。
+      config.mcp = {
+        ...(config.mcp ?? {}),
+        opx: {
+          type: "local",
+          command: [
+            "node",
+            resolve(".mcp-server", "cli.mjs"),
+            "--transport",
+            "stdio",
+            "--worktree",
+            input.worktree,
+            "--unattended",
+            "--strip-opx-prefix",
+          ],
+        },
+      }
     },
   }
 }

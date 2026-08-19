@@ -9,16 +9,40 @@ OpenSpec 流程的 Agent Team：面向实施阶段的多 Agent 工作流编排�
 
 OpenSpec 把需求、设计、任务拆解成规范文档后，实施阶段仍然需要多步开发、验证、质量审查和收尾。本项目用一组 Agent 角色 + workflow 引擎，把这一过程编排成可重复、可审计的流水线：
 
-`analyze → implement → verify_tool → verify_task → verify_quality → verify_cleanup → done`
+`analyze → implement → verify_tool → verify_task → verify_quality → verify_cleanup → done`（full 模式；simple 模式见「编排流程」）
 
 主代理负责调度，子代理负责实施、审查、质量验证和清理；所有裁决通过统一 `opx_*` 工具提交，状态持久化到仓库内。
+
+## 编排流程
+
+实施流程按变更开始时固化的模式执行，配置源为仓库根 `openspec/workflow.yaml`（`mode: full | simple`，缺省 full）。模式在变更开始时由 `opx_orch_init` 固化存档：已开始的变更不受后续配置改动影响，恢复（recovery）沿用固化模式，旧变更（状态无模式存档）一律按 full 处理，不支持中途切换。
+
+### full 模式
+
+`analyze → implement → verify_tool → verify_task → verify_quality → verify_cleanup → done`
+
+分析、实现、三层审查（工具检查 / 任务验证 / 五维质量审查）与收尾验证逐步推进，问题可回退、可豁免、可检查点决策。
+
+### simple 模式
+
+`implement → quality_review → done`
+
+面向轻量变更的精简流程：无 analyze 环节（执行边界默认整个 worktree），无 verify_tool / verify_task / verify_cleanup 环节。implement 失败自循环重试；quality_review 由单一审查者合并承担工具检查、任务验证与质量审查（工具改进建议双报机制保留，由开发者实施），失败回 implement 整步重审；开发者提交 implement 成果时强检查工作区干净（不干净拒绝并提示先 commit），收尾为直接合并分支并清理（裸合并，无回归、无环境清理；合并冲突由开发者解决后直接收尾）。tasks.md 复选框不随 simple 流程自动勾选——复选框同步由 full 流程的 verify_task 环节触发，simple 无该环节，任务完成状态以状态文件为准。
+
+## 身份与角色
+
+物理 agent 定义收敛为两个子代理（`assets/agents/` 下的 `openspec-developer.md`、`openspec-reviewer.md`，主代理模板 `openspec-main.md` 保留），9 种逻辑身份（architect、reviewer-tool、reviewer-task、style / architecture / performance / security / maintainability 五维审查者、simple 审查者）不再有独立定义文件，统一经 `_agent` 参数承载：子代理调用 `opx_*` 工具时传自身角色名，系统按该逻辑身份路由状态视图、issue 来源与筛选、「谁提谁裁定」与状态标识。
+
+- 开发者物理 agent 承载 developer 与 architect 两个逻辑身份；审查者物理 agent 承载 tool / task / 五维 / simple 审查者逻辑身份。full 模式的质量审查以 5 个逻辑身份并行执行——同一物理审查者被多次分派，每次以不同 `_agent` 参数承载对应逻辑身份。
+- 物理权限取各逻辑身份权限并集（维度审查者因此具备编辑与写入能力）；审查行为以「只报不改」指令约束兜底——文档/注释等不影响代码运行的问题可直接修改，逻辑类问题只上报，full 模式同样适用。
+- `_agent` 为纯自述、无硬校验：任何调用者可自报任意身份，裁定权与视图路由均信任自述值；冒认只能以自报身份行事，无法越出该身份自身的既有权限面。
 
 ## 特色
 
 - **Agent 无关**：内核不绑定具体 Agent，opencode / claude code / codex / zcode / deepseek harness 通过各自原生插件/适配器接入同一套状态机。
 - **Workflow 驱动**：步骤、角色、门禁在 workflow 中声明，`opx_status` 是下一步调度的唯一事实源。
-- **多 Agent 团队**：主代理编排，子代理按角色分工，避免单一大模型从头写到尾失控。
-- **强 Review 门禁**：tool / task / quality 三层审查 + 收尾验证，问题可回退、可豁免、可检查点决策。
+- **多 Agent 团队**：主代理编排，2 个物理子代理承载 9 种逻辑身份分工协作，避免单一大模型从头写到尾失控。
+- **强 Review 门禁**：full 模式 tool / task / quality 三层审查 + 收尾验证；simple 模式单一审查者合并审查。问题可回退、可豁免、可检查点决策。
 - **隔离与安全**：每个 change 使用独立 git worktree、资源隔离命名空间，减少相互干扰。
 - **可观测**：内置进度看板，状态/豁免/并发锁持久化到 `openspec/states/`。
 
@@ -48,11 +72,11 @@ bun run typecheck
 
 各 Agent 接入：
 
-- **OpenCode**：以 npm 插件形式加载，自动注入 agent/skill 与 `opx_*` 工具。
+- **OpenCode**：以 npm 插件形式加载，插件注入 agent/skill 与 MCP server 配置（`config.mcp` 的 stdio server，自包含 bundle，`--worktree` 指向当前项目根）。
   ```bash
   npm install -D @ifrankwang/openspec-agents
   ```
-  然后在 OpenCode 配置中加载 `@ifrankwang/openspec-agents` 插件。
+  然后在 OpenCode 配置中加载 `@ifrankwang/openspec-agents` 插件并重启 OpenCode（MCP server 配置在启动时加载）：`opx_*` 工具以 `mcp__opx__*` 形态出现（如 `mcp__opx__status`、`mcp__opx__agent_submit`，serverName=opx），身份经 `_agent` 参数承载（缺省视为编排视角）。
 
 - **Claude Code**：通过官方插件市场安装。
   ```bash
@@ -80,7 +104,7 @@ bun run typecheck
   安装后重启 `dsh web`：
   - `opx_*` 会以 `mcp__opx__*`（如 `mcp__opx__status`、`mcp__opx__agent_submit`） 原生工具出现；
   - `assets/skills` 会作为额外 skill 根被扫描；
-  - 每个子代理会注册为 DSH 原生 subagent 工具，例如 `openspec_architect`、`openspec_developer`、`openspec_reviewer_tool`、`openspec_reviewer_task`、`openspec_reviewer_architecture` 等，编排主代理可直接分派。
+  - 每个子代理会注册为 DSH 原生 subagent 工具：`openspec_developer` 与 `openspec_reviewer` 两个物理子代理，编排主代理可直接分派（9 种逻辑身份经 `_agent` 参数承载，同一物理子代理可被多次分派）。
 
 ## 常用命令
 

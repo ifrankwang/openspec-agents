@@ -1,7 +1,7 @@
 import type { OrchestrateState } from "../types.ts"
 import type { ToolContext, AgentSubmitParams } from "./types.ts"
 import type { WorkItem, Severity, StepConfig } from "../workflow/types.ts"
-import { loadWorkflowFile, TASK_WORKFLOW_PATH, type LoadedWorkflow } from "../workflow/loader.ts"
+import { loadWorkflowFile, resolveWorkflowPath, type LoadedWorkflow } from "../workflow/loader.ts"
 import {
   submitForStep, adjudicateExempt, adjudicateRecheck, assertSubmitRouting, chainPassAdvance,
 } from "../workflow/submit.ts"
@@ -15,7 +15,7 @@ import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../
 import { REVIEW_DIMENSIONS } from "../types.ts"
 import type { Dimension } from "../types.ts"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.ts"
-import { markTaskGroupCheckboxesComplete, reconcileMainPollution, getCurrentHead } from "../git.ts"
+import { markTaskGroupCheckboxesComplete, reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
 import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
@@ -25,8 +25,8 @@ import {
   assertStructuredSkipReasons, uncoveredMustDo, isValidSkipData, SKIP_REASON_FORMAT,
 } from "./gate.ts"
 
-/** 读取 task workflow 配置（assets/workflows/task.yaml），进程内缓存。 */
-const loadTaskWorkflow = () => loadWorkflowFile(TASK_WORKFLOW_PATH)
+/** 按 state.mode 读取 workflow 配置（simple → task-simple.yaml，否则 task.yaml），进程内按路径缓存。 */
+const loadTaskWorkflow = (state: OrchestrateState) => loadWorkflowFile(resolveWorkflowPath(state))
 
 /** issue id 归一化：去 # 前缀（review 工具按 tg.issue 序号引用时可能带 #）。 */
 function normalizeIssueId(id: string): string {
@@ -336,6 +336,9 @@ function mergeBoundaryInto(item: WorkItem, expansion: NonNullable<AgentSubmitPar
  * - verify_tool：本次 new_children 含 Low+，或存在未终态的 Low+ tool 报源层阻塞 child
  * - verify_quality：本次 new_children 含 Low+ 且维度属于当前提交 agent，或存在未终态的 Low+ quality 报源层
  *   阻塞 child 且 dimension 属于当前提交 agent 维度（新报与遗留理由均按维度过滤，F3；报源层由 source 反推）
+ * - quality_review（simple 合并审查）：本次 new_children 含 Low+，或存在未终态的 Low+ quality 报源层阻塞
+ *   child（不按维度过滤——openspec-reviewer 无固定维度，对全部质量层负责；按 agentToReviewDimension 过滤
+ *   会对该身份恒为 undefined 导致 failed 提交死锁）
  * - verify_cleanup：本次 new_children 含 Low+，或存在未终态的 Low+ 阻塞 child（不按维度/报源层过滤——
  *   收尾层须对全部残留阻塞负责，任何层的遗留阻塞都构成不通过理由）
  * 理由判定在 dedupeNewChildren 之后调用（F4）：传入的 newChildren 为已去重的 accepted，重复新报不构成理由。
@@ -364,6 +367,16 @@ function assertFailedHasReason(
   } else if (stepId === "verify_cleanup") {
     layerName = "收尾层"
     hasReason = hasNewBlocking || existingBlocking.length > 0
+  } else if (stepId === "quality_review") {
+    // simple 合并审查 step：审查者（openspec-reviewer）不归属固定质量维度，理由判定不按
+    // agentToReviewDimension 过滤（该值对 openspec-reviewer 为 undefined，按维度过滤会导致任何
+    // failed 提交都报「不存在未解决的阻塞 issue」死锁）。本次新报含 Low+ issue，或存在 quality
+    // 报源（sourcePhase === "quality"）未终态阻塞 issue，均构成不通过理由——simple 审查者对
+    // 全部质量层负责，与 full 模式 verify_quality 各维度分支互不影响。
+    layerName = "AI 审查层"
+    hasReason =
+      hasNewBlocking ||
+      existingBlocking.some((c) => resolveChildIssueFields(c).sourcePhase === "quality")
   } else {
     const dimension = agentToReviewDimension(agent)
     layerName = dimension ? `AI 审查层(${dimension})` : "AI 审查层"
@@ -488,7 +501,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
   try {
     const state = await readStateByWorktree(ctx.worktree, params.change_id)
     if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
-    const workflow = loadTaskWorkflow()
+    const workflow = loadTaskWorkflow(state)
     const item = resolveTaskWorkItem(state)
 
     if (params.checkpoint_decision) {
@@ -673,6 +686,18 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     } else if (stepPhase === "todo") {
       handleAnalyzeParams(item, params)
     } else if (stepPhase === "in_progress") {
+      // simple 模式 implement 提交强检查（2.2）：工作区必须无未提交内容，不干净直接拒绝并提示先 commit。
+      // simple 无 analyze 环节、执行边界默认整个 worktree，dev 提交即收尾合并的载体，未提交内容会
+      // 让收尾裸合并携带脏状态；检查在一切参数处理与状态写入之前，拒绝时零状态变更（含内存态）。
+      // 收尾门禁（completeTaskGroupExecute 的 worktree 干净检查）仍原样保留作最终兜底。
+      if (state.mode === "simple" && params.step_id === "implement") {
+        const clean = await isWorktreeClean(wtPath)
+        if (!clean) {
+          throw new Error(
+            "simple 模式 implement 提交被拒绝：工作区存在未提交内容。\n请先 git commit 提交全部变更后再提交 implement。"
+          )
+        }
+      }
       handleImplementParams(item, params)
     }
 

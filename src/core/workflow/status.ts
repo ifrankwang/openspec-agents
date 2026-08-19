@@ -34,7 +34,7 @@ export interface WorkflowStatusViewOptions {
 export interface StatusViewCaller {
   agent: string
   orchestrator?: boolean
-  /** 调用者 agent 身份是否显式声明（MCP 形态下为是否携带 `_agent` 参数；OpenCode 直载形态恒 true）。
+  /** 调用者 agent 身份是否显式声明（MCP 形态下为是否携带 `_agent` 参数）。
    *  false 且落入编排视角时，分派视图渲染补传 `_agent` 的身份提示（MCP 子代理首查死锁兜底）。 */
   identityDeclared?: boolean
 }
@@ -582,8 +582,8 @@ function renderAgentWorking(
   return lines.join("\n")
 }
 
-/** step.id → 上下文渲染类型映射：verify_* 与 review_* 语义一一对应，渲染路由由 step.id 推导。 */
-type StepContextKind = "analyze" | "implement" | "review_tool" | "review_task" | "review_quality" | "review_cleanup"
+/** step.id → 上下文渲染类型映射：verify_* / review_* / quality_review 语义一一对应，渲染路由由 step.id 推导。 */
+type StepContextKind = "analyze" | "implement" | "review_tool" | "review_task" | "review_quality" | "review_cleanup" | "review_merged"
 
 const STEP_ID_TO_CONTEXT_KIND: Record<string, StepContextKind> = {
   analyze: "analyze",
@@ -592,6 +592,8 @@ const STEP_ID_TO_CONTEXT_KIND: Record<string, StepContextKind> = {
   verify_task: "review_task",
   verify_quality: "review_quality",
   verify_cleanup: "review_cleanup",
+  // simple 合并审查 step：单审查者合并承担工具检查/任务验证/质量审查，渲染三区块合并视图（review_merged）
+  quality_review: "review_merged",
 }
 
 /** step.id 推导上下文渲染类型，未命中返回 undefined（优雅降级不渲染该区块）。 */
@@ -619,6 +621,9 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       break
     case "review_quality":
       lines.push(...renderQualityChildren(item, ctxAgent, exemptionCtx))
+      break
+    case "review_merged":
+      lines.push(...renderMergedChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_cleanup":
       lines.push(...renderCleanupChildren(item, ctxAgent, exemptionCtx))
@@ -726,17 +731,20 @@ function isTaskAdjudicable(child: WorkItem): boolean {
   return child.metadata[EXEMPT_REQUEST_KEY] !== undefined && agentToReviewLayer(readIssueSource(child)) === "task"
 }
 
-/** 调用者可裁定的豁免申请（谁提谁裁定）：quality 层报源维度等于调用者维度。 */
-function isQualityAdjudicable(child: WorkItem, dimension: Dimension | undefined): boolean {
-  if (child.metadata[EXEMPT_REQUEST_KEY] === undefined || !dimension) return false
-  return agentToReviewDimension(readIssueSource(child) ?? "") === dimension
+/** 调用者可裁定的豁免申请（谁提谁裁定）：quality 层报源维度等于调用者维度；无维度调用者
+ * （simple 审查者 openspec-reviewer）报源 === 调用者即可裁定（与 blocked 视图 isAdjudicableExempt 口径一致）。 */
+function isQualityAdjudicable(child: WorkItem, dimension: Dimension | undefined, ctxAgent?: string): boolean {
+  if (child.metadata[EXEMPT_REQUEST_KEY] === undefined) return false
+  if (dimension) return agentToReviewDimension(readIssueSource(child) ?? "") === dimension
+  if (ctxAgent) return readIssueSource(child) === ctxAgent
+  return false
 }
 
 /** blocked 视图待裁定豁免判定：按当前 step 层路由到「谁提谁裁定」判定（tool/task 按报源层、quality 按报源维度）。
  *  与 isAgentOwnedIssue 互补：带 exempt_request 标记的 review 态项被主区块排除（isAgentOwnedIssue 返回 false），
  *  但仍是本层调用者可裁定的豁免申请（blocked 补交路径，blockedSupplementAgents 据此派发报源 reviewer）。 */
 function isAdjudicableExempt(child: WorkItem, layer: string, ctxAgent: string): boolean {
-  if (layer === "quality") return isQualityAdjudicable(child, agentToDimension(ctxAgent))
+  if (layer === "quality") return isQualityAdjudicable(child, agentToDimension(ctxAgent), ctxAgent)
   if (layer === "tool") return isToolAdjudicable(child)
   if (layer === "task") return isTaskAdjudicable(child)
   return false
@@ -746,6 +754,8 @@ function isAdjudicableExempt(child: WorkItem, layer: string, ctxAgent: string): 
  *  - developer（implement step）：仅 todo 态（排除已交复核的 review 态与豁免申请 exempt_request）
  *  - reviewer-tool / reviewer-task（verify_tool / verify_task step）：仅本层报源（sourcePhase）的 review 态
  *  - reviewer-{dim}（verify_quality step）：quality 报源且报源维度与调用者维度一致，仅 review 态
+ *  - openspec-reviewer（quality_review step，simple 合并审查者）：quality 层但无固定维度，
+ *    归属判据 = 报源（metadata.source）=== 调用者且 review 态（谁提谁裁定，非名下 issue 不可见）
  * 层归属一律经 resolveChildIssueFields(sourcePhase) 推导（内部含 source_phase 历史兜底），不裸用报源反推。
  * exempt_request issue 归「待裁定」区块管，主区块收紧为 review-only 后天然不重复展示。 */
 function isAgentOwnedIssue(child: WorkItem, ctxAgent: string): boolean {
@@ -760,7 +770,10 @@ function isAgentOwnedIssue(child: WorkItem, ctxAgent: string): boolean {
   if (f.sourcePhase !== layer) return false
   if (layer === "quality") {
     const dim = agentToReviewDimension(ctxAgent)
-    if (!dim) return false
+    if (!dim) {
+      // quality 层调用者但无维度（simple 审查者 openspec-reviewer）：归属判据 = 报源 === 调用者
+      return readIssueSource(child) === ctxAgent
+    }
     return agentToReviewDimension(readIssueSource(child) ?? "") === dim
   }
   return true
@@ -913,7 +926,27 @@ function renderQualityChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: 
   const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
   const lines: string[] = []
   lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
-  const pending = issues.filter((c) => isQualityAdjudicable(c, dimension))
+  const pending = issues.filter((c) => isQualityAdjudicable(c, dimension, ctxAgent))
+  lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
+  return lines
+}
+
+/** quality_review step：simple 合并审查者（openspec-reviewer）三区块合并视图——
+ *  Task(待验证)（任务验证语义来自 verify_task 的 submitted 列表）+ Issue(待复核) + Issue(待裁定是否可豁免)，
+ *  issue 归属来自 quality 层口径（openspec-reviewer 无固定维度：待复核按报源 === 调用者、
+ *  待裁定按报源 === 调用者，见 isAgentOwnedIssue / isQualityAdjudicable）。 */
+function renderMergedChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
+  const lines: string[] = []
+  const pendingTasks = readTasks(item).filter((t) => t.status === "submitted")
+  if (pendingTasks.length > 0) {
+    lines.push("## Task (待验证)", "")
+    for (const t of pendingTasks) lines.push(renderTaskItem(t))
+    lines.push("")
+  }
+  const issues = issueChildrenOf(item)
+  const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
+  lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
+  const pending = issues.filter((c) => isQualityAdjudicable(c, agentToDimension(ctxAgent), ctxAgent))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
   return lines
 }
