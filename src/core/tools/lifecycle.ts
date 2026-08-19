@@ -10,7 +10,7 @@ import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFro
 import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
-import { loadWorkflowFile, resolveWorkflowPath, readWorkflowModeConfig, type LoadedWorkflow } from "../workflow/loader.ts"
+import { loadWorkflowFile, resolveWorkflowPath, type LoadedWorkflow } from "../workflow/loader.ts"
 import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags } from "../workflow/engine.ts"
 import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
@@ -293,6 +293,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     (args as any).recovery = parsed
   }
   assertValidRecovery(args.recovery)
+  // mode 值域校验：值域外一律拒绝（无论 state 是否已存在），错误早于任何状态变更且不落盘
+  if (args.mode !== undefined && args.mode !== "full" && args.mode !== "simple") {
+    throw new Error(`mode 参数不合法，合法值：full、simple。传入值："${String(args.mode)}"。`)
+  }
 
   const parsedGroups = await parseAllTaskGroupsFromMd(ctx.worktree, args.change_id)
   if (parsedGroups.length === 0) {
@@ -331,10 +335,9 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       workItems: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      // 新建 state 时固化模式：读取 <worktree>/openspec/workflow.yaml（缺失视为 full，
-      // 值域外 / YAML 解析失败抛错）；state 已存在（recovery/重复初始化/切换任务组）不读配置，
+      // 新建 state 时固化模式：取 init 参数 mode（缺省 simple）；state 已存在不读参数，
       // 沿用 state 既有 mode；旧 state 缺 mode 由消费端读时兜底 full，不写回。
-      mode: readWorkflowModeConfig(ctx.worktree),
+      mode: args.mode ?? "simple",
     }
   } else {
     state.baseBranch = state.baseBranch || baseBranch

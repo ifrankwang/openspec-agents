@@ -194,7 +194,7 @@ describe("B2. Recovery 阶段恢复", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -208,7 +208,7 @@ describe("B2. Recovery 阶段恢复", () => {
       const ctx = await setupToAnalyze(wt, CID)
       // 注入残留重试计数：recovery 须清除，防止恢复后下一次回退立即再次触发检查点
       rewriteItem(wt, (item) => { item.metadata["_retryCount"] = 5 })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_tool")
@@ -223,7 +223,7 @@ describe("B2. Recovery 阶段恢复", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await driveToImplement(wt, CID)
-      const r = await init.execute({ change_id: CID, task_group_id: "1" }, ctx.orch)
+      const r = await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, ctx.orch)
       expect(r).toBe("编排会话已初始化。")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
@@ -237,7 +237,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "task" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "task" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.currentStep).toBe("verify_task")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
@@ -249,7 +249,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.currentStep).toBe("verify_quality")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
@@ -261,7 +261,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "tool" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "tool" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.currentStep).toBe("verify_tool")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
@@ -273,7 +273,7 @@ describe("B3. Recovery review_layer 子阶段参数", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl", review_layer: "task" } }, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl", review_layer: "task" } }, ctx.orch),
         /review_layer 参数仅当 recovery.phase 为 review/
       )
     } finally { teardown(root) }
@@ -290,7 +290,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.currentStep = "verify_tool"
         item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_task")
@@ -307,7 +307,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.currentStep = "verify_quality"
         item.tags["verify_quality:openspec-reviewer-style"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.currentStep).toBe("verify_quality")
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBe("passed")
@@ -330,7 +330,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.tags["verify_quality:openspec-reviewer-performance"] = "failed"
         item.tags["verify_quality:openspec-reviewer-security"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "quality" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.tags["verify_quality:openspec-reviewer-performance"]).toBeUndefined()
       expect(item.tags["verify_quality:openspec-reviewer-security"]).toBe("passed")
@@ -359,7 +359,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
           if (c.type === "task") c.phase = "done"
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("done")
       expect(item.currentStep).toBeNull()
@@ -382,7 +382,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
           item.tags[`verify_quality:openspec-reviewer-${d}`] = "passed"
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_quality")
@@ -398,7 +398,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.currentStep = "verify_tool"
         item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       // 恢复后 verify_tool 全 passed 被跳过，currentStep 已前移到 verify_task
       expect(item.currentStep).toBe("verify_task")
@@ -421,7 +421,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.tags["verify_quality:openspec-reviewer-architecture"] = "passed"
       })
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } },
+        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "quality" } },
         ctx.orch
       )
       let item = readItem(wt, CID)
@@ -476,7 +476,7 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
         item.tags["verify_tool:openspec-reviewer-tool"] = "failed"
       })
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "task" } },
+        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "task" } },
         ctx.orch
       )
       const item = readItem(wt, CID)
@@ -796,7 +796,7 @@ describe("B8. taskNumber 数字 ID 归一化 + init base_branch", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", base_branch: "develop" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", base_branch: "develop" }, o)
       const state = JSON.parse(readFileSync(statePath(wt), "utf-8"))
       expect(state.baseBranch).toBe("develop")
     } finally { teardown(root) }
@@ -973,7 +973,7 @@ describe("B11. agentSummaries 会话摘要", () => {
       rewriteItem(wt, (item) => {
         item.metadata["agent_summaries"] = { "openspec-architect": "预检通过，已输出执行边界" }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl" } }, ctx.orch)
       expect(metaOf(readItem(wt, CID), "agent_summaries")["openspec-architect"]).toBe("预检通过，已输出执行边界")
     } finally { teardown(root) }
   })

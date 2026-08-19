@@ -13,7 +13,7 @@ import type {
 } from "./types.ts"
 import { WORK_ITEM_PHASES, stepAgentIds } from "./types.ts"
 import { DIMENSION_AGENT_MAP } from "../constants.ts"
-import type { OrchestrateState, WorkflowMode } from "../types.ts"
+import type { OrchestrateState } from "../types.ts"
 
 const SPECIAL_TRANSITIONS = ["done", "halt"] as const
 const PHASE_NAMES = new Set<string>(WORK_ITEM_PHASES)
@@ -61,38 +61,6 @@ export const SIMPLE_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "ta
  */
 export function resolveWorkflowPath(state: Pick<OrchestrateState, "mode">): string {
   return state.mode === "simple" ? SIMPLE_WORKFLOW_PATH : TASK_WORKFLOW_PATH
-}
-
-/** 项目级模式配置文件路径（<worktree>/openspec/workflow.yaml，与 openspec/config.yaml 同级）。 */
-const WORKFLOW_MODE_CONFIG_FILE = "openspec/workflow.yaml"
-
-/**
- * 读取项目级流程模式配置（<worktree>/openspec/workflow.yaml）：
- * - 文件缺失 → "full"（缺省）
- * - YAML 解析失败 → 抛错
- * - 顶层非 YAML 映射对象 → 抛错
- * - mode 字段缺失 → "full"（缺省）
- * - mode 值域外（非 full/simple）→ 抛错
- * 仅由 opx_orch_init 新建 state 时调用；已存在的 state 不读配置，沿用既有 mode。
- */
-export function readWorkflowModeConfig(worktree: string): WorkflowMode {
-  const configPath = pathResolve(worktree, WORKFLOW_MODE_CONFIG_FILE)
-  if (!existsSync(configPath)) return "full"
-  let raw: unknown
-  try {
-    raw = yaml.load(readFileSync(configPath, "utf-8"))
-  } catch (err) {
-    fail(`${WORKFLOW_MODE_CONFIG_FILE} 解析失败：${(err as Error).message}`)
-  }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    fail(`${WORKFLOW_MODE_CONFIG_FILE} 配置非法：顶层必须是 YAML 映射对象`)
-  }
-  const mode = (raw as { mode?: unknown }).mode
-  if (mode === undefined) return "full"
-  if (mode !== "full" && mode !== "simple") {
-    fail(`${WORKFLOW_MODE_CONFIG_FILE} 配置非法：mode 值域为 full/simple，收到 ${JSON.stringify(mode)}`)
-  }
-  return mode
 }
 
 const workflowFileCache = new Map<string, LoadedWorkflow>()

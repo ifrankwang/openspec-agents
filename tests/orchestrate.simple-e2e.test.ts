@@ -61,7 +61,7 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
   test("init 固化 → implement 干净强检查 → 清单可见/维度必填 → 自循环重试 → 复核通过 → 裸合并收尾", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
-      // ① init 固化 simple：新建 state 从 openspec/workflow.yaml 读取并写入 mode
+      // ① init 固化 simple：opx_orch_init(mode: simple) 写入 mode
       await initSimpleWorktree(wt, CID)
       expect(stateOf(wt).mode).toBe("simple")
       const item0 = taskItemOf(wt)
@@ -223,13 +223,13 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
 })
 
 describe("simple 模式端到端：full 模式既有流转不受身份逻辑化影响（回归快照）", () => {
-  test("full 模式 init（无 workflow.yaml 缺省 full）→ analyze 正常推进", async () => {
+  test("full 模式 init（显式 mode: full）→ analyze 正常推进", async () => {
     const { root, wt } = fresh()
     try {
       const orch = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
       await set_worktree.execute({ change_id: CID }, orch)
-      // 缺省 full：旧行为完整保留（analyze step 存在、初始态 todo/analyze）
+      // 显式 full：旧行为完整保留（analyze step 存在、初始态 todo/analyze）
       expect(stateOf(wt).mode).toBe("full")
       const item = taskItemOf(wt)
       expect(item.phase).toBe("todo")

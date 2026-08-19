@@ -37,7 +37,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       const err = await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "bogus" } } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "bogus" } } as any, ctx.orch),
         /recovery.phase 不合法[\s\S]*task_analysis、dev_impl、review/
       )
       expect(err.message).toContain("bogus")
@@ -49,7 +49,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: {} } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: {} } as any, ctx.orch),
         /recovery.phase 不合法/
       )
     } finally { teardown(root) }
@@ -60,7 +60,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "docs" } } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "docs" } } as any, ctx.orch),
         /recovery.review_layer 不合法[\s\S]*tool、task、quality/
       )
     } finally { teardown(root) }
@@ -71,15 +71,15 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: "null" } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: "null" } as any, ctx.orch),
         /recovery 参数解析失败/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: "42" } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: "42" } as any, ctx.orch),
         /recovery 参数解析失败/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: "[1]" } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: "[1]" } as any, ctx.orch),
         /recovery 参数解析失败/
       )
     } finally { teardown(root) }
@@ -89,7 +89,7 @@ describe("A. recovery 值域校验", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: '{"phase":"dev_impl"}' } as any, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: '{"phase":"dev_impl"}' } as any, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -101,7 +101,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", recovery: '{"phase":"bogus"}' } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: '{"phase":"bogus"}' } as any, ctx.orch),
         /recovery.phase 不合法/
       )
     } finally { teardown(root) }
@@ -114,7 +114,7 @@ describe("B. git 分支名校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", base_branch: "my branch" } as any, ctx.orch),
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", base_branch: "my branch" } as any, ctx.orch),
         /base_branch 不合法/
       )
     } finally { teardown(root) }

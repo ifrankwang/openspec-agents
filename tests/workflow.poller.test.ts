@@ -42,7 +42,7 @@ function freshSetup(root: string): { wt: string } {
 }
 
 async function initSession(wt: string): Promise<void> {
-  await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
 }
 
 /** 可配置假 adapter：pull 返回固定原始项，可注入 pull/transform/writeback 失败。 */

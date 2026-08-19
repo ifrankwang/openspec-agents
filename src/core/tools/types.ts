@@ -1,4 +1,4 @@
-import type { BuildPhaseTarget, ReviewLayer, ReviewVerifyStep } from "../types.ts"
+import type { BuildPhaseTarget, ReviewLayer, ReviewVerifyStep, WorkflowMode } from "../types.ts"
 
 export interface ToolContext {
   worktree: string
@@ -28,6 +28,8 @@ export interface InitParams {
      *  恢复后 currentStep 落在第一个未全部通过的 verify step，可能早于被重置的 step。 */
     reset_steps?: ReviewVerifyStep[]
   }
+  /** 流程模式（full/simple），仅新建编排状态时生效；已开始的变更沿用固化模式，不支持中途切换。 */
+  mode?: WorkflowMode
 }
 
 export interface SetWorktreeParams {

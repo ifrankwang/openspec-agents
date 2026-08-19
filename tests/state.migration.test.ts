@@ -258,7 +258,7 @@ describe("state.workItems 迁移", () => {
         updatedAt: "2026-07-01T00:00:00.000Z",
       }))
 
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
 
       // init 写入新布局 openspec/states/（首次写入前已幂等迁移旧数据），读取新路径验证
       const newDir = join(wt, "openspec", "states")

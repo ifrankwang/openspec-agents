@@ -180,7 +180,7 @@ describe("full 模式 verify_quality 5 逻辑身份并行视图回归", () => {
   /** full 模式构造 verify_quality 聚合态：5 维全部 pending，tool/task 已 passed。 */
   async function driveToVerifyQuality(wt: string): Promise<void> {
     const orch = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1" }, orch)
+    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
     await set_worktree.execute({ change_id: CID }, orch)
     const p = join(wt, "openspec", "states", `${CID}.json`)
     const state = JSON.parse(readFileSync(p, "utf-8")) as { workItems: any[] }

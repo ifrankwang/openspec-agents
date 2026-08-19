@@ -213,6 +213,12 @@ export const orchInitSchema: JSONSchema = {
       description: "基准分支名（如 main、develop），用于计算 merge-base 和 worktree fork 源。未传则自动从当前 git 分支推导。",
     },
     recovery: recoverySchema,
+    mode: {
+      type: "string",
+      enum: ["full", "simple"],
+      description:
+        "流程模式选择：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，缺省）。仅新建编排状态（首次 opx_orch_init）时生效；已开始的变更沿用固化模式，不支持中途切换。",
+    },
   },
   required: ["change_id", "task_group_id"],
   additionalProperties: false,

@@ -150,10 +150,10 @@ describe("2.3 quality_review failed 理由判定不按维度过滤", () => {
   test("full 模式 verify_quality 维度过滤回归：非本维 issue 不构成该维 failed 理由", async () => {
     const { root, wt } = fresh()
     try {
-      // full 模式（不写 workflow.yaml，init 兜底 full）：quality 层遗留阻塞维度为 architecture
+      // full 模式（显式 mode: full）：quality 层遗留阻塞维度为 architecture
       const { init, set_worktree } = await import("../src/adapters/opencode/tools")
       const orch = makeCtx("primary", wt, { orchestrator: true })
-      await init.execute({ change_id: CID, task_group_id: "1" }, orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
       await set_worktree.execute({ change_id: CID }, orch)
       const p = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(p, "utf-8")) as { workItems: any[] }

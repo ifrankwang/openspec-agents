@@ -38,7 +38,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
 
       const out = await status.execute({ change_id: CID }, makeCtx("openspec-architect", wt))
       expect(out).toContain("# ⛔ worktree 未就绪，当前拒绝执行")
@@ -56,7 +56,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
 
       const out = await status.execute({ change_id: CID }, o)
       expect(out).toContain("## Worktree")
@@ -73,7 +73,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       await set_worktree.execute({ change_id: CID }, o)
 
       const out = await status.execute({ change_id: CID }, o)
@@ -89,7 +89,7 @@ describe("worktree 就绪门禁：opx_agent_submit 硬门禁", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
 
       await expect(
         agent_submit.execute(
@@ -107,7 +107,7 @@ describe("worktree 就绪门禁：opx_agent_submit 硬门禁", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       // 手工构造检查点态（无 worktree_path）
       const item = {
         id: "task:1", source: "openspec", externalId: "1", type: "task",
@@ -174,7 +174,7 @@ describe("worktree 就绪门禁：reopenIssues 清空 worktree_path 后恢复", 
 
       // reopenIssues 恢复：清空 worktree 引用、回到 dev_impl
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl", reopenIssues: true } },
+        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl", reopenIssues: true } },
         o
       )
 

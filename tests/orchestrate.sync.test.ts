@@ -70,11 +70,11 @@ describe("syncTaskChildren 断根：重复 task children", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
-      await init.execute({ change_id: CID, task_group_id: "2" }, o)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
-      await init.execute({ change_id: CID, task_group_id: "2" }, o)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ change_id: CID, task_group_id: "2", mode: "full" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ change_id: CID, task_group_id: "2", mode: "full" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       assertNoDuplicateTaskChildren(readItem(wt, CID, "1"))
       assertNoDuplicateTaskChildren(readItem(wt, CID, "2"))
       expect(taskChildIds(readItem(wt, CID, "1")).length).toBe(3)
@@ -88,17 +88,17 @@ describe("syncTaskChildren 断根：重复 task children", () => {
       const ctx = await setupToAnalyze(wt, CID)
       injectDuplicateTaskChildren(wt)
       // forceOpen 路径：task_analysis 全新开始
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "task_analysis" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "task_analysis" } }, ctx.orch)
       assertNoDuplicateTaskChildren(readItem(wt, CID))
       expect(taskChildIds(readItem(wt, CID)).length).toBe(3)
       // 非 forceOpen 路径：dev_impl 保留既有进度（重复 init 两次）
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, ctx.orch)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl" } }, ctx.orch)
       assertNoDuplicateTaskChildren(readItem(wt, CID))
       expect(taskChildIds(readItem(wt, CID)).length).toBe(3)
       // review 路径：defaultStatus=done，重复 init 两次
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       assertNoDuplicateTaskChildren(readItem(wt, CID))
       expect(taskChildIds(readItem(wt, CID)).length).toBe(3)
     } finally { teardown(root) }
@@ -108,7 +108,7 @@ describe("syncTaskChildren 断根：重复 task children", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(taskChildIds(readItem(wt, CID)).length).toBe(3)
 
       const p = join(wt, "openspec", "changes", CID, "tasks.md")
@@ -117,7 +117,7 @@ describe("syncTaskChildren 断根：重复 task children", () => {
         `## 1. First Task Group\n\n- [ ] 1.1 Task one [spec:spec-a]\n- [ ] 1.4 Task four [spec:spec-b]\n\n## 2. Second Task Group\n\n- [ ] 2.1 Another task [spec:spec-b]\n\n## 3. Third Task Group\n\n- [ ] 3.1 Final task [spec:spec-a]\n`,
         "utf-8"
       )
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       const item = readItem(wt, CID)
       assertNoDuplicateTaskChildren(item)
       expect(taskChildIds(item).length).toBe(2)
@@ -131,12 +131,12 @@ describe("syncTaskChildren 断根：重复 task children", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       rewriteItem(wt, "1", (item) => {
         item.metadata["_advance_block_reason"] = "跨 phase 正向推进被门禁拦截：测试原因"
       })
       // 阻塞条件经"改 tasks.md + 无 recovery 同组重 init"解除后，continue 路径须清除过期原因
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(readItem(wt, CID).metadata["_advance_block_reason"]).toBeUndefined()
     } finally { teardown(root) }
   })

@@ -293,7 +293,7 @@ describe("recovery=review 与 verify_cleanup", () => {
           if (c.type === "task") c.phase = "done"
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_cleanup")
@@ -324,7 +324,7 @@ describe("recovery=review 与 verify_cleanup", () => {
           if (c.type === "task") c.phase = "done"
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("done")
       expect(item.currentStep).toBeNull()

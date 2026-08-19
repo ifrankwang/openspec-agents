@@ -53,7 +53,7 @@ describe("双轨对比：插件壳 vs MCP 形态状态机行为一致（tasks 4.
       const { worktree: wtPlugin } = setupWithFakeGit(rootPlugin, CID)
       const orchCtx = makeOrchCtx(wtPlugin)
       const archCtx = makeCtx("openspec-architect", wtPlugin)
-      await init.execute({ change_id: CID, task_group_id: "1" }, orchCtx)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orchCtx)
       await set_worktree.execute({ change_id: CID }, orchCtx)
       await agent_submit.execute(
         {
@@ -71,7 +71,7 @@ describe("双轨对比：插件壳 vs MCP 形态状态机行为一致（tasks 4.
       const client = await connectClient(`http://127.0.0.1:${port}/mcp`)
       await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1" },
+        arguments: { change_id: CID, task_group_id: "1", mode: "full" },
       })
       await client.callTool({
         name: "opx_orch_set_worktree",

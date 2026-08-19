@@ -57,6 +57,8 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
       expect(initTool.inputSchema.properties).toBeDefined()
       expect(initTool.inputSchema.properties["change_id"]).toBeDefined()
       expect(initTool.inputSchema.properties["_agent"]).toBeDefined()
+      expect(initTool.inputSchema.properties["mode"]).toBeDefined()
+      expect((initTool.inputSchema.properties["mode"] as { enum?: string[] }).enum).toEqual(["full", "simple"])
     } finally {
       teardown(root)
     }
@@ -72,7 +74,7 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
 
       const initRes = await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1" },
+        arguments: { change_id: CID, task_group_id: "1", mode: "full" },
       })
       const initText = (initRes.content as Array<{ text: string }>)[0].text
       expect(initText).toContain("编排会话已初始化")
@@ -117,7 +119,7 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
 
       await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1" },
+        arguments: { change_id: CID, task_group_id: "1", mode: "full" },
       })
       await client.callTool({
         name: "opx_orch_set_worktree",

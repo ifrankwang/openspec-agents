@@ -54,7 +54,7 @@ async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
+  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
   await agent_submit.execute(
     {
@@ -71,7 +71,7 @@ async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx
 async function driveToImplement(wt: string): Promise<ReturnType<typeof makeCtx>> {
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
-  await init.execute({ change_id: CID, task_group_id: "1" }, o)
+  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
   await agent_submit.execute(
     {
@@ -702,7 +702,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1" }, o)
+    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
     await set_worktree.execute({ change_id: CID }, o)
 
     const state = readStateSync(wt)

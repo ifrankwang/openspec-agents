@@ -44,7 +44,7 @@ describe("T1: set_unattended tool", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       await set_unattended.execute({ change_id: CID, enabled: true }, o)
 
       const state = readState(wt, CID)
@@ -58,7 +58,7 @@ describe("T1: set_unattended tool", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       await set_unattended.execute({ change_id: CID }, o)
 
       const state = readState(wt, CID)
@@ -72,7 +72,7 @@ describe("T1: set_unattended tool", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       await set_unattended.execute({ change_id: CID, enabled: true }, o)
       await set_unattended.execute({ change_id: CID, enabled: false }, o)
 
@@ -88,7 +88,7 @@ describe("T1: set_unattended tool", () => {
       const o = makeOrchCtx(wt)
       const d = makeCtx("openspec-developer", wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
 
       try {
         await set_unattended.execute({ change_id: CID, enabled: true }, d)

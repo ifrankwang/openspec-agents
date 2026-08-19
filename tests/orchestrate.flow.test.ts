@@ -44,7 +44,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
     try {
       fakeGit.currentBranch = "develop"
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(stateOf(wt).baseBranch).toBe("develop")
     } finally { teardown(root) }
   })
@@ -53,7 +53,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", base_branch: "release/1.0" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", base_branch: "release/1.0" }, o)
       expect(stateOf(wt).baseBranch).toBe("release/1.0")
     } finally { teardown(root) }
   })
@@ -63,7 +63,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
     try {
       fakeGit.currentBranch = "HEAD"
       const o = makeOrchCtx(wt)
-      const err = await init.execute({ change_id: CID, task_group_id: "1" }, o).catch((e: Error) => e)
+      const err = await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/detached HEAD|显式.*base_branch/)
     } finally { teardown(root) }
@@ -73,7 +73,7 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(stateOf(wt).isolationNamespace).toBe(generateIsolationNamespace(CID))
       expect(stateOf(wt).isolationNamespace).toMatch(/^[0-9a-f]{6}$/)
     } finally { teardown(root) }
@@ -95,13 +95,13 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacyState))
 
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(stateOf(wt).isolationNamespace).toBe(generateIsolationNamespace(CID))
 
       const s = stateOf(wt)
       s.isolationNamespace = "custom-ns"
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(s))
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(stateOf(wt).isolationNamespace).toBe("custom-ns")
     } finally { teardown(root) }
   })

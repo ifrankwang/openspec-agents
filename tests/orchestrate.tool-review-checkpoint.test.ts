@@ -47,7 +47,7 @@ describe("tool review 检查点增量端到端", () => {
 
       // ── 纯文档重审直提：重置 verify_tool，检查点区间仅 openspec 文档变更 → 分支① 直提 ──
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
+        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
         ctx.orch
       )
       fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "openspec/changes/cid/design.md")
@@ -62,7 +62,7 @@ describe("tool review 检查点增量端到端", () => {
 
       // ── 多提交含代码 → 走全量（分支③）──
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
+        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
         ctx.orch
       )
       fakeGit.diffNameOnlyByRange.set("cp-2..HEAD", "src/main/java/com/t/A.java\nsrc/main/java/com/t/B.java")
@@ -117,7 +117,7 @@ describe("tool review 检查点增量端到端", () => {
 
       // ── 重置 verify_tool：dev 只改代码注释（检查点区间含代码文件，hasNonDocChange=true → 分支③）──
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
+        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
         ctx.orch
       )
       fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "src/main/java/com/t/App.java")

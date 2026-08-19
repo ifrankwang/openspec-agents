@@ -135,7 +135,7 @@ export interface OrchestrateState {
   createdAt: string
   updatedAt: string
   unattended?: boolean
-  /** 变更开始时固化的流程模式（opx_orch_init 从 <repo>/openspec/workflow.yaml 读取后写入）。
-   *  缺失即旧变更，一律按 full 处理（读时兜底，不写回）；已存在的 state 不再被配置改动覆盖。 */
+  /** 变更开始时固化的流程模式（经 opx_orch_init 的 mode 参数写入，缺省 simple）。
+   *  缺失即旧变更，一律按 full 处理（读时兜底，不写回）；已存在的 state 不再被参数改动覆盖。 */
   mode?: WorkflowMode
 }

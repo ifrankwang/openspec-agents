@@ -1,8 +1,8 @@
 /**
  * 模式固化（full / simple）与 task-simple 流程文件测试（变更组 1）：
- * - opx_orch_init 新建 state 时读取 <worktree>/openspec/workflow.yaml 固化 mode；
- *   重复初始化 / 切换任务组沿用既有 mode；旧 state 缺 mode 读时兜底 full 不写回
- * - 配置值域外与 YAML 解析失败报错（不落盘）
+ * - opx_orch_init 经 mode 参数固化模式（缺省 simple）；重复初始化 / 切换任务组沿用既有 mode；
+ *   旧 state 缺 mode 读时兜底 full 不写回
+ * - mode 值域外报错（不落盘，新建与已存在 state 两种情形）
  * - task-simple.yaml 可经 loadWorkflowFile 加载且结构正确（双文件并行缓存、互不污染）
  * - resolveWorkflowPath 按 state.mode 选择 workflow 文件
  * - agentToReviewLayer 的 openspec-reviewer → quality 映射（D1）
@@ -33,47 +33,55 @@ function stateOf(wt: string): any {
   return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : null
 }
 
-function writeWorkflowMode(wt: string, content: string): void {
-  writeFileSync(join(wt, "openspec", "workflow.yaml"), content, "utf-8")
+/** 直写旧格式 state（无 mode 字段）到磁盘。 */
+function writeLegacyState(wt: string): void {
+  const stateDir = join(wt, "openspec", "states")
+  mkdirSync(stateDir, { recursive: true })
+  const legacy = {
+    changeId: CID,
+    isolationNamespace: "abc123",
+    taskGroupId: "1",
+    baseBranch: "main",
+    workItems: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+  writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacy))
 }
 
 describe("opx_orch_init 模式固化", () => {
-  test("新建 state：配置文件缺失视为 full 并写入 mode=full", async () => {
+  test("新建 state：不传 mode 缺省 simple 并写入 mode=simple", async () => {
     const { wt, root } = fresh()
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
-      expect(stateOf(wt).mode).toBe("full")
-    } finally { teardown(root) }
-  })
-
-  test("新建 state：配置 mode: simple 写入 mode=simple", async () => {
-    const { wt, root } = fresh()
-    try {
-      writeWorkflowMode(wt, "mode: simple\n")
       await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
 
-  test("新建 state：配置 mode: full 写入 mode=full", async () => {
+  test("新建 state：mode=simple 写入 mode=simple", async () => {
     const { wt, root } = fresh()
     try {
-      writeWorkflowMode(wt, "mode: full\n")
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, makeOrchCtx(wt))
+      expect(stateOf(wt).mode).toBe("simple")
+    } finally { teardown(root) }
+  })
+
+  test("新建 state：mode=full 写入 mode=full", async () => {
+    const { wt, root } = fresh()
+    try {
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBe("full")
     } finally { teardown(root) }
   })
 
-  test("重复初始化沿用既有 mode：simple 开始后改配置为 full 再 init，mode 仍为 simple", async () => {
+  test("重复初始化沿用既有 mode：simple 开始后传 mode=full 再 init，mode 仍为 simple", async () => {
     const { wt, root } = fresh()
     try {
-      writeWorkflowMode(wt, "mode: simple\n")
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
       expect(stateOf(wt).mode).toBe("simple")
-      // 进行中改动配置不影响已开始变更（模式在变更开始时固化）
-      writeWorkflowMode(wt, "mode: full\n")
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      // 已开始的变更沿用固化模式，mode 参数不再生效
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
@@ -81,57 +89,52 @@ describe("opx_orch_init 模式固化", () => {
   test("切换任务组沿用既有 mode：simple 固化后切组仍为 simple", async () => {
     const { wt, root } = fresh()
     try {
-      writeWorkflowMode(wt, "mode: simple\n")
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
       await init.execute({ change_id: CID, task_group_id: "2" }, o)
       expect(stateOf(wt).taskGroupId).toBe("2")
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
 
-  test("旧 state 缺 mode：不读配置、不写回（读时兜底 full）", async () => {
+  test("旧 state 缺 mode：不写回（state.mode 保持 undefined），消费端读时兜底 full", async () => {
     const { wt, root } = fresh()
     try {
-      const stateDir = join(wt, "openspec", "states")
-      mkdirSync(stateDir, { recursive: true })
-      const legacy = {
-        changeId: CID,
-        isolationNamespace: "abc123",
-        taskGroupId: "1",
-        baseBranch: "main",
-        workItems: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }
-      writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacy))
-      // 即便当前配置为 simple，已存在的 state 也不再被配置覆盖
-      writeWorkflowMode(wt, "mode: simple\n")
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+      writeLegacyState(wt)
+      // 已存在的 state 不受 mode 参数影响
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBeUndefined()
       expect(stateOf(wt).isolationNamespace).toBe("abc123")
     } finally { teardown(root) }
   })
 
-  test("配置 mode 值域外报错且不落盘", async () => {
+  test("mode 值域外报错且不落盘（新建 state）", async () => {
     const { wt, root } = fresh()
     try {
-      writeWorkflowMode(wt, "mode: banana\n")
-      const err = await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt)).catch((e: Error) => e)
+      const err = await init.execute(
+        { change_id: CID, task_group_id: "1", mode: "banana" } as any,
+        makeOrchCtx(wt)
+      ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/mode 值域为 full\/simple/)
+      expect(err.message).toMatch(/mode 参数不合法/)
+      expect(err.message).toMatch(/banana/)
       expect(existsSync(join(wt, "openspec", "states", `${CID}.json`))).toBe(false)
     } finally { teardown(root) }
   })
 
-  test("配置 YAML 解析失败报错且不落盘", async () => {
+  test("mode 值域外报错且不落盘（已存在 state）", async () => {
     const { wt, root } = fresh()
     try {
-      writeWorkflowMode(wt, "mode: [unclosed\n")
-      const err = await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt)).catch((e: Error) => e)
+      const o = makeOrchCtx(wt)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      const err = await init.execute(
+        { change_id: CID, task_group_id: "1", mode: "banana" } as any,
+        o
+      ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/解析失败/)
-      expect(existsSync(join(wt, "openspec", "states", `${CID}.json`))).toBe(false)
+      expect(err.message).toMatch(/mode 参数不合法/)
+      // 值域外参数被拒绝，state 未被改写，仍为既有 simple
+      expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
 })

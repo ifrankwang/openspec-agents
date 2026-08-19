@@ -301,7 +301,7 @@ describe("gap9 recovery 后立即查 status", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       // recovery 已清 _retryCount/_checkpoint（engine.ts:215-217 resetInternalRetryCount），此处不断言残留
       const out = await status.execute({ change_id: CID }, ctx.orch)
       expect(out).toContain("**当前阶段**: review")
@@ -320,7 +320,7 @@ describe("gap10 多任务组切换", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       // 切换活跃组到 2（state.taskGroupId 权威）
-      await init.execute({ change_id: CID, task_group_id: "2" }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "2", mode: "full" }, ctx.orch)
       await set_worktree.execute({ change_id: CID }, ctx.orch)
       expect(readItem(wt, CID, "2").phase).toBe("todo")
       const out = await status.execute({ change_id: CID }, ctx.orch)
@@ -347,7 +347,7 @@ describe("gap11 worktree 内 session 调 status", () => {
 
       // 主仓库 init + set_worktree（worktree_path 指向 wtLive，写入 metadata 与 context.json）
       const ctx = makeAgentCtxs(wt)
-      await init.execute({ change_id: CID, task_group_id: "1" }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, ctx.orch)
       await set_worktree.execute({ change_id: CID, worktree_path: "worktree-live" }, ctx.orch)
 
       // 从 worktree 内 session（worktree=wtLive）查 status → readStateByWorktree 走 isWorktreePath 分支

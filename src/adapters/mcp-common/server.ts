@@ -37,7 +37,7 @@ interface ToolSpec {
 const TOOL_SPECS: Record<string, ToolSpec> = {
   opx_orch_init: {
     description:
-      "初始化编排会话。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。",
+      "初始化编排会话。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式，仅新建状态生效。",
     schema: orchInitSchema,
     execute: (args, ctx) => initExecute(args as any, ctx),
   },

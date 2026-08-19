@@ -240,7 +240,7 @@ describe("blocker 生命周期", () => {
       expect(blockersOf(readItem(wt, CID))[0].status).toBe("awaiting_user")
 
       // recovery 重初始化（task_analysis），未解决 blocker 保留
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "task_analysis" } }, ctx.orch)
+      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "task_analysis" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("todo")
       expect(item.currentStep).toBe("analyze")

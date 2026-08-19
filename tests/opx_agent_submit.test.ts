@@ -118,7 +118,7 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
 /** init + set_worktree 一次到位：worktree 就绪硬门禁要求提交前 worktree 就绪（opx_orch_set_worktree 后提交）。 */
 async function initWorktree(wt: string): Promise<void> {
   const orch = makeOrchCtx(wt)
-  await init.execute({ change_id: CID, task_group_id: "1" }, orch)
+  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
   await set_worktree.execute({ change_id: CID }, orch)
 }
 

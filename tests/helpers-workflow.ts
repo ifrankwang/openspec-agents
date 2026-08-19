@@ -126,7 +126,7 @@ export function makeAgentCtxs(wt: string): AgentCtx {
 /** 初始化到 todo/analyze（无 recovery 时 init 构造 task WorkItem 置 todo/analyze），并补一次 set_worktree 使 worktree 就绪。 */
 export async function setupToAnalyze(wt: string, cid: string, opts: { groupId?: string; recovery?: DriveOpts["recovery"] } = {}): Promise<AgentCtx> {
   const ctx = makeAgentCtxs(wt)
-  const params: Record<string, unknown> = { change_id: cid, task_group_id: opts.groupId ?? "1" }
+  const params: Record<string, unknown> = { change_id: cid, task_group_id: opts.groupId ?? "1", mode: "full" }
   if (opts.recovery) params.recovery = opts.recovery
   await init.execute(params as any, ctx.orch)
   await set_worktree.execute({ change_id: cid }, ctx.orch)
