@@ -232,6 +232,15 @@ Port 接口是内核（domain + application）定义的纯业务契约，Adapter
 
 四层分层下两类分别落在 interfaces 与 infrastructure；六边形下即 adapter/in 与 adapter/out（或由 interfaces/infrastructure 承担 adapter 角色）。
 
+## Infrastructure 协议层隔离
+
+Infrastructure 层必须通过协议层（内核定义的 driven port：Repository、领域事件 Port、外部集成 Port 等）向业务/应用暴露能力，业务/应用只面向协议层编程，禁止直接依赖具体基础设施实现类。协议层是业务/应用与具体 infra 之间的唯一通道，确保 infra 层可更换具体技术栈而不影响应用。
+
+- 每项 infra 能力（持久化、消息、外部集成、缓存、文件、LLM 等）在引入前必须先在内核定义对应 Port 接口，再由 infrastructure 提供 Adapter 实现
+- domain/application/interfaces 只允许依赖 Port 接口，禁止 import/调用具体基础设施实现类（具体 Client、Mapper、SDK、模板类等）
+- 更换具体技术栈时，仅新增或替换 infrastructure 内的 Adapter 实现，不得改动 domain/application/interfaces 的接口与代码
+- 无协议层直接调用具体 infra 实现，或业务/应用层出现具体技术栈类型，均视为架构违规
+
 ## 共性能力基础设施化
 
 应统一拦截/封装到 Infrastructure 层或框架级能力的横向逻辑，不得分散在各 Controller/Service 中逐点调用。
