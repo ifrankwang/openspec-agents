@@ -42,7 +42,7 @@ OpenSpec 把需求、设计、任务拆解成规范文档后，实施阶段仍�
 - **Agent 无关**：内核不绑定具体 Agent，opencode / claude code / codex / zcode / deepseek harness 通过各自原生插件/适配器接入同一套状态机。
 - **Workflow 驱动**：步骤、角色、门禁在 workflow 中声明，`opx_status` 是下一步调度的唯一事实源。
 - **多 Agent 团队**：主代理编排，2 个物理子代理承载 9 种逻辑身份分工协作，避免单一大模型从头写到尾失控。
-- **强 Review 门禁**：full 模式 tool / task / quality 三层审查 + 收尾验证；simple 模式单一审查者合并审查。问题可回退、可豁免、可检查点决策。
+- **强 Review 门禁**：full 模式 tool / task / quality 三层审查 + 收尾验证；simple 模式单一审查者合并审查。问题可回退、可豁免、可检查点决策。确定性质量工具问题以压制手段解决时视为豁免申请，须说明理由并经审查判定合理性。
 - **隔离与安全**：每个 change 使用独立 git worktree、资源隔离命名空间，减少相互干扰。
 - **可观测**：内置进度看板，状态/豁免/并发锁持久化到 `openspec/states/`。
 

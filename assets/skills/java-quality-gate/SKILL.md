@@ -397,17 +397,25 @@ SonarQube 规则 6,500+，覆盖 PMD 无法检测的安全漏洞、代码异味�
 git diff --name-only <baseRef>..HEAD | grep -E "(pmd-rules\.xml|sonar-project\.properties|pom\.xml)"
 ```
 
-检查本轮 diff 中是否包含质量工具规则/配置文件的改动。若包含，逐一检查以下维度：
+检查本轮 diff 中是否包含质量工具规则/配置文件的改动，以及代码内压制手段。若包含，逐一检查以下维度：
 
 - 规则是否被删除或降级（如 PMD priority 从 1 改为 5，或规则项被整条移除）
 - 是否新增了过宽的 exclude/include 配置（如排除整个命名空间、跳过核心架构检查）
 - `pom.xml` 中 `spotless-maven-plugin` / `pmd-maven-plugin` 等质量插件配置是否被弱化（跳过执行、降低阻塞等级）
 - `pmd-maven-plugin` 的 CPD 配置是否被弱化（`cpd-check` goal 被移除、`<minimumTokens>` 被过度调高、`<excludes>` 或 `excludeFromFailureFile` 过宽排除——均属弱化形态）
+- 代码内压制手段：类/方法级 @SuppressWarnings、@SuppressFBWarnings、NOSONAR 注释、PMD 抑制注解或 excludeFromFailureFile、规则移除/降级、sonar.issue.ignore.multicriteria / sonar.exclusions 过宽排除、平台状态标注（SAFE/WONTFIX/False Positive 等）；每条压制映射为至少 Low 的 issue
 
 检查结果：
 
 - 配置无削弱 → 通过
 - 配置存在削弱 → 工具层 issue，severity=Medium，每条削弱映射为一个 issue
+
+### 7.1 Java 压制形态识别
+
+- 代码内压制：类/方法级 @SuppressWarnings、@SuppressFBWarnings、NOSONAR 注释、PMD 抑制注解（如 @SuppressWarnings("PMD.xxx")）；类级 @SuppressWarnings 的映射见第 4 节 PMD 映射表，方法级压制同样属压制形态
+- 配置压制：excludeFromFailureFile、规则移除/降级、sonar.issue.ignore.multicriteria / sonar.exclusions 过宽排除
+- 平台状态标注：SAFE/WONTFIX/False Positive 等；Security Hotspot 禁用 NOSONAR 见第 6 节
+- 处理要求：压制须附理由（压制处注释），由审查方判定其合理性；无理由或不合理的压制映射为 issue，每条至少 Low
 
 ## 8. 工具输出 → 统一 issue dimension 映射表
 

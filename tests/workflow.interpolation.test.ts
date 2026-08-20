@@ -346,6 +346,19 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）")
   })
 
+  test("implement / verify_tool：压制手段约束与判定指引渲染", () => {
+    const implOut = renderWorking(makeItem({ phase: "in_progress", currentStep: "implement" }), "implement", "openspec-developer")
+    // implement：不得静默压制，确需压制须附理由并申报豁免（新增 instruction + constraint bullet 渲染）
+    expect(implOut).toContain("确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避")
+    expect(implOut).toContain("禁止以压制手段静默规避确定性质量工具问题：压制必须附明确理由并经豁免申请流程裁定")
+
+    const vtOut = renderWorking(makeItem({ phase: "review", currentStep: "verify_tool" }), "verify_tool", "openspec-reviewer-tool")
+    // verify_tool：压制视为豁免申请，判定门槛与理由要求（新增 instruction + constraint bullet 渲染）
+    expect(vtOut).toContain("审查「本次变更证据」的区间 diff 与 git log，识别变更中新增的压制手段")
+    expect(vtOut).toContain("视为豁免申请")
+    expect(vtOut).toContain("压制类 issue 严重级别至少 Low")
+  })
+
   test("verify_task：五项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_task" })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")

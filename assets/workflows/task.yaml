@@ -71,6 +71,7 @@ phases:
           - "提交前按已加载的维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次变更文件逐项自检（聚焦本轮变更文件，不扩散全量代码），自检结论与工具检查结果一并汇总进 self_check_results；修复被驳回 issue 后再次提交前同样须按维度规范类 skill 对变更文件自检后再提交"
           - "自检须覆盖已加载的维度规范类 skill 的全部检查点，self_check_results 按维度逐项列结论（通过/遗留及理由），禁止仅汇总工具检查结果"
           - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由对应 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；Info 级 issue 不阻塞提交，无需申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
+          - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由（commit message 可补充），并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复；被驳回后须移除压制并真实修复"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
           - "提交 opx_agent_submit：passed 时存在未完成或被驳回（open/rejected）的子任务必须全部列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1），全部子任务已验证时可省略；不可修 issue 申请豁免（exempt_issue_ids）"
         constraints:
@@ -82,6 +83,7 @@ phases:
           - "提交前自检必须覆盖已加载的全部 skill（含维度规范类）检查点，不得以工具检查结果替代维度规范自检"
           - "需以 verdict=failed + blocker 上报的条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
           - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
+          - "禁止以压制手段静默规避确定性质量工具问题：压制必须附明确理由并经豁免申请流程裁定，不得以工具不再报错为由跳过申报"
   - name: review
     steps:
       - id: verify_tool
@@ -94,6 +96,7 @@ phases:
         instructions:
           - "依据 opx_status 提供的变更检测结果分流：无代码/配置变更且本层无待复核/待裁定项 → 直接提交 passed，不运行全量工具检查，并以一条 step 名首段为 no_change 的 validation_steps 声明本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据）；无变更但有本层待复核/待裁定项 → 仅复核/裁定待处理项后提交，不跑全量工具扫描；有变更 → 加载质量门类 skill 获取工具清单与映射规则，按已加载质量门 skill 必做清单逐项执行全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描——按必做清单中的对应项逐项执行并逐项申报），将工具输出映射为统一 issue 结构后提交"
           - "「有变更」分支先审查上方「本次变更证据」区块的变更文件清单与区间 diff 内容后自行判断：若确认本次变更仅为注释/文档性且无逻辑影响（非注释掉代码、非结构性/格式化变更、非文件重命名），可自行决定跳过全量工具检查直接提交 passed（validation_steps 以 step=no_change 申报整体豁免必做清单）；无法确认或含逻辑/结构变更，必须顺序运行全部确定性工具检查；裁量仅免除全量工具扫描，不免除复核/裁定——本层 blocking issue 仍须处理至终态后提交"
+          - "审查「本次变更证据」的区间 diff 与 git log，识别变更中新增的压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）：视为豁免申请，核对 dev 是否已在压制处代码注释或 commit message 说明理由并申报豁免；未申报或理由不成立 → 报 issue（file=压制位置、line=压制行、rule=被压制规则名，severity 至少 Low，description/suggestion 写明判定门槛与理由），要求移除压制真实修复或补申报；理由成立 → 经 exempt_adjudications 裁定 dismissed"
           - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
           - "当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档"
           - "复核本层已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"
@@ -107,6 +110,7 @@ phases:
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
           - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
+          - "压制类 issue 严重级别至少 Low"
           - "有实质变更时，工具检查及 issue 报告覆盖全量代码；非本轮变更文件的工具违规同样必须映射为 issue（命中项目级豁免清单的按 Info，不重新豁免；其余非本轮引入问题按原严重级别上报），不得以不在变更清单或未越界修改为由丢弃"
       - id: verify_task
         agents:
