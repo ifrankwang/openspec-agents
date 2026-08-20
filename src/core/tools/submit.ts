@@ -15,7 +15,7 @@ import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../
 import { REVIEW_DIMENSIONS } from "../types.ts"
 import type { Dimension } from "../types.ts"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.ts"
-import { markTaskGroupCheckboxesComplete, reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
+import { reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
 import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
@@ -748,17 +748,6 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         changeId: state.changeId,
         baseRef,
       })
-    }
-
-    // G19：verify_task passed 且全部 task child 达终态（done）→ 同步 tasks.md 复选框 [ ] → [x]
-    if (
-      params.step_id === "verify_task" &&
-      params.verdict === "passed" &&
-      taskChildrenOf(item).every((c) => isTerminalPhase(c.phase))
-    ) {
-      const worktreePath =
-        typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : ctx.worktree
-      await markTaskGroupCheckboxesComplete(worktreePath, params.change_id, state.taskGroupId)
     }
 
     // tool review 检查点增量检测（A3）：verify_tool 的 reviewer-tool 提交成功后记录当前 HEAD，

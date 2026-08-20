@@ -2,7 +2,7 @@ import path from "path"
 import type { TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
@@ -663,6 +663,16 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
     throw new Error(`存在 ${unresolvedBlockers.length} 个未解决 blocker，无法完成任务组。`)
   }
 
+  // tasks.md 复选框统一在收尾勾选（原 G19 语义迁移）：仅写 worktree，随合并带回主分支；失败不阻断收尾
+  let checkboxWarning = ""
+  if (worktreePath) {
+    try {
+      await markTaskGroupCheckboxesComplete(worktreePath, params.change_id, state.taskGroupId)
+    } catch (e) {
+      checkboxWarning = `- **tasks.md 复选框勾选失败**: ${e instanceof Error ? e.message : String(e)}（不影响收尾）`
+    }
+  }
+
   const mergeTarget = state.baseBranch
   if (branchName) {
     const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
@@ -684,7 +694,8 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   }
   item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
-  return `任务组已完成并合并到 "${mergeTarget}"。`
+  const doneMessage = `任务组已完成并合并到 "${mergeTarget}"。`
+  return checkboxWarning ? `${doneMessage}\n${checkboxWarning}` : doneMessage
 }
 
 export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolContext): Promise<string> {

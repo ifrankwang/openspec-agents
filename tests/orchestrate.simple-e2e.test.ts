@@ -14,7 +14,7 @@
  *   exempt_adjudications 裁定 dismissed → passed 进 done → 收尾遇合并冲突返回 blocked（worktree/分支
  *   保留）→ dev 解决冲突后重调 complete 直接收尾（无额外验证）
  *
- * 附：simple 流程不自动勾选 tasks.md 复选框（复选框同步由 full 流程 verify_task 触发，见 README「simple 模式」）。
+ * 附：tasks.md 复选框在任务组收尾（opx_orch_complete_task_group）时统一勾选，full/simple 一致，见 README「simple 模式」。
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync } from "node:fs"
@@ -47,6 +47,10 @@ function taskItemOf(wt: string): any {
 
 function tasksMd(wt: string): string {
   return readFileSync(join(wt, "openspec", "changes", CID, "tasks.md"), "utf-8")
+}
+
+function wtTasksMd(wtPath: string): string {
+  return readFileSync(join(wtPath, "openspec", "changes", CID, "tasks.md"), "utf-8")
 }
 
 /** implement passed 提交（simple 下须 worktree 干净，默认 FakeGit 干净）。 */
@@ -156,9 +160,10 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       expect(fakeGit.mergedBranches).toContain(`task-group/${CID}/1`)
       expect(fakeGit.worktrees.has(wtPath)).toBe(false)
 
-      // ⑪ simple 流程不自动勾选 tasks.md 复选框（复选框同步由 full 流程 verify_task 触发）
+      // ⑪ 收尾统一勾选复选框：worktree 内 tasks.md 已勾选（fake 合并不传播文件，主仓库保持未勾选；真实 git 下随合并带回）
+      expect(wtTasksMd(wtPath)).toContain("- [x] 1.1 Task one")
+      expect(wtTasksMd(wtPath)).toContain("- [x] 1.2 Task two")
       expect(tasksMd(wt)).toContain("- [ ] 1.1 Task one")
-      expect(tasksMd(wt)).toContain("- [ ] 1.2 Task two")
     } finally { teardown(root) }
   })
 })
@@ -218,6 +223,9 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
       expect(fakeGit.worktrees.has(wtPath)).toBe(false)
+      // ⑧ 收尾勾选幂等：complete 时统一勾选，冲突解决后重调 complete 仍勾选
+      expect(wtTasksMd(wtPath)).toContain("- [x] 1.1 Task one")
+      expect(wtTasksMd(wtPath)).toContain("- [x] 1.2 Task two")
     } finally { teardown(root) }
   })
 })

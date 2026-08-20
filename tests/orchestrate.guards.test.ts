@@ -1089,10 +1089,10 @@ describe("G21. implement completed_task_ids 校验", () => {
   })
 })
 
-// ── G19: verify_task passed 同步 tasks.md 复选框 ──
+// ── G19: tasks.md 复选框仅收尾勾选（verify_task 环节不标记）──
 
-describe("G19. verify_task passed 同步 tasks.md 复选框", () => {
-  test("verify_task passed 且全部 task 验证通过 → tasks.md [ ] → [x]", async () => {
+describe("G19. 复选框仅收尾勾选", () => {
+  test("verify_task passed 且全部 task 验证通过 → 不标记复选框（勾选仅在收尾）", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
@@ -1109,8 +1109,8 @@ describe("G19. verify_task passed 同步 tasks.md 复选框", () => {
         ctx.taskR
       )
       const after = readFileSync(tasksMdPath, "utf-8")
-      expect(after).toContain("- [x] 1.1 Task one")
-      expect(after).not.toContain("- [ ] 1.1 Task one")
+      expect(after).toContain("- [ ] 1.1 Task one")
+      expect(after).not.toContain("- [x] 1.1 Task one")
     } finally { teardown(root) }
   })
 
