@@ -53,7 +53,7 @@ phases:
       - id: implement
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency, api-testing, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability]
+            capability_tags: [efficiency, api-testing, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
         transitions:
           on_pass: verify_tool
           on_fail: analyze
@@ -61,6 +61,8 @@ phases:
           - "tasks.md 当前任务组任务项 + `[spec:xxx]` 溯源 specs/ 下相关 spec.md（需求细节与验收标准）；存在时读取 clarify.md（架构方向结论）"
           - "按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界"
           - "实施前识别 spec 描述的一并操作行为组（如状态变更与数据入队这类需同时发生的多个行为）；实施后逐项自证每个行为真实生效，禁止以单一状态字段的实现替代其他行为"
+          - "自证/验证需启动服务或基础设施时，一律按已加载技术栈 skill 的隔离启动规范以隔离方式启动，隔离标识与建议端口以视图 Worktree 区块为准；启动前发现隔离环境有残留时，先按已加载的清理规范幂等清空再启动"
+          - "自证完成后停止本次启动的服务/基础设施实例，不留残留"
           - "环境/基础设施问题（schema 缺失、DDL 未执行、依赖未安装）应通过 migration/初始化脚本等代码层面解决；仅生产级凭据、真实第三方资源、人工运维才走 blocker/豁免"
           - "issue 指向文件的目录已并入执行边界，修复这些文件（含回归引入问题）不算越界；issue 的 file 字段指向 openspec/changes/ 下文档时，按该 issue 要求修复对应文档同样不算越界（仅限该 issue 指定文件，不得扩大范围）；可按 issue 的 suggestion 直接执行修复；reviewer 的 boundary_expansion 已并入边界"
           - "按视图 Issue 清单分类实施：Low+ 必办，Info 建议修复不阻塞提交"
@@ -84,6 +86,7 @@ phases:
           - "需以 verdict=failed + blocker 上报的条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
           - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
           - "禁止以压制手段静默规避确定性质量工具问题：压制必须附明确理由并经豁免申请流程裁定，不得以工具不再报错为由跳过申报"
+          - "禁止为腾出端口或资源而停止、复用或干扰非本变更启动的进程（含用户或其他会话运行的服务实例）；验证一律走隔离启动"
   - name: review
     steps:
       - id: verify_tool
@@ -115,12 +118,13 @@ phases:
       - id: verify_task
         agents:
           - id: openspec-reviewer-task
-            capability_tags: [api-testing, efficiency, dev-practices]
+            capability_tags: [api-testing, efficiency, dev-practices, cleanup]
         transitions:
           on_pass: verify_quality
           on_fail: implement
         instructions:
           - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷"
+          - "验证完成后（含 verdict=failed 轮次）按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的隔离扫描项目；无残留即通过，清理结果纳入 validation_steps 申报"
           - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约"
           - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"

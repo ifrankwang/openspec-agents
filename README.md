@@ -27,7 +27,7 @@ OpenSpec 把需求、设计、任务拆解成规范文档后，实施阶段仍�
 
 `implement → quality_review → done`
 
-面向轻量变更的精简流程：无 analyze 环节（执行边界默认整个 worktree），无 verify_tool / verify_task / verify_cleanup 环节。implement 失败自循环重试；quality_review 由单一审查者合并承担工具检查、任务验证与质量审查（工具改进建议双报机制保留，由开发者实施），失败回 implement 整步重审；开发者提交 implement 成果时强检查工作区干净（不干净拒绝并提示先 commit），收尾为直接合并分支并清理（裸合并，无回归、无环境清理；合并冲突由开发者解决后直接收尾）。tasks.md 复选框在任务组收尾（opx_orch_complete_task_group）时统一勾选当前任务组，勾选提交落在 worktree 分支、随合并带回主分支；full 与 simple 行为一致，任务完成状态以状态文件为准。
+面向轻量变更的精简流程：无 analyze 环节（执行边界默认整个 worktree），无 verify_tool / verify_task / verify_cleanup 环节。implement 失败自循环重试；quality_review 由单一审查者合并承担工具检查、任务验证与质量审查（工具改进建议双报机制保留，由开发者实施），失败回 implement 整步重审；开发者提交 implement 成果时强检查工作区干净（不干净拒绝并提示先 commit），收尾为直接合并分支并清理（裸合并，无回归；环境清理由审查者验证完成后自行完成——停止残留服务、清理隔离环境，收尾不单独承担环境清理；合并冲突由开发者解决后直接收尾）。tasks.md 复选框在任务组收尾（opx_orch_complete_task_group）时统一勾选当前任务组，勾选提交落在 worktree 分支、随合并带回主分支；full 与 simple 行为一致，任务完成状态以状态文件为准。
 
 ## 身份与角色
 
