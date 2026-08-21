@@ -1,129 +1,110 @@
 # openspec-agents
 
-OpenSpec 流程的 Agent Team：面向实施阶段的多 Agent 工作流编排。
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Built for OpenSpec](https://img.shields.io/badge/built%20for-OpenSpec-6b46c1.svg)
 
-> 当前定位：把已确定的 OpenSpec change 落地为高质量代码。
-> 未来方向：向前扩展「探索 + 方案制定」，覆盖 OpenSpec 更早期环节。
+> 让多个 AI 智能体按规范流程协作，把 OpenSpec 变更规范落地为经过审查的高质量代码。
 
-## 它解决什么问题
+`openspec-agents` 是一组面向 AI 编码工具的插件，把 OpenSpec 的「需求 → 设计 → 任务拆分」成果，自动推进到「实现 → 验证 → 质量审查 → 收尾合并」的完整实施流程。主智能体负责调度，专职智能体分别承担实现、检查与质量把关，每一步都有门禁确认，全程可审计、可恢复。
 
-OpenSpec 把需求、设计、任务拆解成规范文档后，实施阶段仍然需要多步开发、验证、质量审查和收尾。本项目用一组 Agent 角色 + workflow 引擎，把这一过程编排成可重复、可审计的流水线：
+## 特性
 
-`analyze → implement → verify_tool → verify_task → verify_quality → verify_cleanup → done`（full 模式；simple 模式见「编排流程」）
+- **多工具支持**：Claude Code、Codex、ZCode、DeepSeek Harness（DSH）、OpenCode 均可原生接入。
+- **规范驱动**：直接消费 OpenSpec 变更规范（proposal / design / tasks / specs），流程与规范一一对应。
+- **智能体团队**：不再是单个 AI 从头写到尾，而是「实现者 + 审查者 + 质量把关者」分工协作，结果更稳。
+- **质量门禁**：实现之后经过工具检查、任务验证与多维度质量审查；发现的问题自动回退修复，也可按规则豁免并留痕。
+- **隔离执行**：每个变更在独立的环境中实施，互不干扰；变更完成后合并并清理。
+- **过程可审计**：进度、结论、豁免与恢复点全程记录，随时可以接着上次的进度继续。
 
-主代理负责调度，子代理负责实施、审查、质量验证和清理；所有裁决通过统一 `opx_*` 工具提交，状态持久化到仓库内。
+## 快速开始
 
-## 编排流程
+1. 准备环境：**Node.js ≥ 23.6**（或 Bun）与 **git**。
+2. 按下方「安装」选择你正在使用的 AI 工具完成安装。
+3. 重启该工具后，把下面「一句话接入」的提示词发给你的 AI 即可开始。
 
-实施流程按变更开始时固化的模式执行：模式经 `opx_orch_init` 的 `mode` 参数在变更开始时固化（`full` 完整流程 / `simple` 精简流程，不传缺省 simple）。已开始的变更不受后续参数影响；恢复（recovery）沿用固化模式；旧变更（状态无模式存档）一律按 full 处理，不支持中途切换。
+## 安装
 
-### full 模式
+按你使用的 AI 工具选择一种方式：
 
-`analyze → implement → verify_tool → verify_task → verify_quality → verify_cleanup → done`
+### Claude Code
 
-分析、实现、三层审查（工具检查 / 任务验证 / 五维质量审查）与收尾验证逐步推进，问题可回退、可豁免、可检查点决策。
+```bash
+claude plugin marketplace add https://github.com/ifrankwang/claude-code-plugins
+claude plugin install openspec-agents@ifrankwang
+```
 
-### simple 模式
+### Codex
 
-`implement → quality_review → done`
+```bash
+codex plugin marketplace add https://github.com/ifrankwang/codex-plugins
+codex plugin add openspec-agents@ifrankwang
+```
 
-面向轻量变更的精简流程：无 analyze 环节（执行边界默认整个 worktree），无 verify_tool / verify_task / verify_cleanup 环节。implement 失败自循环重试；quality_review 由单一审查者合并承担工具检查、任务验证与质量审查（工具改进建议双报机制保留，由开发者实施），失败回 implement 整步重审；开发者实施时按已加载接口测试规范即时更新并执行 `.http` 接口测试自证变更有效（含关键数据产出断言）；开发者提交 implement 成果时强检查工作区干净（不干净拒绝并提示先 commit），收尾为直接合并分支并清理（裸合并，无回归；环境清理由审查者验证完成后自行完成——停止残留服务、清理隔离环境，收尾不单独承担环境清理；合并冲突由开发者解决后直接收尾）。tasks.md 复选框在任务组收尾（opx_orch_complete_task_group）时统一勾选当前任务组，勾选提交落在 worktree 分支、随合并带回主分支；full 与 simple 行为一致，任务完成状态以状态文件为准。
+### ZCode
 
-## 身份与角色
+打开 ZCode 插件页，添加市场 `ifrankwang/zcode-plugins`，然后安装 `openspec-agents`。
 
-物理 agent 定义收敛为两个子代理（`assets/agents/` 下的 `openspec-developer.md`、`openspec-reviewer.md`，主代理模板 `openspec-main.md` 保留），9 种逻辑身份（architect、reviewer-tool、reviewer-task、style / architecture / performance / security / maintainability 五维审查者、simple 审查者）不再有独立定义文件，统一经 `_agent` 参数承载：子代理调用 `opx_*` 工具时传自身角色名，系统按该逻辑身份路由状态视图、issue 来源与筛选、「谁提谁裁定」与状态标识。
+### DeepSeek Harness（DSH）
 
-- 开发者物理 agent 承载 developer 与 architect 两个逻辑身份；审查者物理 agent 承载 tool / task / 五维 / simple 审查者逻辑身份。full 模式的质量审查以 5 个逻辑身份并行执行——同一物理审查者被多次分派，每次以不同 `_agent` 参数承载对应逻辑身份。
-- 物理权限取各逻辑身份权限并集（维度审查者因此具备编辑与写入能力）；审查行为以「只报不改」指令约束兜底——文档/注释等不影响代码运行的问题可直接修改，逻辑类问题只上报，full 模式同样适用。
-- `_agent` 为纯自述、无硬校验：任何调用者可自报任意身份，裁定权与视图路由均信任自述值；冒认只能以自报身份行事，无法越出该身份自身的既有权限面。
+```bash
+dsh plugin --profile web add @ifrankwang/openspec-agents
+```
 
-## 特色
+安装后重启 `dsh web` 即可。
 
-- **Agent 无关**：内核不绑定具体 Agent，opencode / claude code / codex / zcode / deepseek harness 通过各自原生插件/适配器接入同一套状态机。
-- **Workflow 驱动**：步骤、角色、门禁在 workflow 中声明，`opx_status` 是下一步调度的唯一事实源。
-- **多 Agent 团队**：主代理编排，2 个物理子代理承载 9 种逻辑身份分工协作，避免单一大模型从头写到尾失控。
-- **强 Review 门禁**：full 模式 tool / task / quality 三层审查 + 收尾验证；simple 模式单一审查者合并审查。问题可回退、可豁免、可检查点决策。确定性质量工具问题以压制手段解决时视为豁免申请，须说明理由并经审查判定合理性。
-- **隔离与安全**：每个 change 使用独立 git worktree、资源隔离命名空间（数据库、mock 服务、消息队列/缓存等中间件、扫描分析平台均按隔离标识隔离），减少相互干扰。
-- **可观测**：内置进度看板，状态/豁免/并发锁持久化到 `openspec/states/`。
+### OpenCode
 
-## 优缺点
+```bash
+npm install -D @ifrankwang/openspec-agents
+```
+
+然后在 OpenCode 配置中加载 `@ifrankwang/openspec-agents` 插件，重启 OpenCode。
+
+## 让 AI 帮你接入（一句话）
+
+安装后（甚至还没安装时），直接把这句提示词发给你的 AI 编码工具：
+
+> 请帮我安装并启用 openspec-agents 插件，然后基于当前项目的 OpenSpec 变更规范，执行完整的变更实施编排流程。
+
+英文版：
+
+> Please install and enable the openspec-agents plugin for my current AI coding tool, then run the OpenSpec change orchestration workflow on this repository.
+
+如果已经安装，只需说一句「请运行 openspec-agents 编排流程」即可开工。AI 会负责完成安装、初始化、任务分派与质量把关的全部步骤。
+
+## 工作原理（简述）
+
+1. **输入**：项目中的 OpenSpec 变更规范（变更说明、设计、任务清单、验收规格）。
+2. **分派**：主智能体把任务交给专职智能体——实现者负责写代码，审查者负责检查，质量把关者负责多维验证。
+3. **门禁**：每一步的结论通过检查后才进入下一步；不通过的结论自动回到实现环节修复。
+4. **收尾**：变更完成后自动合并分支并清理执行环境，全程留痕可审计。
+
+## 适用场景与代价
 
 | | |
 |---|---|
-| 优点 | 产出代码质量高；有明确流程和门禁，结果不会太过偏离目标；过程可审计、可恢复 |
-| 缺点 | 慢（多轮 Agent 调用 + 多级 review）；贵（token/API 消耗高于单 Agent 直接改） |
+| 适合 | 对代码质量、过程可控性要求高的团队与项目 |
+| 代价 | 比单个 AI 直接修改更慢，API 消耗更高 |
 
-适合对质量、可控性要求高，且愿意用成本换稳定产出的实施场景。
+如果你愿意用一点成本换取稳定、可复现、可审计的实施过程，这个项目就是为你准备的。
 
-## 接入方式
-
-项目已为各 Agent 工具提供官方插件/适配器，普通使用时直接按对应工具的原生机制接入即可，无需手动拼装或启动 MCP Server。
-
-依赖：Node.js ≥ 23.6（或 Bun）、git。
+## 开发
 
 ```bash
-# 安装依赖
-bun install
-
-# 测试 / 类型检查
-bun test
-bun run typecheck
+bun install            # 安装依赖
+bun test               # 运行测试
+bun run typecheck      # 类型检查
+bun run build:plugins  # 构建各平台的插件包（发布用）
 ```
 
-各 Agent 接入：
+## 贡献
 
-- **OpenCode**：以 npm 插件形式加载，插件注入 agent/skill 与 MCP server 配置（`config.mcp` 的 stdio server，自包含 bundle，`--worktree` 指向当前项目根）。
-  ```bash
-  npm install -D @ifrankwang/openspec-agents
-  ```
-  然后在 OpenCode 配置中加载 `@ifrankwang/openspec-agents` 插件并重启 OpenCode（MCP server 配置在启动时加载）：`opx_*` 工具以 `mcp__opx__*` 形态出现（如 `mcp__opx__status`、`mcp__opx__agent_submit`，serverName=opx），身份经 `_agent` 参数承载（缺省视为编排视角）。
+欢迎提交 [Issue](https://github.com/ifrankwang/openspec-agents/issues) 与 Pull Request，也欢迎 Star 支持。
 
-- **Claude Code**：通过官方插件市场安装。
-  ```bash
-  claude plugin marketplace add https://github.com/ifrankwang/claude-code-plugins
-  claude plugin install openspec-agents@ifrankwang
-  ```
+## 致谢
 
-- **Codex**：通过官方插件市场安装。
-  ```bash
-  codex plugin marketplace add https://github.com/ifrankwang/codex-plugins
-  codex plugin add openspec-agents@ifrankwang
-  ```
+本项目基于 [OpenSpec](https://github.com/Fission-AI/OpenSpec)（[openspec.sh](https://openspec.sh)）构建——感谢 OpenSpec 团队带来的规范驱动开发方法：先写规范、再写代码，让 AI 开发有据可依。本插件专注于补全 OpenSpec 变更的**实施与质量把关**环节，是对 OpenSpec 工作流的编排增强。
 
-- **ZCode**：在 ZCode 插件页添加市场 `ifrankwang/zcode-plugins`，然后安装 `openspec-agents`。
+## 许可证
 
-- **DeepSeek Harness（DSH）**：通过 DSH 的 bundle 插件机制接入。发布到 npm 后可直接安装：
-  ```bash
-  dsh plugin --profile web add @ifrankwang/openspec-agents
-  ```
-  本地开发时也可使用构建产物：
-  ```bash
-  bun run build:plugins
-  dsh plugin --profile web add ./dist/deepseek-harness-plugin
-  ```
-  安装后重启 `dsh web`：
-  - `opx_*` 会以 `mcp__opx__*`（如 `mcp__opx__status`、`mcp__opx__agent_submit`） 原生工具出现；
-  - `assets/skills` 会作为额外 skill 根被扫描；
-  - 每个子代理会注册为 DSH 原生 subagent 工具：`openspec_developer` 与 `openspec_reviewer` 两个物理子代理，编排主代理可直接分派（9 种逻辑身份经 `_agent` 参数承载，同一物理子代理可被多次分派）。
-
-## 常用命令
-
-| 命令 | 说明 |
-|------|------|
-| `bun test` | 运行所有测试 |
-| `bun run typecheck` | TypeScript 类型检查 |
-| `bun run build:plugins` | 构建 Claude Code / Codex / ZCode / DeepSeek Harness 插件包（CI/内部使用） |
-| `bun run sync` | 同步本地最新开发版本到各 harness 插件缓存，并安装/刷新依赖 |
-
-## 项目结构
-
-```
-src/core/                  — Agent 无关内核（状态机、工具执行器、状态持久化）
-src/adapters/              — opencode / claude-code / codex / zcode / deepseek-harness / mcp 适配层
-assets/agents/             — Agent 定义
-assets/skills/             — 内置 skill（含 orchestrator）
-assets/workflows/          — workflow 定义
-tests/                     — 测试
-```
-
-详细实现见 `AGENTS.md` 与 `src/core/`、`assets/workflows/`。
+[MIT](LICENSE) © 2025 ifrankwang

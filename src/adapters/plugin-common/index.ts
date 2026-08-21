@@ -18,9 +18,9 @@ import { parseAgentMd, resolve, EXCLUDED_AGENTS } from "../agent-md.ts"
 
 export const PLUGIN_NAME = "openspec-agents"
 export const PLUGIN_DESCRIPTION =
-  "OpenSpec change 编排：opx_* 编排工具（MCP）+ 编排子代理 + orchestrator skill，非 OpenCode agent 默认无人值守"
-/** plugin.json author（package.json 无 author 字段，取固定值）。 */
-export const PLUGIN_AUTHOR = "openspec-agents maintainers"
+  "OpenSpec change orchestration for AI coding agents: turn OpenSpec change specs into reviewed, high-quality code."
+/** plugin.json author（各插件包统一署名项目作者）。 */
+export const PLUGIN_AUTHOR = "ifrankwang"
 
 export function readPkgVersion(): string {
   return (JSON.parse(readFileSync(resolve("package.json"), "utf-8")) as { version: string }).version
@@ -98,6 +98,14 @@ export function copyWorkflows(targetDir: string): void {
   cpSync(resolve("assets", "workflows"), join(targetDir, "assets", "workflows"), { recursive: true })
 }
 
+/** 复制 MIT 协议文件到插件包根目录（随插件与 marketplace 一起分发）。 */
+export function copyLicense(targetDir: string): void {
+  const license = resolve("LICENSE")
+  if (existsSync(license)) {
+    cpSync(license, join(targetDir, "LICENSE"))
+  }
+}
+
 export interface PluginPackageParams {
   /** 输出目录（如 dist/zcode-plugin/） */
   outDir: string
@@ -129,6 +137,7 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
   // workflow 定义随包分发：bundle 内 TASK_WORKFLOW_PATH 按部署深度逐级上溯探测
   // assets/workflows/task.yaml，插件根（dist/cache 形态）上溯 1 级即命中
   copyWorkflows(outDir)
+  copyLicense(outDir)
 
   writeFileSync(
     join(outDir, manifestDirName, "plugin.json"),

@@ -33,7 +33,7 @@ const VERSION = RAW_VERSION.replace(/^v/, "")
 const MARKETPLACE_NAME = "ifrankwang"
 const PLUGIN_NAME = "openspec-agents"
 const PLUGIN_DESCRIPTION =
-  "OpenSpec change 编排：opx_* 编排工具（MCP）+ 编排子代理 + orchestrator skill，非 OpenCode agent 默认无人值守"
+  "OpenSpec change orchestration for AI coding agents: turn OpenSpec change specs into reviewed, high-quality code."
 
 const TARGETS = [
   {

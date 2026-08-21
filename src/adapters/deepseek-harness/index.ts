@@ -25,12 +25,16 @@ import {
   buildAgents,
   buildSkills,
   copyWorkflows,
+  copyLicense,
   readPkgVersion,
   type PluginPackageResult,
 } from "../plugin-common/index.ts"
 
 /** DSH bundle 的 npm 包名（与项目发布包一致，便于 `dsh plugin add` 与 sync 识别）。 */
 export const DSH_PLUGIN_NAME = "@ifrankwang/openspec-agents"
+
+/** DSH bundle 包的作者署名（与各插件包 plugin.json 的 author 保持一致）。 */
+export const PLUGIN_AUTHOR_STRING = "ifrankwang"
 
 /** 默认插件包输出目录（dist/ 已 gitignore，生成物不入库）。 */
 export const DEEP_SEEK_HARNESS_PLUGIN_DIR = resolve("dist", "deepseek-harness-plugin")
@@ -174,6 +178,7 @@ export function buildDeepSeekHarnessPlugin(outDir: string = DEEP_SEEK_HARNESS_PL
   const skills = buildSkills(join(outDir, "skills"))
   bundleMcpServer(outDir)
   copyWorkflows(outDir)
+  copyLicense(outDir)
 
   writeFileSync(
     join(outDir, "package.json"),
@@ -184,6 +189,8 @@ export function buildDeepSeekHarnessPlugin(outDir: string = DEEP_SEEK_HARNESS_PL
         description: PLUGIN_DESCRIPTION,
         type: "module",
         private: true,
+        author: PLUGIN_AUTHOR_STRING,
+        license: "MIT",
         dsh: {
           bundle: {
             patch: `./${MANIFEST_PATCH_FILENAME}`,
