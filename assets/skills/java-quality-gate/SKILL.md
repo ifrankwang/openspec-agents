@@ -29,7 +29,7 @@ must_do: ["env", "compile", "format", "architecture", "static_analysis", "unit_t
 
 在执行工具检查前，先确保工具运行环境就绪。环境检查失败时先按自愈性步骤尝试恢复；不可自愈或自愈失败后，用 `question` 提请用户处理或裁定。用户裁定降级跳过时，在报告中注明降级理由，不阻塞其他检查。
 
-使用编排会话提供的隔离标识 `<namespace>`（来自编排会话上下文）为 SonarQube 容器指定独立的 docker compose 项目名，避免多个并发 change 的容器互相冲突。
+使用编排会话提供的隔离标识 `<namespace>`（来自编排会话上下文）为 SonarQube 容器指定独立的 docker compose 项目名，避免多个并发 change 的容器互相冲突。环境隔离对象不限于数据库：SonarQube 实例与扫描项目均须按隔离标识隔离（独立 compose 项目名 + 项目 key 后缀，见第 6 节），禁止复用宿主既有实例/项目。
 
 ```bash
 docker info

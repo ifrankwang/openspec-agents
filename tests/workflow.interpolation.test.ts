@@ -260,7 +260,7 @@ describe("common + step 语义渲染", () => {
     // step.instructions 追加
     expect(out).toContain("按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界")
     // 修复闭环指引（P1）：fixed_issue_ids 上报进入待复核 + blocking issue 全覆盖门禁
-    expect(out).toContain("修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由对应 reviewer 复核裁定")
+    expect(out).toContain("修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定")
     expect(out).toContain("提交 opx_agent_submit：passed 时存在未完成或被驳回（open/rejected）的子任务必须全部列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1），全部子任务已验证时可省略；不可修 issue 申请豁免（exempt_issue_ids）")
     // 提交引导步骤仍在（硬编码收尾步骤）
     expect(out).toContain("全部完成 → commit →")
