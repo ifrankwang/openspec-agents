@@ -359,7 +359,7 @@ describe("step 操作层指引补全", () => {
     expect(vtOut).toContain("压制类 issue 严重级别至少 Low")
   })
 
-  test("verify_task：五项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
+  test("verify_task：六项验证 / failed_tasks 上报 / 待裁定豁免 / 资源缺失 Low", () => {
     const item = makeItem({ phase: "review", currentStep: "verify_task" })
     const out = renderWorking(item, "verify_task", "openspec-reviewer-task")
     expect(out).toContain("逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量")
@@ -370,7 +370,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定")
     expect(out).toContain("design.md 的 API 定义（请求/响应结构、数据模型）")
-    expect(out).toContain("specs/ 下相关 spec.md（需求细节与验收标准），用于准备测试数据与对照 API 合约")
+    expect(out).toContain("specs/ 下相关 spec.md（需求细节、验收标准与数据产出要求），用于准备测试数据与对照 API 合约")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查，但不得 edit/write 业务代码")
     // 严重级别判例归属 agent.md，约束中不重复
     expect(out).not.toContain("缺少验证所需真实资源时最低记 Low")
