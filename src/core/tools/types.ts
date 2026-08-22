@@ -28,7 +28,9 @@ export interface InitParams {
      *  恢复后 currentStep 落在第一个未全部通过的 verify step，可能早于被重置的 step。 */
     reset_steps?: ReviewVerifyStep[]
   }
-  /** 流程模式（full/simple），仅新建编排状态时生效；已开始的变更沿用固化模式，不支持中途切换。 */
+  /** 流程模式（full/simple）：首次新建编排状态时固化；已开始的变更仅在切组（其他任务组均已完成
+   *  或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）
+   *  时允许更新，窗口外传不同 mode 报错。 */
   mode?: WorkflowMode
 }
 

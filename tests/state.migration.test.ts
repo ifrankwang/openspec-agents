@@ -258,7 +258,8 @@ describe("state.workItems 迁移", () => {
         updatedAt: "2026-07-01T00:00:00.000Z",
       }))
 
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
+      // 旧 state 无 mode 字段：不传 mode 继续沿用（读取时兜底 full；窗口外传不同 mode 会显式报错）
+      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
 
       // init 写入新布局 openspec/states/（首次写入前已幂等迁移旧数据），读取新路径验证
       const newDir = join(wt, "openspec", "states")

@@ -217,7 +217,7 @@ export const orchInitSchema: JSONSchema = {
       type: "string",
       enum: ["full", "simple"],
       description:
-        "流程模式选择：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，缺省）。仅新建编排状态（首次 opx_orch_init）时生效；已开始的变更沿用固化模式，不支持中途切换。",
+        "流程模式选择：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
     },
   },
   required: ["change_id", "task_group_id"],

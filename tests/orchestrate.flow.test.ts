@@ -95,13 +95,14 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(legacyState))
 
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      // 旧 state 缺 mode：不传 mode 继续沿用（读取时兜底 full，不写回）
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
       expect(stateOf(wt).isolationNamespace).toBe(generateIsolationNamespace(CID))
 
       const s = stateOf(wt)
       s.isolationNamespace = "custom-ns"
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(s))
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ change_id: CID, task_group_id: "1" }, o)
       expect(stateOf(wt).isolationNamespace).toBe("custom-ns")
     } finally { teardown(root) }
   })

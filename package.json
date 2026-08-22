@@ -1,6 +1,6 @@
 {
   "name": "@ifrankwang/openspec-agents",
-  "version": "0.126.0",
+  "version": "0.127.0",
   "description": "OpenSpec change orchestration plugin for AI coding agents (Claude Code, Codex, ZCode, DeepSeek Harness, OpenCode)",
   "author": "ifrankwang",
   "license": "MIT",

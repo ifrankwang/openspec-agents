@@ -271,8 +271,8 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     createdAt: legacy.createdAt,
     updatedAt: legacy.updatedAt,
     unattended: legacy.unattended,
-    // 透传固化模式：state 已存在（重复初始化/切换任务组/recovery）时沿用既有 mode，
-    // 缺 mode 的旧变更保持缺省（消费端读时兜底 full，不在此写回）
+    // 透传固化模式：读取不改动 mode（缺 mode 的旧变更保持缺省，消费端读时兜底 full，不在此写回）；
+    // init 在允许窗口（切组/重制当前组，其他任务组均终态或从未激活）内可显式更新 state.mode
     mode: legacy.mode,
   }
   if (needsUpgrade) {

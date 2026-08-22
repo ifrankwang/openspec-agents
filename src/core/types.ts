@@ -136,6 +136,8 @@ export interface OrchestrateState {
   updatedAt: string
   unattended?: boolean
   /** 变更开始时固化的流程模式（经 opx_orch_init 的 mode 参数写入，缺省 simple）。
-   *  缺失即旧变更，一律按 full 处理（读时兜底，不写回）；已存在的 state 不再被参数改动覆盖。 */
+   *  缺失即旧变更，一律按 full 处理（读时兜底，不写回）；已存在的 state 仅在 init 允许窗口
+   *  （切组且其他任务组均已完成或从未激活，或 recovery.phase=task_analysis 重制当前组）内
+   *  可被 mode 参数更新。 */
   mode?: WorkflowMode
 }

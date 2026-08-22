@@ -1,5 +1,5 @@
 import path from "path"
-import type { TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
+import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
@@ -278,6 +278,25 @@ function assertValidRecovery(recovery: InitParams["recovery"]): void {
   }
 }
 
+/**
+ * 判断目标组以外的全部任务组（workItems 中 `task:` 前缀、非目标组）是否"终态或从未激活"，
+ * 即 mode 切换窗口（W1 切组 / W2 重制当前组）的共同前置条件：
+ * - 终态：item.phase === "done" 或 metadata.completed_at 已设置；
+ * - 从未激活：无执行痕迹——tags 为空且所有 task children 的 phase 均为 todo 或终态（isTerminalPhase）。
+ */
+function otherTaskGroupsSettled(state: OrchestrateState, targetGroupId: string): boolean {
+  return state.workItems
+    .filter((w) => w.id.startsWith("task:") && w.id !== `task:${targetGroupId}`)
+    .every((item) => {
+      if (item.phase === "done" || item.metadata["completed_at"] !== undefined) return true
+      const noTags = Object.keys(item.tags).length === 0
+      const childrenSettled = item.children
+        .filter((c) => c.type === "task")
+        .every((c) => c.phase === "todo" || isTerminalPhase(c.phase))
+      return noTags && childrenSettled
+    })
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_init")
 
@@ -326,6 +345,31 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   let state = await readStateByChangeId(ctx.worktree, args.change_id)
   const wasCurrentGroup = state?.taskGroupId === args.task_group_id
 
+  // state 已存在时的 mode 变更窗口校验/更新（位于 for 循环前——循环内非活跃组新建 item 与
+  // applyRecoveryState 均读 state.mode；错误早于任何状态变更抛出，不落盘）：
+  // - 无变更意图（不传 mode 或与生效值一致——旧 state 缺 mode 时生效值兜底 full）→ 放行，保持既有行为；
+  // - W1 切组：task_group_id ≠ state.taskGroupId 且其他任务组均终态或从未激活；
+  // - W2 重制当前组：recovery.phase=task_analysis 且其他任务组均终态或从未激活
+  //   （reopenIssues 仅支持 dev_impl，与 W2 天然互斥，不构成冲突路径）；
+  // - 窗口外传不同 mode → 报错。
+  let modeSwitchNote: string | null = null
+  if (state && args.mode !== undefined && args.mode !== (state.mode ?? "full")) {
+    const othersSettled = otherTaskGroupsSettled(state, args.task_group_id)
+    const withinWindow =
+      ((args.task_group_id !== state.taskGroupId || args.recovery?.phase === "task_analysis") && othersSettled)
+    if (!withinWindow) {
+      throw new Error(
+        `mode 参数与已固化的流程模式不一致：已固化 mode="${state.mode ?? "full"}"${state.mode === undefined ? "（旧变更未固化，读取时兜底 full）" : ""}，传入值："${args.mode}"。\n` +
+        `当前场景不允许切换流程模式：切换任务组须其他任务组均已完成或从未激活；重制当前组仅支持 recovery.phase="task_analysis"（其他任务组同样须已完成或从未激活）。\n` +
+        `请去掉 mode 参数继续沿用固化模式，或满足上述窗口条件后再切换。`
+      )
+    }
+    const prevMode = state.mode
+    state.mode = args.mode
+    // 旧变更未固化 mode 时读取兜底 full，切换说明按 full 表述
+    modeSwitchNote = `流程模式已从 ${prevMode ?? "full"} 切换为 ${args.mode}。`
+  }
+
   if (!state) {
     state = {
       changeId: args.change_id,
@@ -335,8 +379,8 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       workItems: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      // 新建 state 时固化模式：取 init 参数 mode（缺省 simple）；state 已存在不读参数，
-      // 沿用 state 既有 mode；旧 state 缺 mode 由消费端读时兜底 full，不写回。
+      // 新建 state 时固化模式：取 init 参数 mode（缺省 simple）；state 已存在时的 mode 变更
+      // 由上方窗口校验统一处理（W1 切组 / W2 重制当前组），旧 state 缺 mode 由消费端读时兜底 full，不写回。
       mode: args.mode ?? "simple",
     }
   } else {
@@ -443,9 +487,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   state.taskGroupId = args.task_group_id
   await writeState(ctx.worktree, state)
 
-  return args.recovery
-    ? `编排会话已初始化。已恢复到 ${args.recovery.phase} 阶段。`
-    : "编排会话已初始化。"
+  const parts = ["编排会话已初始化。"]
+  if (args.recovery) parts.push(`已恢复到 ${args.recovery.phase} 阶段。`)
+  if (modeSwitchNote) parts.push(modeSwitchNote)
+  return parts.join("")
 }
 
 async function bindWorktreeRefs(
