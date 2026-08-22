@@ -16,6 +16,7 @@ import { describe, expect, test } from "bun:test"
 
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
+import { renderDevSelfCheckDeclaration } from "../src/core/views"
 
 // ─── 基建 ───
 
@@ -281,5 +282,44 @@ describe("执行视图：baseRef 分支控制「变更范围」指引", () => {
     const withBase = render(item, wf, rec, "developer")
     expect(withBase).toContain("变更范围")
     expect(withBase).toContain("diff --name-only")
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  7. 开发者自检申报渲染单元（simple 验证分流：quality_review 视图事实输入）
+// ═══════════════════════════════════════════════════════════════
+
+describe("renderDevSelfCheckDeclaration 开发者自检申报渲染", () => {
+  test("两字段皆有 → 渲染自检申报与接口测试结果两段", () => {
+    const out = renderDevSelfCheckDeclaration({
+      self_check_results: "构建：mvn compile 通过；deep_scan 命中 3 项（附命令与结果摘要）",
+      test_results: "API 测试 12/12 通过（附执行顺序与覆盖接口清单）",
+    }).join("\n")
+    expect(out).toContain("## 开发者自检申报")
+    expect(out).toContain("**自检申报（self_check_results）**")
+    expect(out).toContain("构建：mvn compile 通过")
+    expect(out).toContain("**接口测试结果（test_results）**")
+    expect(out).toContain("API 测试 12/12 通过")
+  })
+
+  test("仅 self_check_results → 仅渲染自检申报段", () => {
+    const out = renderDevSelfCheckDeclaration({ self_check_results: "构建通过" }).join("\n")
+    expect(out).toContain("## 开发者自检申报")
+    expect(out).toContain("**自检申报（self_check_results）**")
+    expect(out).toContain("构建通过")
+    expect(out).not.toContain("**接口测试结果")
+  })
+
+  test("仅 test_results → 仅渲染接口测试结果段", () => {
+    const out = renderDevSelfCheckDeclaration({ test_results: "API 测试通过" }).join("\n")
+    expect(out).toContain("## 开发者自检申报")
+    expect(out).toContain("**接口测试结果（test_results）**")
+    expect(out).not.toContain("**自检申报（self_check_results）**")
+  })
+
+  test("两字段皆缺失 / 空串 / 非字符串 → 返回空数组（不渲染空区块）", () => {
+    expect(renderDevSelfCheckDeclaration({})).toEqual([])
+    expect(renderDevSelfCheckDeclaration({ self_check_results: "  ", test_results: "" })).toEqual([])
+    expect(renderDevSelfCheckDeclaration({ self_check_results: 42, test_results: null })).toEqual([])
   })
 })

@@ -11,6 +11,11 @@
  *   {"item":"<对应必做项>","category":"<降级类别>","adjudication":"user_response|unattended_auto|env_unavailable","note":"<说明>"}
  * adjudication 裁定方式枚举：user_response=用户答复、unattended_auto=无人值守自动降级、
  * env_unavailable=环境不可用（note 须记录尝试）。
+ *
+ * 必做覆盖口径：核验申报（completed=true + 描述注明核验方式与抽验样本，step 名首段 token 命中必做项）
+ * 是高成本必做项的合法覆盖形态——仅限 workflow 指令白名单限定的高成本必做项（deep_scan），低成本
+ * 必做项必须实跑后申报。覆盖判定只认 step 名 token 命中，不区分实跑与核验形态（机制层不拦截低成本项
+ * 误用核验申报形态，白名单约束由 workflow 指令与门禁错误提示承载）。
  */
 import {
   scanSkillTags,

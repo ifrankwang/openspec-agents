@@ -12,7 +12,7 @@ import { resolveChildIssueFields } from "./reset.ts"
 import { taskListOf, issueChildrenOf } from "../task-children.ts"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
-  renderAgentSummaries, renderTaskItem, formatFilePath, formatSeverity,
+  renderAgentSummaries, renderDevSelfCheckDeclaration, renderTaskItem, formatFilePath, formatSeverity,
   isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
 } from "../views.ts"
 import { resolveMustDoForCaps, SKIP_REASON_FORMAT } from "../tools/gate.ts"
@@ -554,6 +554,13 @@ function renderAgentWorking(
   // 时渲染；分支①②提前返回、toolChanges 缺省路径不经过此处，不误伤其他 agent/step。
   if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges?.hasNonDocChange) {
     lines.push(...renderToolChangesEvidence(item, tg, toolChanges))
+  }
+  // simple 合并审查（quality_review）证据注入：渲染提交参数存档的自检申报（self_check_results /
+  // test_results），作为分级复验的事实输入——低成本实跑对照、高成本项核验申报+抽样重放均以该申报为
+  // 证据源。仅 quality_review step 渲染（消费方是 reviewer）；implement 视图与其余 step 视图不受影响
+  //（dev 自己刚产出该申报，无需回显）。
+  if (step?.id === "quality_review") {
+    lines.push(...renderDevSelfCheckDeclaration(item.metadata))
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx))

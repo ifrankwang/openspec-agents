@@ -166,6 +166,26 @@ describe("uncoveredMustDo / resolveMustDoForCaps", () => {
     // 不声明 no_change 时仍逐项要求覆盖
     expect(uncoveredMustDo(["quality-gate"], [], idx)).toEqual(["compile", "static_analysis", "deep_scan"])
   })
+
+  test("核验申报形态（step 名首段命中 + completed=true + 核验方式与抽验样本描述）→ 视为已覆盖", () => {
+    const idx = makeQualityGateIndex()
+    const steps = [
+      { step: "compile", completed: true },
+      { step: "static_analysis", completed: true },
+      { step: "deep_scan: 核验 dev 申报并抽验命中项（本地复跑单规则静态分析验证命中真实存在）", completed: true },
+    ]
+    expect(uncoveredMustDo(["quality-gate"], steps, idx)).toEqual([])
+  })
+
+  test("低成本项以核验形态申报：机制层 token 命中即覆盖（白名单约束由 workflow 指令与门禁错误提示承载，非门禁拦截）", () => {
+    const idx = makeQualityGateIndex()
+    const steps = [
+      { step: "compile: 核验 dev 申报", completed: true },
+      { step: "static_analysis", completed: true },
+      { step: "deep_scan", completed: true },
+    ]
+    expect(uncoveredMustDo(["quality-gate"], steps, idx)).toEqual([])
+  })
 })
 
 // ─── 集成：verify_tool 提交门禁 ───
@@ -209,6 +229,9 @@ describe("verify_tool 提交必做清单覆盖度门禁", () => {
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/缺少以下必做项/)
       expect(err.message).toContain("deep_scan")
+      // 低成本必做项实跑口径在门禁错误提示中明示（核验申报白名单回归固化）
+      expect(err.message).toContain("低成本必做项必须实跑后申报")
+      expect(err.message).toContain("核验申报仅限 workflow 指令白名单限定的高成本必做项")
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 

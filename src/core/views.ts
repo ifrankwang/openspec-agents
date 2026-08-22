@@ -165,6 +165,27 @@ export function renderAgentSummaries(agentSummaries: Record<string, string> | un
   return lines
 }
 
+/** 开发者自检申报渲染。数据源为 workItem metadata 的 self_check_results / test_results（提交参数的存档），
+ *  分「自检申报（self_check_results）」与「接口测试结果（test_results）」两段渲染，两者皆缺失/为空时
+ *  返回空数组（不渲染空区块）。
+ *  与 renderAgentSummaries 的语义区分：会话摘要按角色隔离（辅助记忆，不跨 agent 传递）；自检申报是
+ *  正式提交参数的存档，跨角色可见是设计意图——reviewer 分级复验以 dev 申报为事实输入（低成本实跑对照、
+ *  高成本项核验申报+抽样重放），不违反「子代理上下文不得转述」：该条约束的是编排者在分派 prompt 中
+ *  转述动态上下文，视图渲染动态上下文本就是 opx_status 工具本职。 */
+export function renderDevSelfCheckDeclaration(metadata: Record<string, unknown>): string[] {
+  const selfCheck = typeof metadata["self_check_results"] === "string" ? metadata["self_check_results"].trim() : ""
+  const testResults = typeof metadata["test_results"] === "string" ? metadata["test_results"].trim() : ""
+  if (selfCheck === "" && testResults === "") return []
+  const lines: string[] = ["## 开发者自检申报", ""]
+  if (selfCheck !== "") {
+    lines.push("**自检申报（self_check_results）**：", "", selfCheck, "")
+  }
+  if (testResults !== "") {
+    lines.push("**接口测试结果（test_results）**：", "", testResults, "")
+  }
+  return lines
+}
+
 // ─── 占位符插值层 ───
 
 /** 插值白名单：仅这些 key 可被 {{key}} 占位符引用，其余一律保留原文（防配置注入任意动态值）。 */

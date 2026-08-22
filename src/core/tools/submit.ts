@@ -428,6 +428,9 @@ function handleReviewParams(
   // 必做清单覆盖度门禁：verdict=passed 且非补交豁免（仅裁定参数）时，validation_steps 须逐项覆盖
   // 当前 agent 能力集解析出的质量门 skill 必做清单（must_do）。遗漏必做项且无有效降级证据 → 拒绝提交。
   // 未声明 must_do 的 skill / 解析不到质量门 skill 的 step 自动跳过（不误伤 verify_task/verify_quality）。
+  // 覆盖口径：核验申报（completed=true + 描述注明核验方式与抽验样本，step 名首段 token 命中必做项）是
+  // 高成本必做项的合法覆盖形态，仅限 workflow 指令白名单限定的高成本必做项（deep_scan）；低成本必做项
+  // 必须实跑后申报（机制层只认 token 命中不区分形态，白名单口径在错误提示中明示）。
   if (params.verdict === "passed" && !opts.skipMustDoGate) {
     const uncovered = uncoveredMustDo(opts.capabilityTags, params.validation_steps)
     if (uncovered.length > 0) {
@@ -435,7 +438,8 @@ function handleReviewParams(
         `提交的验证步骤未覆盖质量门 skill 必做清单，缺少以下必做项：${uncovered.join("、")}。\n` +
         `请按已加载质量门类 skill 的必做清单逐项执行并逐项申报结果（completed=true）；` +
         `确实无法执行的必做项须以结构化 skip_reason 申报降级理由` +
-        `（格式：${SKIP_REASON_FORMAT}）。`
+        `（格式：${SKIP_REASON_FORMAT}）。` +
+        `低成本必做项必须实跑后申报；核验申报仅限 workflow 指令白名单限定的高成本必做项。`
       )
     }
   }

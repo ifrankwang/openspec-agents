@@ -896,3 +896,89 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 })
+
+describe("simple 模式 quality_review：开发者自检申报区块渲染（验证分流事实输入）", () => {
+  const REVIEWER = "openspec-reviewer"
+
+  /** simple 模式推进到 quality_review（implement passed 可携带 self_check_results）。 */
+  async function driveToQualityReviewSimple(wt: string, extra: Record<string, unknown> = {}): Promise<void> {
+    const o = makeOrchCtx(wt)
+    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await set_worktree.execute({ change_id: CID }, o)
+    await agent_submit.execute(
+      { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"], ...extra },
+      makeCtx("openspec-developer", wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).currentStep).toBe("quality_review")
+  }
+
+  test("self_check_results 与 test_results 皆存在 → 渲染两段申报", async () => {
+    const root = `/tmp/wf-simple-decl-a-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToQualityReviewSimple(wt, { self_check_results: "构建：mvn compile 通过；deep_scan 命中 3 项（附命令与结果摘要）" })
+    // test_results 为 review 提交参数的 metadata 存档（跨轮次残留），直接注入模拟该形态
+    const state = readStateSync(wt)
+    taskItemOf(state).metadata["test_results"] = "API 测试 12/12 通过（附执行顺序与覆盖接口清单）"
+    writeStateSync(wt, state)
+
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).toContain("## 开发者自检申报")
+    expect(output).toContain("**自检申报（self_check_results）**")
+    expect(output).toContain("构建：mvn compile 通过")
+    expect(output).toContain("**接口测试结果（test_results）**")
+    expect(output).toContain("API 测试 12/12 通过")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("仅 self_check_results → 仅渲染自检申报段（无空接口测试段）", async () => {
+    const root = `/tmp/wf-simple-decl-b-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToQualityReviewSimple(wt, { self_check_results: "构建通过；deep_scan 命中 3 项" })
+
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    expect(output).toContain("## 开发者自检申报")
+    expect(output).toContain("**自检申报（self_check_results）**")
+    expect(output).not.toContain("**接口测试结果")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("两字段皆缺失 → 不渲染空区块", async () => {
+    const root = `/tmp/wf-simple-decl-c-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToQualityReviewSimple(wt)
+
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).not.toContain("## 开发者自检申报")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("implement 视图不渲染该区块（dev 修复轮无申报回显）", async () => {
+    const root = `/tmp/wf-simple-decl-d-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToQualityReviewSimple(wt, { self_check_results: "构建通过" })
+    // reviewer failed 报 issue（显式 dimension）→ 回 implement，metadata 仍存有申报
+    await agent_submit.execute(
+      {
+        change_id: CID, step_id: "quality_review", verdict: "failed",
+        new_children: [{ id: "i1", title: "问题", description: "d", severity: "Low", dimension: "style" }],
+      },
+      makeCtx(REVIEWER, wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).currentStep).toBe("implement")
+
+    const output = await status.execute({ change_id: CID }, makeCtx("openspec-developer", wt))
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).not.toContain("## 开发者自检申报")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
