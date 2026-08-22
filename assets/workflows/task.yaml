@@ -111,7 +111,7 @@ phases:
           - "报静态分析类 issue 时，rule 字段必填官方规则全名（命名格式遵循已加载的质量门类 skill 的规则导航索引），漏填将导致项目级豁免清单无法生效"
           - "报静态分析类 issue 时，description 必须含：①复现命令（非静默形态，含必要开关）；②实测数据（命中类清单/计数）；③规则默认阈值与当前项目配置对比（引用可改的配置文件路径）"
         constraints:
-          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行工具但不得 edit/write 任何文件"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行工具；禁止 edit/write 影响代码运行的内容；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
           - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
@@ -137,7 +137,7 @@ phases:
           - "按 opx_status 操作指引完成全部验证项，提交前将每项验证结果与证据填入 validation_steps 参数（未执行的项须填 skip_reason 注明原因），不得省略任何一项"
           - "提交 opx_agent_submit，必带 verdict 与 verified_tasks（覆盖全部待验证 task）"
         constraints:
-          - "工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查，但不得 edit/write 业务代码"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查；禁止 edit/write 影响代码运行的内容；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
           - "即使无 issue / 无待验证 task 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
       - id: verify_quality
         agents:
@@ -164,7 +164,7 @@ phases:
           - "提交 opx_agent_submit，必带 verdict 与 validation_steps（验证步骤执行摘要）"
         constraints:
           - "禁止运行确定性工具检查（包括但不限于 linter/formatter/静态分析/编译/测试/架构约束检查等）；运行权归 tool review 层，本约束不排斥基于已加载 skill 做工具化可行性判断并提交工具改进 issue"
-          - "工具调用边界：仅可调用 opx_status、opx_agent_submit；不得 edit/write 任何文件，仅输出审查报告"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit；禁止 edit/write 影响代码运行的内容，仅输出审查报告；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
           - "即使无 issue 也必须提交 verdict=passed；passed=false 时必须有至少一个归属本维度的 Low+ issue 作为理由"
       - id: verify_cleanup
         agents:

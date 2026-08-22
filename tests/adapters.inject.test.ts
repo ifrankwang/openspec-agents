@@ -31,9 +31,12 @@ describe("物理 agent 定义收敛（权限并集）", () => {
       expect(permission.edit).toBe("allow")
       expect(permission.bash).toBe("allow")
     }
-    // architect 身份的 question 工具并入 developer 物理权限
+    // developer 保留 question 物理权限（task.yaml verify_cleanup 约束引用 question 工具）；
+    // 架构师身份迁移至 reviewer 物理agent 后，reviewer 亦承载 question（有人值守时向用户提问）
     const devFm = parseAgentMd(readFileSync(join(agentsDir, "openspec-developer.md"), "utf-8")).frontmatter
     expect((devFm.permission as Record<string, unknown>).question).toBe("allow")
+    const revFm = parseAgentMd(readFileSync(join(agentsDir, "openspec-reviewer.md"), "utf-8")).frontmatter
+    expect((revFm.permission as Record<string, unknown>).question).toBe("allow")
   })
 })
 

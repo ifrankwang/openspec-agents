@@ -38,6 +38,10 @@ export class FakeGitRunner implements GitRunner {
   statusPorcelainOutput = new Map<string, string>()
   /** 强制 status 失败（git 不可用降级测试用）。 */
   failStatus = false
+  /** 强制 runChecked 侧 add 失败（自动提交失败路径测试用）。 */
+  failAdd = false
+  /** 强制 runChecked 侧 commit 失败（自动提交失败路径测试用）。 */
+  failCommit = false
 
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
@@ -188,10 +192,17 @@ export class FakeGitRunner implements GitRunner {
       return { success: true, stdout: this.dirtyPaths.has(worktree) ? "M  some-file.txt" : "", stderr: "" }
     }
     if (cmd === "commit") {
+      if (this.failCommit) return { success: false, stdout: "", stderr: "fatal: commit 失败" }
+      // 模拟真实 git：commit 成功清空该 worktree 的脏状态，防止「测试绿但真实行为已变」的假阴性
       this.worktreeOpenspecDirty.delete(worktree)
+      this.dirtyPaths.delete(worktree)
       return { success: true, stdout: "", stderr: "" }
     }
-    if (cmd === "add" || cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "" }
+    if (cmd === "add") {
+      if (this.failAdd) return { success: false, stdout: "", stderr: "fatal: add 失败" }
+      return { success: true, stdout: "", stderr: "" }
+    }
+    if (cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "" }
 
     if (cmd === "worktree" && args[1] === "remove") {
       this.worktrees.delete(args[2])

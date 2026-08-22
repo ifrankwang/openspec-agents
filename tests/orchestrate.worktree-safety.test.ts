@@ -632,7 +632,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("worktree 侧存在未提交变更 → 拒绝合并", async () => {
+  test("worktree 侧存在未提交变更 → 先自动提交再并入主仓库污染文档（干净树预检不阻塞）", async () => {
     const root = `/tmp/wts-w9b-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -640,11 +640,22 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     const wtPath = taskItemOf(wt).metadata["worktree_path"]
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+    // 架构师身份的 worktree 直改修正未提交：submit 时自动 commit 兜底（reviewer 家族），
+    // 消除 reconcile 干净树预检（isWorktreeClean）处的旧死锁
     fakeGit.dirtyPaths.add(wtPath)
 
-    await expect(
-      archSubmit(wt)
-    ).rejects.toThrow(/存在未 commit 内容/)
+    await archSubmit(wt)
+
+    // 自动提交先于 reconcile 的干净树预检（run() 侧 "status --porcelain"）
+    const commitIdx = fakeGit.callLog.findIndex((l) => l.startsWith("checked:commit -m docs(opx): direct fixes by openspec-architect (analyze)"))
+    const cleanCheckIdx = fakeGit.callLog.findIndex((l) => l === "status --porcelain")
+    expect(commitIdx).toBeGreaterThanOrEqual(0)
+    expect(cleanCheckIdx).toBeGreaterThan(commitIdx)
+    // FakeGitRunner 真实行为模拟：commit 成功清脏
+    expect(fakeGit.dirtyPaths.has(wtPath)).toBe(false)
+    // 污染文档正常并入 worktree 分支
+    expect(fakeGit.commitShas.length).toBe(1)
+    expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

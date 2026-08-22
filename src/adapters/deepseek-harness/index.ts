@@ -91,7 +91,7 @@ function denyEditTools(frontmatter: Record<string, unknown>): boolean {
   if (edit === "deny") return true
   if (edit && typeof edit === "object") {
     const rule = edit as Record<string, unknown>
-    // architect 允许编辑 md，不能整体禁止写工具
+    // edit 规则按通配整体 deny 但对 *.md 单独放行时，不能整体禁止写工具
     return rule["*"] === "deny" && rule["*.md"] !== "allow"
   }
   return false

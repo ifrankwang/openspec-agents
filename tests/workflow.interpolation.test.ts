@@ -269,7 +269,7 @@ describe("common + step 语义渲染", () => {
   test("analyze：constraints（blocker 走 barrier 不入配置语义）+ instructions", () => {
     const item = makeItem({ phase: "todo", currentStep: "analyze" })
     const out = renderWorking(item, "analyze", "openspec-architect")
-    // analyze 有自己的 constraints（与 common 合并）；edit 边界与 blocker 处置属架构师身份职责语义（openspec-developer.md 承载），不在此重复
+    // analyze 有自己的 constraints（与 common 合并）；edit 边界与 blocker 处置属架构师身份职责语义（openspec-reviewer.md 承载），不在此重复
     expect(out).toContain("## 约束")
     expect(out).toContain("只审当前任务组范围")
     expect(out).toContain("所有 edit/write 操作限定在 /wt 内")
@@ -371,7 +371,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定")
     expect(out).toContain("design.md 的 API 定义（请求/响应结构、数据模型）")
     expect(out).toContain("specs/ 下相关 spec.md（需求细节、验收标准与数据产出要求），用于准备测试数据与对照 API 合约")
-    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查，但不得 edit/write 业务代码")
+    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查；禁止 edit/write 影响代码运行的内容；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue")
     // 严重级别判例归属 agent.md，约束中不重复
     expect(out).not.toContain("缺少验证所需真实资源时最低记 Low")
     expect(out).not.toContain("；禁止 opx_orch_*")
@@ -401,7 +401,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("禁止运行确定性工具检查（包括但不限于 linter/formatter/静态分析/编译/测试/架构约束检查等）")
     // 追加澄清句不破坏原文匹配（运行权归 tool review 层）
     expect(out).toContain("运行权归 tool review 层，本约束不排斥基于已加载 skill 做工具化可行性判断并提交工具改进 issue")
-    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；不得 edit/write 任何文件，仅输出审查报告")
+    expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit；禁止 edit/write 影响代码运行的内容，仅输出审查报告；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue")
     expect(out).not.toContain("；禁止 opx_orch_*")
     expect(out).toContain("即使无 issue 也必须提交 verdict=passed；passed=false 时必须有至少一个归属本维度的 Low+ issue 作为理由")
   })

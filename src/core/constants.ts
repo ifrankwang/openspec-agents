@@ -33,6 +33,13 @@ export function agentToReviewLayer(agent: string | undefined): ReviewLayer | und
   return undefined
 }
 
+/** reviewer 家族判定（opx_agent_submit 的 worktree 自动提交范围）：openspec-architect +
+ *  全部审查者逻辑身份（openspec-reviewer-tool / -task / 5 个 openspec-reviewer-{dim} /
+ *  simple 合并审查者 openspec-reviewer）。复用 agentToReviewLayer 既有映射推导，勿另立名单。 */
+export function isReviewerFamily(agent: string | undefined): boolean {
+  return agent === "openspec-architect" || agentToReviewLayer(agent) !== undefined
+}
+
 /** 安全读取 issue child 的报源 agent（metadata.source），非 string 返回 undefined。 */
 export function readIssueSource(child: WorkItem): string | undefined {
   return typeof child.metadata["source"] === "string" ? child.metadata["source"] : undefined

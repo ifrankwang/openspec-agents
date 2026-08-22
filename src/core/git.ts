@@ -371,3 +371,64 @@ export async function reconcileMainPollution(
     }
   }
 }
+
+/** worktree 自动提交（reviewer 家族文档直改兜底）结果。 */
+export interface AutoCommitResult {
+  /** skipped：过滤 openspec/states/ 后无已跟踪文件变更（未触发提交）；committed：add -u + commit 完成；
+   *  failed：git 调用失败（降级返回，不抛异常）。 */
+  status: "skipped" | "committed" | "failed"
+  /** 纳入自动提交的已跟踪文件变更路径（skipped 时为空）。 */
+  files: string[]
+  /** status=failed 时的失败 stderr。 */
+  stderr?: string
+  /** 未跟踪新建文件（?? 条目）路径清单：add -u 不纳入提交，提示编排者另行处理。 */
+  untrackedFiles: string[]
+}
+
+/**
+ * 自动提交 worktree 内已跟踪文件的未提交修改/删除（reviewer 家族文档直改兜底）。
+ *
+ * 触发场景：审查者/架构师按文档直改义务修正文档/注释后，由 opx_agent_submit 在 verdict
+ * 校验通过后调用——未提交修正会被下一轮工具检查点增量检测误判为新变更，也会在
+ * reconcileMainPollution 的干净树预检处死锁，提交时自动 commit 兜底。
+ *
+ * 语义：
+ * 1. `status --porcelain` 解析路径清单，过滤 `openspec/states/` 编排状态目录；过滤后无已跟踪
+ *    文件变更 → skipped（未触发）。
+ * 2. 有变更 → `add -u`（仅已跟踪文件的修改/删除，未跟踪新建文件不纳入，排除 openspec/states/）
+ *    → `commit`（消息风格对齐既有 `docs(tasks):` / `docs(openspec):` 惯例）。
+ * 3. 任一 git 调用失败 → failed（含 stderr），不抛异常——调用方据此在返回体提示，不阻塞 verdict 写入。
+ */
+export async function autoCommitWorktreeChanges(
+  wtPath: string,
+  agent: string,
+  stepId: string,
+): Promise<AutoCommitResult> {
+  const statusRes = await runGitChecked(wtPath, ["status", "--porcelain"])
+  if (!statusRes.success) {
+    return { status: "failed", files: [], untrackedFiles: [], stderr: statusRes.stderr }
+  }
+  const files: string[] = []
+  const untrackedFiles: string[] = []
+  for (const line of statusRes.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const path = parsePorcelainPaths(line)[0]
+    if (!path || path.startsWith("openspec/states/")) continue
+    if (line.startsWith("??")) untrackedFiles.push(path)
+    else files.push(path)
+  }
+  if (files.length === 0) return { status: "skipped", files: [], untrackedFiles }
+
+  const addResult = await runGitChecked(wtPath, ["add", "-u", "--", ".", ":(exclude)openspec/states"])
+  if (!addResult.success) {
+    return { status: "failed", files, untrackedFiles, stderr: addResult.stderr }
+  }
+  const commitResult = await runGitChecked(wtPath, [
+    "commit",
+    "-m",
+    `docs(opx): direct fixes by ${agent} (${stepId})`,
+  ])
+  if (!commitResult.success) {
+    return { status: "failed", files, untrackedFiles, stderr: commitResult.stderr }
+  }
+  return { status: "committed", files, untrackedFiles }
+}

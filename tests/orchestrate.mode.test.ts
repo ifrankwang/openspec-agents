@@ -365,14 +365,15 @@ describe("task-simple.yaml 加载与结构", () => {
     expect(qrConstraints).not.toMatch(/禁止运行确定性工具检查/)
     expect(qrConstraints).not.toMatch(/仅输出审查报告/)
     expect(qrConstraints).not.toMatch(/不得 edit\/write 任何文件/)
-    // 确定性工具检查允许 + 文档/注释直改允许（只报不改的例外）
+    // 确定性工具检查允许 + 文档/注释直改义务（逻辑类只报不改的例外）
     expect(qrConstraints).toMatch(/可 bash 运行确定性工具检查/)
-    expect(qrConstraints).toMatch(/文档\/注释等不影响代码运行的内容可直接修改/)
+    expect(qrConstraints).toMatch(/文档\/注释等不影响代码运行的内容发现不一致\/过时问题时直接修正/)
 
-    // 1.5 验收：instructions 含工具改进双报与只报不改语义
+    // 1.5 验收：instructions 含工具改进双报与只报不改/文档直改语义
     const qrInstructions = (qr.step.instructions ?? []).join("\n")
     expect(qrInstructions).toMatch(/必须双报/)
     expect(qrInstructions).toMatch(/只报不改/)
+    expect(qrInstructions).toMatch(/发现不一致\/过时问题时直接修正/)
     // 任务验证语义（verified_tasks / failed_tasks）
     expect(qrInstructions).toMatch(/failed_tasks/)
     expect(qrInstructions).toMatch(/verified_tasks/)

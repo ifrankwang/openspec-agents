@@ -11,11 +11,11 @@ import {
   getStepVerdict, clearStepTags, isBlockingSeverity, isInfoSeverity, isTerminalPhase, applyTransition,
 } from "../workflow/engine.ts"
 import { resetReviewTagsOnFix, dedupeNewChildren, resolveChildIssueFields } from "../workflow/reset.ts"
-import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.ts"
+import { agentToReviewDimension, agentToReviewLayer, isReviewerFamily, readIssueSource } from "../constants.ts"
 import { REVIEW_DIMENSIONS } from "../types.ts"
 import type { Dimension } from "../types.ts"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.ts"
-import { reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
+import { autoCommitWorktreeChanges, reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
 import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
@@ -734,6 +734,33 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       newChildren: accepted,
     })
 
+    // reviewer 家族（openspec-architect + 全部审查者逻辑身份）worktree 直改修正自动提交兜底：
+    // 审查者/架构师按文档直改义务修正文档/注释后，提交时自动 commit（openspec/states/ 编排状态
+    // 除外，仅纳入已跟踪文件的修改/删除）。
+    // 时序硬约束：必须在 _tool_review_checkpoint 捕获之前（否则修正会被下一轮增量检测误判为新
+    // 变更）、必须在 reconcileMainPollution 之前（其干净树预检要求 worktree 无未提交内容——架构师
+    // 身份的 worktree md 修正无人提交会在该预检处死锁）。
+    // 硬边界（防事故）：自动提交目标恒为 wtPath（任务组 worktree），严禁对 ctx.worktree（主仓库）
+    // 执行 add/commit。失败不阻塞 verdict 写入，仅在返回体提示编排者安排补提交。
+    const autoCommitLines: string[] = []
+    if (isReviewerFamily(ctx.agent)) {
+      const ac = await autoCommitWorktreeChanges(wtPath, ctx.agent, params.step_id)
+      if (ac.status === "committed") {
+        autoCommitLines.push(
+          `- ✅ worktree 直改修正已自动提交（${ac.files.length} 个文件，commit message: \`docs(opx): direct fixes by ${ctx.agent} (${params.step_id})\`）`,
+        )
+      } else if (ac.status === "failed") {
+        autoCommitLines.push(
+          `- ⚠️ worktree 直改修正自动提交失败：${ac.stderr || "未知错误"}。请编排者安排补提交（worktree 内 git add -u 后 commit）`,
+        )
+      }
+      if (ac.untrackedFiles.length > 0) {
+        autoCommitLines.push(
+          `- ⚠️ 存在未跟踪新建文件未纳入自动提交（须纳入版本控制时由编排者/开发者处理）：${ac.untrackedFiles.join("、")}`,
+        )
+      }
+    }
+
     // arch_submit 主仓库污染文档自动合并兜底（56ddfe9 意图）：analyze step（架构师）以 passed 提交后，
     // 若主仓库本 change 目录下存在未提交 openspec 文档污染，并入 worktree 分支并清理主仓库工作树。
     if (
@@ -766,7 +793,15 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     }
 
     await writeState(ctx.worktree, state)
-    return SUBMIT_OK_MESSAGE
+    if (autoCommitLines.length === 0) return SUBMIT_OK_MESSAGE
+    return [
+      `## ✅ ${SUBMIT_OK_MESSAGE}`,
+      "",
+      "### worktree 自动提交",
+      "",
+      ...autoCommitLines,
+      "",
+    ].join("\n")
   } finally {
     releaseLock(lockPath)
   }
