@@ -982,3 +982,208 @@ describe("simple 模式 quality_review：开发者自检申报区块渲染（验
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 })
+
+describe("simple 模式 quality_review：本次变更证据区块（检查点增量口径，验证分流证据锚点）", () => {
+  const REVIEWER = "openspec-reviewer"
+  const BASE_REF = "base000000000000000000000000000000000001"
+
+  /** simple 模式推进到 quality_review；extra 透传 implement 提交参数。 */
+  async function driveToQualityReviewSimple(wt: string, extra: Record<string, unknown> = {}): Promise<void> {
+    const o = makeOrchCtx(wt)
+    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await set_worktree.execute({ change_id: CID }, o)
+    await agent_submit.execute(
+      { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"], ...extra },
+      makeCtx("openspec-developer", wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).currentStep).toBe("quality_review")
+  }
+
+  test("无检查点（首次进入）→ 基线兜底口径渲染证据区块（simple 合并审查措辞）", async () => {
+    const root = `/tmp/wf-simple-evidence-a-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
+    __setGitRunner(fakeGit)
+    await driveToQualityReviewSimple(wt)
+
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    // simple 合并审查措辞：标题为「自上次合并审查」（full verify_tool 的「自上次工具检查」不混入）
+    expect(output).toContain("## 本次变更证据（自上次合并审查）")
+    expect(output).not.toContain("自上次工具检查")
+    // 无检查点 → 基线兜底口径标注
+    expect(output).toContain(`本次区间以基线（${BASE_REF}..HEAD）兜底`)
+    expect(output).toContain("首次进入，无上次合并审查记录")
+    expect(output).toContain("`src/main/java/com/t/App.java`")
+    expect(output).toContain(`diff ${BASE_REF}..HEAD`)
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("有检查点（复核轮）→ 增量口径渲染（自上次合并审查 checkpoint..HEAD）", async () => {
+    const root = `/tmp/wf-simple-evidence-b-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "src/main/java/com/t/Fix.java")
+    __setGitRunner(fakeGit)
+    await driveToQualityReviewSimple(wt)
+    // 注入上次合并审查检查点（模拟首轮 quality_review 提交后的存档）
+    const state = readStateSync(wt)
+    taskItemOf(state).metadata["_tool_review_checkpoint"] = "cp-1"
+    writeStateSync(wt, state)
+
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    expect(output).toContain("## 本次变更证据（自上次合并审查）")
+    expect(output).toContain("自上次合并审查（cp-1..HEAD）")
+    // 与「变更范围」累计口径区分标注
+    expect(output).toContain("与上方「变更范围」（")
+    expect(output).toContain("累计口径）不同")
+    expect(output).toContain("`src/main/java/com/t/Fix.java`")
+    expect(output).toContain("diff cp-1..HEAD")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("检测区间无变更（hasNonDocChange=false）→ 仍渲染区块并显式标注未检出（无变更直提视觉信号）", async () => {
+    const root = `/tmp/wf-simple-evidence-c-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToQualityReviewSimple(wt)
+
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    // simple 无三分支替换式视图：✅ 执行视图保留，无变更时也渲染证据区块
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).toContain("## 本次变更证据（自上次合并审查）")
+    expect(output).toContain("本区间未检出非 openspec 变更文件")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("quality_review 提交成功 → 写入 _tool_review_checkpoint（当前 HEAD）", async () => {
+    const root = `/tmp/wf-simple-evidence-d-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    fakeGit.headShas = ["cp-1"]
+    __setGitRunner(fakeGit)
+    await driveToQualityReviewSimple(wt)
+    expect(taskItemOf(readStateSync(wt)).metadata["_tool_review_checkpoint"]).toBeUndefined()
+
+    await agent_submit.execute(
+      { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2"] },
+      makeCtx(REVIEWER, wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).metadata["_tool_review_checkpoint"]).toBe("cp-1")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("quality_review failed 提交同样写入 _tool_review_checkpoint（不判 verdict，spec：无论 passed 或 failed）", async () => {
+    const root = `/tmp/wf-simple-evidence-f-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    fakeGit.headShas = ["cp-1"]
+    __setGitRunner(fakeGit)
+    await driveToQualityReviewSimple(wt)
+    expect(taskItemOf(readStateSync(wt)).metadata["_tool_review_checkpoint"]).toBeUndefined()
+
+    // failed 提交带合法不通过理由（Low+ new_children issue）→ 回 implement，但检查点同样记录当前 HEAD
+    await agent_submit.execute(
+      {
+        change_id: CID, step_id: "quality_review", verdict: "failed",
+        new_children: [{ id: "i1", title: "问题", description: "d", severity: "Low", dimension: "style" }],
+      },
+      makeCtx(REVIEWER, wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).currentStep).toBe("implement")
+    expect(taskItemOf(readStateSync(wt)).metadata["_tool_review_checkpoint"]).toBe("cp-1")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("implement 视图不渲染证据区块（仅合并审查者消费变更证据）", async () => {
+    const root = `/tmp/wf-simple-evidence-e-${Date.now()}`
+    const wt = freshWt(root)
+    const fakeGit = new FakeGitRunner()
+    fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
+    __setGitRunner(fakeGit)
+    const o = makeOrchCtx(wt)
+    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await set_worktree.execute({ change_id: CID }, o)
+
+    const output = await status.execute({ change_id: CID }, makeCtx("openspec-developer", wt))
+    expect(output).toContain("# ✅ 当前轮到你执行")
+    expect(output).not.toContain("本次变更证据")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
+
+describe("test_results 提交通道：implement 申报存档 + quality_review 防覆盖 + full verify_tool 回归", () => {
+  const REVIEWER = "openspec-reviewer"
+
+  /** simple 模式推进到 quality_review，dev 提交时携带 test_results 申报。 */
+  async function driveToQualityReviewWithTestResults(wt: string, testResults: string): Promise<void> {
+    const o = makeOrchCtx(wt)
+    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await set_worktree.execute({ change_id: CID }, o)
+    await agent_submit.execute(
+      {
+        change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"],
+        test_results: testResults,
+      },
+      makeCtx("openspec-developer", wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).currentStep).toBe("quality_review")
+  }
+
+  test("simple implement 提交 test_results → metadata 存档 → quality_review 视图渲染「接口测试结果」段", async () => {
+    const root = `/tmp/wf-tr-channel-a-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    const DECL = "API 测试 3/3 通过（执行顺序：SQL 前置 → 隔离启动 → .http 执行；覆盖接口：POST /a、GET /b）"
+    await driveToQualityReviewWithTestResults(wt, DECL)
+
+    // implement 通道写入 metadata（dev 申报存档）
+    expect(taskItemOf(readStateSync(wt)).metadata["test_results"]).toBe(DECL)
+
+    // quality_review 视图「开发者自检申报」区块渲染「接口测试结果」段（真实提交通道闭环）
+    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
+    expect(output).toContain("## 开发者自检申报")
+    expect(output).toContain("**接口测试结果（test_results）**")
+    expect(output).toContain("API 测试 3/3 通过")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("quality_review 合并审查者提交 test_results 不覆盖 dev 申报（dev 专属防护）", async () => {
+    const root = `/tmp/wf-tr-channel-b-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToQualityReviewWithTestResults(wt, "dev 申报的接口测试结果")
+
+    await agent_submit.execute(
+      { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2"], test_results: "reviewer 试图覆盖申报" },
+      makeCtx(REVIEWER, wt),
+    )
+    // dev 申报保持原值，reviewer 提交的 test_results 不落入 metadata
+    expect(taskItemOf(readStateSync(wt)).metadata["test_results"]).toBe("dev 申报的接口测试结果")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("full verify_tool reviewer 提交 test_results 仍写入 metadata（回归）", async () => {
+    const root = `/tmp/wf-tr-channel-c-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    await agent_submit.execute(
+      { change_id: CID, step_id: "verify_tool", verdict: "passed", test_results: "UT 42/42 通过" },
+      makeCtx("openspec-reviewer-tool", wt),
+    )
+    expect(taskItemOf(readStateSync(wt)).metadata["test_results"]).toBe("UT 42/42 通过")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})

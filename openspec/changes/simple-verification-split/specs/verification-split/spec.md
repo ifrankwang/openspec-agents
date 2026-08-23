@@ -32,6 +32,22 @@ simple 模式的验证 SHALL 按性质划分归属：确定性检查（给定相
 - **WHEN** 流程处于 implement 环节（含审查回退后的修复轮）
 - **THEN** 开发者视图不渲染「开发者自检申报」区块
 
+### Requirement: 变更证据渲染
+
+simple 模式 quality_review 视图 SHALL 渲染「本次变更证据」区块作为验证三分流与裁量判断的事实输入：有检查点（上次合并审查记录）时按「自上次合并审查（checkpoint..HEAD）」增量口径渲染，无检查点时以基线（base_ref..HEAD）兜底口径渲染；quality_review 提交成功后 SHALL 记录检查点供复核轮增量检测；本区间无代码/配置变更时 SHALL 渲染显式「未检出」信号。
+
+#### Scenario: 增量口径证据渲染
+- **WHEN** 流程处于 quality_review 环节且存在上次合并审查检查点
+- **THEN** 审查者视图渲染「本次变更证据（自上次合并审查）」区块，按检查点增量口径展示变更文件清单与区间 diff 命令
+
+#### Scenario: 提交成功记录检查点
+- **WHEN** 合并审查者提交 quality_review 成功（无论 passed 或 failed）
+- **THEN** 当前 HEAD 记录为检查点，供复核轮按增量口径检测变更
+
+#### Scenario: 无变更渲染显式未检出信号
+- **WHEN** quality_review 环节的检测区间内未检出非 openspec 变更文件
+- **THEN** 审查者视图仍渲染「本次变更证据」区块，文件清单处显式标注本区间未检出非 openspec 变更文件，作为「无变更直提」分流的显式视觉信号
+
 ### Requirement: 低成本必做项全量实跑
 
 审查者对分钟级低成本必做项（env / compile / format / architecture / static_analysis / unit_test / config_check 一类）SHALL 全量实跑并逐项申报（completed=true 附执行结果）；低成本必做项 SHALL NOT 以核验申报形态替代实跑。

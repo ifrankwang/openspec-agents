@@ -333,7 +333,11 @@ export const agentSubmitSchema: JSONSchema = {
       description: "implement step：已完成的 task id（覆盖门禁：全部 open/rejected task 必须被覆盖）",
       items: { type: "string" },
     },
-    test_results: { type: "string", description: "verify_tool step：UT 运行结果摘要" },
+    test_results: {
+      type: "string",
+      description:
+        "implement / verify_tool step：测试运行结果摘要（implement 为接口测试执行结果——附执行顺序与覆盖接口清单；verify_tool 为 UT 运行结果摘要）；quality_review（simple 合并审查）下由开发者在 implement 申报，审查者提交时不生效",
+    },
     validation_steps: {
       type: "array",
       description: "review step：验证步骤执行摘要",

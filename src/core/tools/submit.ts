@@ -264,7 +264,8 @@ function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
   }
 }
 
-/** implement step 参数处理：blocker（on_fail）、completed_task_ids + 覆盖门禁、self_check_results。 */
+/** implement step 参数处理：blocker（on_fail）、completed_task_ids + 覆盖门禁、self_check_results /
+ *  test_results 申报存档。 */
 function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void {
   if (params.blocker) {
     if (params.verdict !== "failed") {
@@ -310,6 +311,11 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
 
   if (params.self_check_results) {
     item.metadata["self_check_results"] = params.self_check_results
+  }
+  // test_results 为 dev 申报的接口测试执行结果存档（simple 模式 quality_review 视图「开发者自检申报」
+  // 区块渲染源），与 self_check_results 同为跨角色可见的正式提交参数存档。
+  if (params.test_results) {
+    item.metadata["test_results"] = params.test_results
   }
 }
 
@@ -395,7 +401,7 @@ function assertFailedHasReason(
   }
 }
 
-/** review step（verify_tool/verify_task/verify_quality）参数处理。 */
+/** review step（verify_tool/verify_task/verify_quality/quality_review）参数处理。 */
 function handleReviewParams(
   item: WorkItem,
   params: AgentSubmitParams,
@@ -417,7 +423,10 @@ function handleReviewParams(
     mergeBoundaryInto(item, params.boundary_expansion)
   }
 
-  if (params.test_results) item.metadata["test_results"] = params.test_results
+  // test_results 透传：full 模式 verify_tool 的 UT 摘要写入不受影响；simple 模式 quality_review 下
+  // test_results 是 dev 申报的接口测试结果存档（quality_review 视图「开发者自检申报」区块渲染源），
+  // 合并审查者提交不得覆盖 dev 申报（spec 契约：申报区块语义为 dev 产出）。
+  if (params.test_results && stepId !== "quality_review") item.metadata["test_results"] = params.test_results
 
   if (params.validation_steps) {
     // 结构化 skip_reason 校验（升级既有「非空即可」）：未完成项必须带合法结构化降级声明
@@ -781,10 +790,15 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       })
     }
 
-    // tool review 检查点增量检测（A3）：verify_tool 的 reviewer-tool 提交成功后记录当前 HEAD，
-    // 供下次重进 verify_tool 时仅对比「检查点 → 当前 HEAD」区间的变更（无代码/配置变更时直提 passed，
-    // 省去全量工具扫描）。写入位于 submitForStep 成功与 writeState 之间，任何异常路径均不落盘（零状态变更）。
-    if (params.step_id === "verify_tool" && agentToReviewLayer(ctx.agent) === "tool") {
+    // 审查检查点增量检测（A3）：full 的 verify_tool（reviewer-tool）与 simple 的 quality_review
+    // （合并审查者 openspec-reviewer）提交成功后记录当前 HEAD，供下次重进该 step 时仅对比「检查点 →
+    // 当前 HEAD」区间的变更（无代码/配置变更时直提 passed，省去全量工具扫描）。两者写同一 metadata key
+    // `_tool_review_checkpoint`，但 simple / full 两 workflow 无对方 step，读写互不交叉。写入位于
+    // submitForStep 成功与 writeState 之间，任何异常路径均不落盘（零状态变更）。
+    if (
+      (params.step_id === "verify_tool" && agentToReviewLayer(ctx.agent) === "tool") ||
+      (params.step_id === "quality_review" && ctx.agent === "openspec-reviewer")
+    ) {
       const head = await getCurrentHead(wtPath)
       if (head) item.metadata["_tool_review_checkpoint"] = head
     }

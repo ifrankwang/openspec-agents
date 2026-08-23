@@ -641,16 +641,17 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
   const tg = findTaskGroup(state, state.taskGroupId)
   // 主仓库 openspec 污染诊断（56ddfe9 意图）：编排者分派视图展示主仓库污染，供编排者人工核对
   const mainPollution = ctx.orchestrator ? await detectMainRepoPollution(ctx.worktree) : null
-  // tool review 检查点增量检测（A4）：verify_tool 的 reviewer-tool 工作视图按「检查点 → 当前 HEAD」区间
-  // 变更分流（直提 / 仅处理待复核项 / 全量）。渲染层为同步函数，此处预计算后经 WorkflowStatusViewOptions 传入。
-  // 仅在推荐分派该 agent 时计算，其余角色/step 不产生额外 git 调用。
+  // tool review 检查点增量检测（A4）：full 的 verify_tool（reviewer-tool）与 simple 的 quality_review
+  // （合并审查者 openspec-reviewer）工作视图均按「检查点 → 当前 HEAD」区间变更分流。渲染层为同步函数，
+  // 此处预计算后经 WorkflowStatusViewOptions 传入。仅推荐分派对应 agent 时计算（verify_tool → reviewer-tool、
+  // quality_review → openspec-reviewer），其余角色/step 不产生额外 git 调用。
   let toolChanges: DetectChangesResult | undefined
-  if (
-    agentToReviewLayer(agent) === "tool" &&
+  const changesEvidenceStep =
     rec.status === "recommend" &&
-    rec.stepId === "verify_tool" &&
-    rec.agents.includes(agent)
-  ) {
+    rec.agents.includes(agent) &&
+    ((agentToReviewLayer(agent) === "tool" && rec.stepId === "verify_tool") ||
+      (agent === "openspec-reviewer" && rec.stepId === "quality_review"))
+  if (changesEvidenceStep) {
     const wtPath = typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : undefined
     if (wtPath) {
       const checkpoint =
