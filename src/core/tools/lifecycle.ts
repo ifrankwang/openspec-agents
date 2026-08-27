@@ -1,8 +1,9 @@
 import path from "path"
+import { rmdir } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
@@ -576,13 +577,13 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
         await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
         reused = true
       } else {
-        const rmResult = await runGitChecked(repoRoot, ["worktree", "remove", existingPath, "--force"])
-        if (!rmResult.success) {
-          throw new Error(`无法清理已有 worktree "${existingPath}"：${rmResult.stderr}`)
-        }
-        const branchRmResult = await runGitChecked(repoRoot, ["branch", "-D", branch])
-        if (!branchRmResult.success) {
-          throw new Error(`无法清理已有分支 "${branch}"：${branchRmResult.stderr}`)
+        // 复用失败的清理走共享清理函数：目录侧（git remove + fs 兜底 + prune）与分支删除统一语义
+        const cleanup = await removeTaskGroupWorktree(repoRoot, existingPath, { branchName: branch })
+        if (!cleanup.dirResolved || cleanup.branchDeleted === false) {
+          const problems: string[] = []
+          if (!cleanup.dirResolved) problems.push(`无法清理已有 worktree "${existingPath}"`)
+          if (cleanup.branchDeleted === false) problems.push(`无法清理已有分支 "${branch}"`)
+          throw new Error(`${problems.join("；")}：${cleanup.errors.join("；") || "原因未知"}\n请手动处理后重试。`)
         }
       }
     }
@@ -667,6 +668,22 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
   return renderWorkflowStatusView(item, workflow, rec, { agent, orchestrator: ctx.orchestrator, identityDeclared: ctx.identityDeclared }, { state, tg, mainPollution, toolChanges, exemptedHits, exemptionItems })
 }
 
+/**
+ * 收尾后清扫默认布局的空父目录（`.worktree/<changeId>` 与 `.worktree`）：
+ * 仅对这两级字面路径做非递归 rmdir（空目录才会成功），任一失败静默忽略。
+ * 自定义 worktree_path 时以「被删目录的实际 dirname === `.worktree/<changeId>`」判定是否可扫第一级，
+ * 第二级固定只试 `.worktree` 本身；其余任意父路径一律不做处理。
+ */
+async function sweepEmptyWorktreeParents(repoRoot: string, removedDir: string, changeId: string): Promise<void> {
+  const repoRootAbs = path.resolve(repoRoot)
+  const groupLevelDir = path.join(repoRootAbs, ".worktree", changeId)
+  const worktreeLevelDir = path.join(repoRootAbs, ".worktree")
+  if (path.dirname(path.resolve(removedDir)) === groupLevelDir) {
+    try { await rmdir(groupLevelDir) } catch {}
+  }
+  try { await rmdir(worktreeLevelDir) } catch {}
+}
+
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_complete_task_group")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
@@ -731,17 +748,40 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
       ].join("\n")
     }
   }
-  if (worktreePath && branchName) {
-    try {
-      await runGit(ctx.worktree, ["worktree", "remove", worktreePath, "--force"])
-      await runGit(ctx.worktree, ["branch", "-D", branchName])
-    } catch {
+  // 收尾清理：只要记录了 worktree_path 就执行；branch_name 缺省时仅做 worktree 侧清理。
+  // 残留不阻断收尾：completed_at 照写，残留信息写入 metadata.cleanup_residual 并在返回体给出人工处理命令。
+  let cleanupNote = ""
+  let cleanupResidualWarning = ""
+  if (worktreePath) {
+    const cleanup = await removeTaskGroupWorktree(ctx.worktree, worktreePath, { branchName })
+    if (cleanup.dirResolved) {
+      await sweepEmptyWorktreeParents(ctx.worktree, worktreePath, params.change_id)
+      const successNotes: string[] = []
+      if (cleanup.dirResolvedByFallback) {
+        successNotes.push("- **cleanup**: git worktree remove 未直接移除目录，已按文件系统兜底删除并 prune 管理记录。")
+      }
+      if (cleanup.errors.length > 0) {
+        successNotes.push(`- **cleanup 部分告警**: ${cleanup.errors.join("；")}`)
+      }
+      cleanupNote = successNotes.join("\n")
+    } else {
+      item.metadata["cleanup_residual"] = { worktree_path: worktreePath, errors: cleanup.errors }
+      cleanupResidualWarning = [
+        "",
+        "## ⚠️ worktree 清理残留（不影响收尾）",
+        `- **残留路径**: \`${worktreePath}\``,
+        "- **原因**:",
+        ...cleanup.errors.map((e) => `  - ${e}`),
+        `- **处理**: 请人工执行 \`rm -rf '${worktreePath}' && git worktree prune\` 清理残留目录与 git 管理记录。`,
+        branchName ? `- **分支**: 分支 "${branchName}" 未删除。` : "",
+      ].filter(Boolean).join("\n")
     }
   }
   item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
   const doneMessage = `任务组已完成并合并到 "${mergeTarget}"。`
-  return checkboxWarning ? `${doneMessage}\n${checkboxWarning}` : doneMessage
+  const notes = [cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
+  return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}` : doneMessage
 }
 
 export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolContext): Promise<string> {

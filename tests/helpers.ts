@@ -42,6 +42,8 @@ export class FakeGitRunner implements GitRunner {
   failAdd = false
   /** 强制 runChecked 侧 commit 失败（自动提交失败路径测试用）。 */
   failCommit = false
+  /** 强制 runChecked 侧 worktree remove 失败（收尾清理补救链测试用）。 */
+  failWorktreeRemove = false
 
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
@@ -205,9 +207,12 @@ export class FakeGitRunner implements GitRunner {
     if (cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "" }
 
     if (cmd === "worktree" && args[1] === "remove") {
+      if (this.failWorktreeRemove) return { success: false, stdout: "", stderr: "fatal: worktree remove 失败" }
       this.worktrees.delete(args[2])
       return { success: true, stdout: "", stderr: "" }
     }
+
+    if (cmd === "worktree" && args[1] === "prune") return { success: true, stdout: "", stderr: "" }
 
     if (cmd === "branch" && args[1] === "-D") return { success: true, stdout: "", stderr: "" }
 

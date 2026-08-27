@@ -21,7 +21,7 @@
  * 附：tasks.md 复选框在任务组收尾（opx_orch_complete_task_group）时统一勾选，full/simple 一致，见 README「simple 模式」。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { __setMustDoIndex } from "../src/core/tools/gate"
@@ -166,9 +166,11 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       expect(fakeGit.mergedBranches).toContain(`task-group/${CID}/1`)
       expect(fakeGit.worktrees.has(wtPath)).toBe(false)
 
-      // ⑪ 收尾统一勾选复选框：worktree 内 tasks.md 已勾选（fake 合并不传播文件，主仓库保持未勾选；真实 git 下随合并带回）
-      expect(wtTasksMd(wtPath)).toContain("- [x] 1.1 Task one")
-      expect(wtTasksMd(wtPath)).toContain("- [x] 1.2 Task two")
+      // ⑪ 收尾统一勾选复选框：worktree 已随清理从磁盘删除，勾选事实以 git 提交留痕验证
+      //   （fake 合并不传播文件，主仓库保持未勾选；真实 git 下随合并带回）
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:add") && l.includes(wtPath))).toBe(true)
+      expect(fakeGit.callLog.some((l) => l.includes("docs(tasks): mark completed task checkboxes"))).toBe(true)
+      expect(existsSync(wtPath)).toBe(false)
       expect(tasksMd(wt)).toContain("- [ ] 1.1 Task one")
     } finally { teardown(root) }
   })
@@ -224,14 +226,15 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
       const wtPath = join(wt, ".worktree", CID, "task-group-1")
       expect(fakeGit.worktrees.has(wtPath)).toBe(true)
 
+      // ⑧ 收尾统一勾选复选框：冲突轮收尾已勾选，重调 complete 前内容可读；清理后 worktree 目录从磁盘删除
+      expect(wtTasksMd(wtPath)).toContain("- [x] 1.1 Task one")
+      expect(wtTasksMd(wtPath)).toContain("- [x] 1.2 Task two")
       // ⑦ dev 在 worktree 内解决冲突后（重调 complete）直接收尾——裸合并、无回归、无环境清理
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
       expect(fakeGit.worktrees.has(wtPath)).toBe(false)
-      // ⑧ 收尾勾选幂等：complete 时统一勾选，冲突解决后重调 complete 仍勾选
-      expect(wtTasksMd(wtPath)).toContain("- [x] 1.1 Task one")
-      expect(wtTasksMd(wtPath)).toContain("- [x] 1.2 Task two")
+      expect(existsSync(wtPath)).toBe(false)
     } finally { teardown(root) }
   })
 })

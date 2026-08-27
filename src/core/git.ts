@@ -1,6 +1,16 @@
 import path from "path"
 import { execFile } from "node:child_process"
-import { readFile, writeFile, stat } from "node:fs/promises"
+import { readFile, writeFile, stat, rm } from "node:fs/promises"
+
+/** 判断路径是否存在于磁盘（fs 层判断，git 命令结果不作为存在性依据）。 */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export interface GitRunner {
   run(worktree: string, args: string[]): Promise<string>
@@ -52,6 +62,85 @@ export async function runGitChecked(
   args: string[]
 ): Promise<{ success: boolean; stdout: string; stderr: string }> {
   return gitRunner.runChecked(worktree, args)
+}
+
+/** worktree 清理结果：成功判定以目录从磁盘真实消失为准，不信任单条 git 命令的退出码。 */
+export interface WorktreeRemovalResult {
+  /** 目录最终是否已从磁盘消失。 */
+  dirResolved: boolean
+  /** 目录是否经文件系统兜底删除后才消失（true 表示主路径未直接达成，发生了补救）。 */
+  dirResolvedByFallback: boolean
+  /** worktree prune 是否执行成功（幽灵管理记录清理）。 */
+  pruned: boolean
+  /** 分支删除结果：null=未指定分支或因目录残留被跳过；true/false=删除断言结果。 */
+  branchDeleted: boolean | null
+  /** 各环节失败原因聚合（人类可读），全部成功时为空数组。 */
+  errors: string[]
+}
+
+/**
+ * 删除任务组 worktree 并清理关联管理记录（收尾清理与 set_worktree 复用失败重建共用）。
+ *
+ * 序列：
+ * 1. 目录不存在 → 直接 prune（清理只残留管理记录的幽灵 worktree）；
+ * 2. 目录存在 → `git worktree remove --force`；命令失败或目录仍在磁盘时走补救链：
+ *    fs 递归删除 + prune（prune 失败仅记入 errors，不阻断）；
+ * 3. 目录确认消失后才 `git branch -D`；仍残留则跳过删分支并记入 errors，
+ *    防止孤儿分支掩盖问题、以及向不完整状态发出被 git 拒绝的命令。
+ *
+ * @param repoRoot 主仓库根路径（worktree 管理命令的 -C 目标）
+ * @param wtPath 待删除的 worktree 路径
+ * @param opts.branchName 关联分支名；缺省/null 时只做 worktree 侧清理
+ */
+export async function removeTaskGroupWorktree(
+  repoRoot: string,
+  wtPath: string,
+  opts: { branchName?: string | null } = {},
+): Promise<WorktreeRemovalResult> {
+  const result: WorktreeRemovalResult = { dirResolved: false, dirResolvedByFallback: false, pruned: false, branchDeleted: null, errors: [] }
+
+  if (!(await pathExists(wtPath))) {
+    const pruneRes = await runGitChecked(repoRoot, ["worktree", "prune"])
+    if (pruneRes.success) result.pruned = true
+    else result.errors.push(`worktree prune 失败：${pruneRes.stderr}`)
+    result.dirResolved = true
+  } else {
+    const rmRes = await runGitChecked(repoRoot, ["worktree", "remove", wtPath, "--force"])
+    if (!rmRes.success) result.errors.push(`git worktree remove 失败：${rmRes.stderr}`)
+    if (await pathExists(wtPath)) {
+      // 补救链：fs 物理删除目录 + prune 清理残留管理记录
+      try {
+        await rm(wtPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      } catch (e) {
+        result.errors.push(`文件系统兜底删除 "${wtPath}" 失败：${e instanceof Error ? e.message : String(e)}`)
+      }
+      const pruneRes = await runGitChecked(repoRoot, ["worktree", "prune"])
+      if (pruneRes.success) result.pruned = true
+      else result.errors.push(`worktree prune 失败：${pruneRes.stderr}`)
+      if (!(await pathExists(wtPath))) {
+        result.dirResolved = true
+        result.dirResolvedByFallback = true
+      }
+    } else {
+      result.dirResolved = true
+    }
+  }
+
+  if (!result.dirResolved) {
+    if (opts.branchName) {
+      result.errors.push(`目录 "${wtPath}" 未能删除，跳过分支 "${opts.branchName}" 的删除以保留排查线索`)
+    }
+    return result
+  }
+  if (opts.branchName) {
+    const branchRes = await runGitChecked(repoRoot, ["branch", "-D", opts.branchName])
+    if (branchRes.success) result.branchDeleted = true
+    else {
+      result.branchDeleted = false
+      result.errors.push(`删除分支 "${opts.branchName}" 失败：${branchRes.stderr}`)
+    }
+  }
+  return result
 }
 
 export async function getCurrentHead(worktree: string): Promise<string> {
