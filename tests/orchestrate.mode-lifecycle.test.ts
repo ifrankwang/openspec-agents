@@ -359,8 +359,8 @@ describe("收尾门禁保留（completeTaskGroupExecute）", () => {
       expect(ok).toContain("任务组已完成并合并到")
       const item = taskItemOf(wt)
       expect(item.metadata["completed_at"]).toBeDefined()
-      // FakeGit 记录合并目标分支
-      expect(fakeGit.mergedBranches).toContain(`task-group/${CID}/1`)
+      // FakeGit 记录合并提交引用的源分支（commit-tree 消息）
+      expect(fakeGit.mergeCommitBranches).toContain(`task-group/${CID}/1`)
       // worktree 与分支已清理
       expect(fakeGit.worktrees.has(join(wt, ".worktree", CID, "task-group-1"))).toBe(false)
     } finally { teardown(root) }
@@ -373,11 +373,11 @@ describe("收尾裸合并：合并冲突由 dev 解决后直接收尾", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
-      fakeGit.mergeConflictOnNext = true
+      fakeGit.mergeTreeConflictOnNext = true
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(blocked).toContain("blocked")
       expect(blocked).toContain("merge_conflict")
-      expect(blocked).toContain("已中止合并")
+      expect(blocked).toContain("未产生任何变更")
       // 冲突路径不写 completed_at、保留 worktree 与分支（供 dev 解决冲突）
       expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
       expect(fakeGit.worktrees.has(join(wt, ".worktree", CID, "task-group-1"))).toBe(true)

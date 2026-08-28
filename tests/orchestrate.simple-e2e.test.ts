@@ -163,7 +163,7 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
-      expect(fakeGit.mergedBranches).toContain(`task-group/${CID}/1`)
+      expect(fakeGit.mergeCommitBranches).toContain(`task-group/${CID}/1`)
       expect(fakeGit.worktrees.has(wtPath)).toBe(false)
 
       // ⑪ 收尾统一勾选复选框：worktree 已随清理从磁盘删除，勾选事实以 git 提交留痕验证
@@ -218,7 +218,7 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
       expect(done.children.find((c: any) => c.externalId === "i1").phase).toBe("cancelled")
 
       // ⑥ 收尾遇合并冲突 → blocked（保留 worktree/分支、不写 completed_at）
-      fakeGit.mergeConflictOnNext = true
+      fakeGit.mergeTreeConflictOnNext = true
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(blocked).toContain("blocked")
       expect(blocked).toContain("merge_conflict")

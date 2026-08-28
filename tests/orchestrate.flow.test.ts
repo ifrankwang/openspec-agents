@@ -135,7 +135,8 @@ describe("新流端到端 happy path", () => {
       const r = await complete_task_group.execute({ change_id: CID }, ctx.orch)
       expect(r).toContain("任务组已完成并合并到")
       expect(readItem(wt, CID).metadata["completed_at"]).toBeDefined()
-      expect(fakeGit.mergedBranches).toContain("task-group/test-flow/1")
+      // FakeGit 记录合并提交引用的源分支（commit-tree 消息）
+      expect(fakeGit.mergeCommitBranches).toContain("task-group/test-flow/1")
     } finally { teardown(root) }
   })
 })

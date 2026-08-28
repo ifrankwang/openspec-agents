@@ -553,7 +553,7 @@ describe("W8. 主仓库 openspec 污染诊断", () => {
         if (args[0] === "status") return "R  openspec/changes/foo/old.md -> openspec/changes/foo/new.md"
         return ""
       },
-      async runChecked() { return { success: true, stdout: "", stderr: "" } },
+      async runChecked() { return { success: true, stdout: "", stderr: "", exitCode: 0 } },
     }
     __setGitRunner(runner)
 

@@ -17,7 +17,7 @@ export interface GitRunner {
   runChecked(
     worktree: string,
     args: string[]
-  ): Promise<{ success: boolean; stdout: string; stderr: string }>
+  ): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>
 }
 
 function execGit(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -43,7 +43,7 @@ const defaultRunner: GitRunner = {
   },
   async runChecked(worktree, args) {
     const { stdout, stderr, exitCode } = await execGit(["-C", worktree, ...args])
-    return { success: exitCode === 0, stdout: stdout.trim(), stderr: stderr.trim() }
+    return { success: exitCode === 0, stdout: stdout.trim(), stderr: stderr.trim(), exitCode }
   },
 }
 
@@ -60,7 +60,7 @@ export async function runGit(worktree: string, args: string[]): Promise<string> 
 export async function runGitChecked(
   worktree: string,
   args: string[]
-): Promise<{ success: boolean; stdout: string; stderr: string }> {
+): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
   return gitRunner.runChecked(worktree, args)
 }
 
@@ -204,19 +204,54 @@ export async function markTaskGroupCheckboxesComplete(
   }
 }
 
+/**
+ * 收尾裸合并：将任务组分支合并进基础分支，全程不触碰任何工作目录（worktreeless 底层命令）。
+ *
+ * 主仓库工作区状态（当前分支、未提交改动、index）不受影响；冲突时目标分支引用未动、磁盘无半成品。
+ * 序列：
+ * 1. `merge-base --is-ancestor` 幂等检查：源分支已是目标分支祖先（如人工解决冲突后重调）直接成功，
+ *    不产生空合并提交；
+ * 2. `merge-tree --write-tree`（需 git ≥ 2.38）内存试算合并树：退出码 1 = 冲突，直接返回；
+ * 3. `commit-tree` 生成双父合并提交，`update-ref` 以试算前目标分支 oid 作旧值校验推进（CAS，防并发覆盖）。
+ *
+ * @param repoDir 仓库内任意目录（底层命令不读取工作区，不影响 HEAD/index）
+ */
 export async function mergeBranchToTarget(
-  worktree: string,
+  repoDir: string,
   sourceBranch: string,
   targetBranch: string
 ): Promise<{ success: boolean; conflict: boolean }> {
-  const checkoutResult = await runGitChecked(worktree, ["checkout", targetBranch])
-  if (!checkoutResult.success) {
-    throw new Error(`无法切到目标分支 "${targetBranch}"：${checkoutResult.stderr}`)
+  const ancestor = await runGitChecked(repoDir, ["merge-base", "--is-ancestor", sourceBranch, targetBranch])
+  if (ancestor.success) return { success: true, conflict: false }
+  // is-ancestor 退出码 1 = 尚未并入（继续合并）；其余为分支缺失等真实错误
+  if (ancestor.exitCode !== 1) {
+    throw new Error(`无法判断 "${sourceBranch}" 是否已并入 "${targetBranch}"：${ancestor.stderr}`)
   }
-  const mergeResult = await runGitChecked(worktree, ["merge", "--no-ff", sourceBranch])
-  if (!mergeResult.success) {
-    await runGitChecked(worktree, ["merge", "--abort"])
+
+  const mergeTree = await runGitChecked(repoDir, ["merge-tree", "--write-tree", "--messages", targetBranch, sourceBranch])
+  if (!mergeTree.success) {
+    // merge-tree 退出码 1 = 冲突；其余为分支缺失等真实错误
+    if (mergeTree.exitCode !== 1) {
+      throw new Error(`无法试算 "${sourceBranch}" → "${targetBranch}" 的合并：${mergeTree.stderr}`)
+    }
     return { success: false, conflict: true }
+  }
+  const treeOid = mergeTree.stdout.split("\n")[0].trim()
+  if (!treeOid) throw new Error("merge-tree 未返回树对象，无法生成合并提交。")
+
+  const targetOid = (await runGit(repoDir, ["rev-parse", targetBranch])).trim()
+  const sourceOid = (await runGit(repoDir, ["rev-parse", sourceBranch])).trim()
+  if (!targetOid || !sourceOid) {
+    throw new Error(`无法解析分支 OID：target="${targetOid}" source="${sourceOid}"`)
+  }
+  const commitOid = (await runGit(repoDir, [
+    "commit-tree", treeOid, "-p", targetOid, "-p", sourceOid, "-m", `Merge branch '${sourceBranch}'`,
+  ])).trim()
+  if (!commitOid) throw new Error("git commit-tree 失败：无法创建合并提交。")
+
+  const updateRef = await runGitChecked(repoDir, ["update-ref", `refs/heads/${targetBranch}`, commitOid, targetOid])
+  if (!updateRef.success) {
+    throw new Error(`基础分支 "${targetBranch}" 已被并发推进，合并提交未写入（update-ref 旧值校验失败）：${updateRef.stderr}`)
   }
   return { success: true, conflict: false }
 }

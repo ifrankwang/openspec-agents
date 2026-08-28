@@ -525,7 +525,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       const r = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(r).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
-      expect(fakeGit.mergedBranches).toContain("task-group/agent-submit/1")
+      expect(fakeGit.mergeCommitBranches).toContain("task-group/agent-submit/1")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -676,7 +676,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       const r1 = await complete_task_group.execute({ change_id: CID }, orch)
       expect(r1).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
-      expect(fakeGit.mergedBranches).toContain("task-group/agent-submit/1")
+      expect(fakeGit.mergeCommitBranches).toContain("task-group/agent-submit/1")
 
       // 第二次调用：completed_at 已写 → 命中门禁抛错而非 merge 失败
       const err = await complete_task_group.execute({ change_id: CID }, orch).catch((e: Error) => e)

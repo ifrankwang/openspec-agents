@@ -44,9 +44,25 @@ export class FakeGitRunner implements GitRunner {
   failCommit = false
   /** 强制 runChecked 侧 worktree remove 失败（收尾清理补救链测试用）。 */
   failWorktreeRemove = false
+  /** merge-base --is-ancestor 结果：true = 源分支已并入目标（收尾重试幂等场景）。 */
+  sourceIsAncestor = false
+  /** merge-tree 冲突注入（一次性）：true 时下一次 merge-tree 返回退出码 1。 */
+  mergeTreeConflictOnNext = false
+  /** 分支 tip oid（rev-parse <branch> 与 update-ref CAS 旧值校验共用）；未配置时取 defaultBranchOid。 */
+  branchOids = new Map<string, string>()
+  defaultBranchOid = "abc123def456"
+  /** update-ref 成功记录（含 CAS 旧值），收尾合并推进断言用。 */
+  refUpdates: { ref: string; newOid: string; oldOid: string }[] = []
+  /** commit-tree 调用记录（tree/parents/message），合并提交双父断言用。 */
+  commitTreeCalls: { tree: string; parents: string[]; message: string }[] = []
+  /** commit-tree 消息命中 "Merge branch '<branch>'" 时记录分支名，收尾合并断言用。 */
+  mergeCommitBranches: string[] = []
+  /** 结构化调用记录（run/runChecked 通用），断言某命令是否以特定目录为目标。 */
+  callSites: { dir: string; args: string[]; checked: boolean }[] = []
 
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
+    this.callSites.push({ dir: worktree, args, checked: false })
     const cmd = args[0]
     const rest = args.slice(1)
 
@@ -89,7 +105,10 @@ export class FakeGitRunner implements GitRunner {
         this.headIdx++
         return sha
       }
-      return "abc123def456"
+      // 分支/ref 名直查（收尾合并 CAS 旧值与源 tip 解析）；未配置回退缺省 oid
+      const refName = rest[0] && !rest[0].startsWith("-") ? rest[0].replace(/^refs\/heads\//, "") : ""
+      if (refName && this.branchOids.has(refName)) return this.branchOids.get(refName)!
+      return this.defaultBranchOid
     }
 
     if (cmd === "write-tree") {
@@ -100,6 +119,15 @@ export class FakeGitRunner implements GitRunner {
     if (cmd === "commit-tree") {
       const sha = `poll${String(this.commitCount++).padStart(4, "0")}0000000000000000000000000000`
       this.commitShas.push(sha)
+      const parents: string[] = []
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === "-p") parents.push(rest[i + 1])
+      }
+      const msgIdx = rest.indexOf("-m")
+      const message = msgIdx >= 0 ? rest[msgIdx + 1] : ""
+      this.commitTreeCalls.push({ tree: rest[0], parents, message })
+      const merged = message.match(/^Merge branch '(.+)'$/)
+      if (merged) this.mergeCommitBranches.push(merged[1])
       return sha
     }
     if (cmd === "diff") {
@@ -132,24 +160,25 @@ export class FakeGitRunner implements GitRunner {
   async runChecked(
     worktree: string,
     args: string[]
-  ): Promise<{ success: boolean; stdout: string; stderr: string }> {
+  ): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
     this.callLog.push(`checked:${args.join(" ")}`)
+    this.callSites.push({ dir: worktree, args, checked: true })
     const cmd = args[0]
 
     if (cmd === "diff") {
-      if (this.failDiff) return { success: false, stdout: "", stderr: "fatal: diff 失败" }
+      if (this.failDiff) return { success: false, stdout: "", stderr: "fatal: diff 失败", exitCode: 1 }
       // 工具检查点增量检测（detectChanges）走 `<range>..HEAD` 形态；避免误撞既有 diffOut 恒返回逻辑
       const rangeArg = args.find((a) => a.endsWith("..HEAD"))
       if (args.includes("--name-only") && rangeArg) {
         const out = this.diffNameOnlyByRange.get(rangeArg) ?? this.diffNameOnlyDefault
-        return { success: true, stdout: out, stderr: "" }
+        return { success: true, stdout: out, stderr: "", exitCode: 0 }
       }
-      return { success: true, stdout: this.diffOut, stderr: "" }
+      return { success: true, stdout: this.diffOut, stderr: "", exitCode: 0 }
     }
     if (cmd === "status" && args.includes("--porcelain")) {
-      if (this.failStatus) return { success: false, stdout: "", stderr: "fatal: status 失败" }
+      if (this.failStatus) return { success: false, stdout: "", stderr: "fatal: status 失败", exitCode: 1 }
       if (this.statusPorcelainOutput.has(worktree)) {
-        return { success: true, stdout: this.statusPorcelainOutput.get(worktree), stderr: "" }
+        return { success: true, stdout: this.statusPorcelainOutput.get(worktree)!, stderr: "", exitCode: 0 }
       }
     }
 
@@ -171,52 +200,81 @@ export class FakeGitRunner implements GitRunner {
         (useBranchFlag && branch.startsWith("-")) ||
         /@{/.test(branch)
       return invalid
-        ? { success: false, stdout: "", stderr: `fatal: '${ref}' is not a valid branch name` }
-        : { success: true, stdout: "", stderr: "" }
+        ? { success: false, stdout: "", stderr: `fatal: '${ref}' is not a valid branch name`, exitCode: 1 }
+        : { success: true, stdout: "", stderr: "", exitCode: 0 }
+    }
+
+    // 收尾裸合并三件套（mergeBranchToTarget）：is-ancestor 幂等检查 / merge-tree 内存试算 / update-ref CAS 推进
+    if (cmd === "merge-base" && args[1] === "--is-ancestor") {
+      return this.sourceIsAncestor
+        ? { success: true, stdout: "", stderr: "", exitCode: 0 }
+        : { success: false, stdout: "", stderr: "", exitCode: 1 }
+    }
+    if (cmd === "merge-tree") {
+      if (this.mergeTreeConflictOnNext) {
+        this.mergeTreeConflictOnNext = false
+        return { success: false, stdout: "", stderr: "CONFLICT (content): Merge conflict in stub.txt", exitCode: 1 }
+      }
+      const sha = `tree${String(this.treeCount++).padStart(4, "0")}0000000000000000000000000000`
+      this.treeShas.push(sha)
+      return { success: true, stdout: sha, stderr: "", exitCode: 0 }
+    }
+    if (cmd === "update-ref") {
+      const ref = args[1]
+      const newOid = args[2]
+      const oldOid = args[3]
+      const branch = ref.replace(/^refs\/heads\//, "")
+      const current = this.branchOids.get(branch) ?? this.defaultBranchOid
+      if (oldOid !== current) {
+        return { success: false, stdout: "", stderr: `cannot lock ref '${ref}': is at ${current} but expected ${oldOid}`, exitCode: 1 }
+      }
+      this.branchOids.set(branch, newOid)
+      this.refUpdates.push({ ref, newOid, oldOid })
+      return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
 
     if (cmd === "merge") {
       if (this.forceMergeFailure) {
-        return { success: false, stdout: "", stderr: "merge failed" }
+        return { success: false, stdout: "", stderr: "merge failed", exitCode: 1 }
       }
       if (this.mergeConflictOnNext) {
         this.mergeConflictOnNext = false
-        return { success: false, stdout: "", stderr: "merge conflict" }
+        return { success: false, stdout: "", stderr: "merge conflict", exitCode: 1 }
       }
       this.mergedBranches.push(args[args.length - 1])
-      return { success: true, stdout: "", stderr: "" }
+      return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
 
     if (cmd === "status") {
       if (args.some((a) => a.startsWith("openspec"))) {
-        return { success: true, stdout: this.worktreeOpenspecDirty.has(worktree) ? "M  openspec/changes/cid/tasks.md" : "", stderr: "" }
+        return { success: true, stdout: this.worktreeOpenspecDirty.has(worktree) ? "M  openspec/changes/cid/tasks.md" : "", stderr: "", exitCode: 0 }
       }
-      return { success: true, stdout: this.dirtyPaths.has(worktree) ? "M  some-file.txt" : "", stderr: "" }
+      return { success: true, stdout: this.dirtyPaths.has(worktree) ? "M  some-file.txt" : "", stderr: "", exitCode: 0 }
     }
     if (cmd === "commit") {
-      if (this.failCommit) return { success: false, stdout: "", stderr: "fatal: commit 失败" }
+      if (this.failCommit) return { success: false, stdout: "", stderr: "fatal: commit 失败", exitCode: 1 }
       // 模拟真实 git：commit 成功清空该 worktree 的脏状态，防止「测试绿但真实行为已变」的假阴性
       this.worktreeOpenspecDirty.delete(worktree)
       this.dirtyPaths.delete(worktree)
-      return { success: true, stdout: "", stderr: "" }
+      return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
     if (cmd === "add") {
-      if (this.failAdd) return { success: false, stdout: "", stderr: "fatal: add 失败" }
-      return { success: true, stdout: "", stderr: "" }
+      if (this.failAdd) return { success: false, stdout: "", stderr: "fatal: add 失败", exitCode: 1 }
+      return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
-    if (cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "" }
+    if (cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "", exitCode: 0 }
 
     if (cmd === "worktree" && args[1] === "remove") {
-      if (this.failWorktreeRemove) return { success: false, stdout: "", stderr: "fatal: worktree remove 失败" }
+      if (this.failWorktreeRemove) return { success: false, stdout: "", stderr: "fatal: worktree remove 失败", exitCode: 1 }
       this.worktrees.delete(args[2])
-      return { success: true, stdout: "", stderr: "" }
+      return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
 
-    if (cmd === "worktree" && args[1] === "prune") return { success: true, stdout: "", stderr: "" }
+    if (cmd === "worktree" && args[1] === "prune") return { success: true, stdout: "", stderr: "", exitCode: 0 }
 
-    if (cmd === "branch" && args[1] === "-D") return { success: true, stdout: "", stderr: "" }
+    if (cmd === "branch" && args[1] === "-D") return { success: true, stdout: "", stderr: "", exitCode: 0 }
 
-    return { success: true, stdout: "", stderr: "" }
+    return { success: true, stdout: "", stderr: "", exitCode: 0 }
   }
 }
 

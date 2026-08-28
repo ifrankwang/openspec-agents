@@ -774,8 +774,8 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
       return [
         `- **status**: blocked`,
         `- **merge_conflict**: true`,
-        `- **说明**: 合并到 "${mergeTarget}" 时发生冲突，已中止合并。`,
-        `- **处理**: 请手动在目标分支解决冲突后完成合并 (git merge ${branchName})，完成后重新调 opx_orch_complete_task_group 完成收尾。worktree 与分支已保留。`,
+        `- **说明**: 合并到 "${mergeTarget}" 时发生冲突，未产生任何变更（分支引用未动，无半成品合并）。`,
+        `- **处理**: 请自行执行 \`git checkout ${mergeTarget} && git merge ${branchName}\` 解决冲突并提交，完成后重新调用 opx_orch_complete_task_group 完成收尾（重调时工具会自动识别已合并并继续）。worktree 与分支已保留。`,
       ].join("\n")
     }
   }

@@ -380,7 +380,7 @@ describe("gap12 detectMainRepoPollution 抛错时 status 容错", () => {
           }
           return ""
         },
-        async runChecked() { return { success: true, stdout: "", stderr: "" } },
+        async runChecked() { return { success: true, stdout: "", stderr: "", exitCode: 0 } },
       }
       __setGitRunner(boomRunner)
       // 修复前此处会抛错（git.ts:208 runGit 无捕获）；修复后返回 null 正常渲染
