@@ -1,7 +1,7 @@
 import path from "path"
 import { rmdir } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
-import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS } from "../types.ts"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
@@ -135,8 +135,9 @@ function firstUnpassedReviewStep(item: WorkItem, workflow: LoadedWorkflow): stri
  * simple 分支（mode === "simple"，3.2）：无 analyze / verify_* step，task_analysis / dev_impl 均落
  *   in_progress/implement（task_analysis 重置 task children 全 todo，dev_impl 保留既有进度）；review 落
  *   review/quality_review——implement 置 passed、quality_review 的 failed tag 删除回 pending（passed 保留）、
- *   task children 缺省 done；reset_steps / review_layer 参数在 simple 下接受但空操作（值域校验不变，
- *   simple 无对应 verify step 可操作，文档标注无效）。
+ *   task children 缺省 done；reset_steps 按模式生效（simple 仅接受 quality_review，含该值时清空
+ *   quality_review 全部 tags——passed 也清，强制重审正是该参数的目的，清空后引擎重派该 step 审查者）；
+ *   review_layer 在 simple 下无对应子层（仅 quality_review 单层），接受但不生效，init 返回体输出警告。
  */
 function applyRecoveryState(
   item: WorkItem,
@@ -176,7 +177,12 @@ function applyRecoveryState(
         if (item.tags[key] !== "passed") delete item.tags[key]
       }
     }
-    // reset_steps / review_layer 在 simple 下接受但空操作（值域校验在 assertValidRecovery 不变）
+    // reset_steps（simple 模式仅 quality_review）：含该值时清空该 step 全部 tags（passed 也清——
+    // 强制重审正是该参数的目的，含「已通过但任务验证/裁定遗漏」场景），tag 清空后引擎重派该 step 审查者
+    if (((recovery?.reset_steps ?? []) as string[]).includes("quality_review")) {
+      clearStepTags(item, "quality_review")
+    }
+    // review_layer 在 simple 下无对应子层，接受但不生效（init 返回体对该组合输出警告）
     item.currentStep = "quality_review"
     syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
     return
@@ -241,8 +247,10 @@ function applyRecoveryState(
  * - phase 必须为合法恢复阶段（task_analysis/dev_impl/review），缺失/非法即抛错并列出合法值；
  * - review_layer 必须为合法子层（tool/task/quality），非法即抛错；
  * - review_layer 仅当 phase=review 时允许存在，其余 phase 组合复用既有组合错误消息；
- * - reset_steps 必须为合法 verify step（verify_tool/verify_task/verify_quality），非空数组，
- *   仅当 phase=review 时允许存在，且与 review_layer 互斥（二者都操纵哪些 review step 通过）。
+ * - reset_steps 必须为非空数组，仅当 phase=review 时允许存在，且与 review_layer 互斥
+ *   （二者都操纵哪些 review step 通过）。reset_steps 的 step 值域按模式生效（full 仅
+ *   verify_tool/verify_task/verify_quality，simple 仅 quality_review），由
+ *   assertValidResetStepValues 在 state 读取后做模式感知校验——本函数仅做与模式无关的组合校验。
  */
 function assertValidRecovery(recovery: InitParams["recovery"]): void {
   if (recovery === undefined) return
@@ -267,14 +275,28 @@ function assertValidRecovery(recovery: InitParams["recovery"]): void {
       throw new Error("reset_steps 与 review_layer 互斥，不可同时使用。")
     }
     if (recovery.reset_steps.length === 0) {
-      throw new Error("reset_steps 不能为空数组，请至少指定一个 verify step。")
+      throw new Error("reset_steps 不能为空数组，请至少指定一个审查 step。")
     }
-    for (const stepId of recovery.reset_steps) {
-      if (!(REVIEW_VERIFY_STEPS as readonly string[]).includes(stepId)) {
-        throw new Error(
-          `reset_steps 中的 step "${stepId}" 不合法，合法值：${REVIEW_VERIFY_STEPS.join("、")}。传入值："${stepId}"。`
-        )
-      }
+  }
+}
+
+/**
+ * reset_steps 值域的模式感知校验（state 读取/固化后调用——有效模式 = state.mode ?? "full"）：
+ * - full 模式仅接受 verify_tool/verify_task/verify_quality；
+ * - simple 模式仅接受 quality_review；
+ * 跨模式值抛错并列出当前模式的合法值。phase/review_layer/组合校验在 assertValidRecovery 前置
+ * （错误早于任何状态变更且不落盘），值域校验依赖 state.mode 故后置到 state 读取之后——
+ * state 读取不是状态变更，该原则不破坏。
+ */
+function assertValidResetStepValues(recovery: InitParams["recovery"], mode: WorkflowMode): void {
+  if (!recovery?.reset_steps?.length) return
+  const valid = mode === "simple" ? SIMPLE_REVIEW_STEPS : REVIEW_VERIFY_STEPS
+  for (const stepId of recovery.reset_steps) {
+    if (!(valid as readonly string[]).includes(stepId)) {
+      throw new Error(
+        `reset_steps 中的 step "${stepId}" 不属于当前模式（${mode}）的审查 step，` +
+        `合法值：${valid.join("、")}。传入值："${stepId}"。`
+      )
     }
   }
 }
@@ -389,6 +411,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     state.isolationNamespace = state.isolationNamespace || generateIsolationNamespace(state.changeId)
   }
 
+  // reset_steps 值域的模式感知校验：位于 state 读取/固化之后（有效模式 = state.mode ?? "full"，
+  // 与 applyRecoveryState 消费的生效模式一致）、一切状态变更与落盘之前，跨模式值报错不落盘
+  assertValidResetStepValues(args.recovery, state.mode ?? "full")
+
   // 按 tasks.md 构造全部任务组的 task WorkItem（单轨：workItems 为唯一事实源）
   for (const group of parsedGroups) {
     const isCurrent = group.id === args.task_group_id
@@ -491,6 +517,11 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   const parts = ["编排会话已初始化。"]
   if (args.recovery) parts.push(`已恢复到 ${args.recovery.phase} 阶段。`)
   if (modeSwitchNote) parts.push(modeSwitchNote)
+  // review_layer 在 simple 模式下无对应子层（仅 quality_review 单层审查），该参数接受但不生效：
+  // 返回体显式警告，避免调用方误以为已按子层恢复
+  if (args.recovery?.review_layer && (state.mode ?? "full") === "simple") {
+    parts.push("\n\n⚠️ simple 模式无 review 子层（仅 quality_review 单层审查），recovery.review_layer 参数未生效。")
+  }
   return parts.join("")
 }
 

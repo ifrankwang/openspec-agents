@@ -20,9 +20,13 @@ export type BuildPhaseTarget = typeof BUILD_PHASE_TARGETS[number]
 export const REVIEW_LAYERS = ["tool", "task", "quality"] as const
 export type ReviewLayer = typeof REVIEW_LAYERS[number]
 
-/** review 三个验证 step 合法值（recovery.reset_steps 值域）。 */
+/** review 三个验证 step 合法值（recovery.reset_steps 在 full 模式的值域）。 */
 export const REVIEW_VERIFY_STEPS = ["verify_tool", "verify_task", "verify_quality"] as const
 export type ReviewVerifyStep = typeof REVIEW_VERIFY_STEPS[number]
+
+/** simple 模式 review 合并审查 step 合法值（recovery.reset_steps 在 simple 模式的值域）。 */
+export const SIMPLE_REVIEW_STEPS = ["quality_review"] as const
+export type SimpleReviewStep = typeof SIMPLE_REVIEW_STEPS[number]
 export type OrchestrateStatus = "not_started" | "in_progress" | "completed"
 export type DimensionVerdict = "pending" | "passed" | "failed"
 export type QualityLayerProgress = Record<ReviewDimension, DimensionVerdict>

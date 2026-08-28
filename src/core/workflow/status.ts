@@ -717,6 +717,11 @@ function renderAnalyzeBlockers(item: WorkItem): string[] {
 /** implement step：developer 待修复 children（仅 todo 态：review 态由对应 reviewer 复核、豁免申请走待裁定区块）。 */
 function renderDeveloperChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
   const lines: string[] = []
+  // 已处理 blocker 的用户确认留痕：dev 凭该记录将人工执行/环境不可验证任务重新列入
+  // completed_task_ids 申报（full 模式下 architect 代为 resolve 后，dev 在 implement 视图
+  // 读取用户确认内容——凭留痕申报的依据链在此闭合）。置于待修复清单早退之前，无待修复
+  // issue 时留痕仍渲染。
+  lines.push(...renderBlockerTrail(item, BLOCKER_TRAIL_TITLE_DEV))
   // 仅 issue child 进入修复清单（task child 不得混入 issue 渲染）
   const toFix = issueChildrenOf(item).filter((c) => isAgentOwnedIssue(c, ctxAgent))
   if (toFix.length === 0) return lines
@@ -928,6 +933,29 @@ function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctx
   return lines.join("\n")
 }
 
+/** blocker 留痕区块标题（审查者视角）：任务验证视图的申报核验依据口径。 */
+const BLOCKER_TRAIL_TITLE_REVIEW = "## Blocker 留痕（人工/不可验证任务的申报依据）"
+/** blocker 留痕区块标题（开发者视角）：已处理 blocker 的用户确认记录，dev 凭记录重新申报完成。 */
+const BLOCKER_TRAIL_TITLE_DEV = "## Blocker 留痕（已处理 blocker 的用户确认，凭记录申报完成）"
+
+/** blocker 留痕区块（任务验证视图 verify_task / quality_review 与 developer implement 视图共用同一实现）：
+ *  渲染已 resolved 且带用户答复留痕的 blocker 摘要（task_id / 描述 / 用户确认）——「人工执行/
+ *  环境不可验证」任务经 blocker 上报、用户确认留痕后由开发者凭记录重新申报，审查者核验该留痕
+ *  后方可经 verified_tasks 确认（人工任务协议的申报依据）。复用 readBlockers 读取，无留痕不渲染；
+ *  经 title 参数区分视角措辞（审查者核验申报 / 开发者凭记录申报）。 */
+function renderBlockerTrail(item: WorkItem, title: string): string[] {
+  const resolved = readBlockers(item).filter((b) => b.status === "resolved" && b.userResponse)
+  if (resolved.length === 0) return []
+  const lines = [title, ""]
+  for (const b of resolved) {
+    lines.push(`- Blocker #${b.id}${b.taskId ? ` | Task #${b.taskId}` : ""} | ${b.category}`)
+    lines.push(`  - 描述：${b.description}`)
+    lines.push(`  - 用户确认：${b.userResponse}`)
+  }
+  lines.push("")
+  return lines
+}
+
 /** verify_task step：task children 待验证列表 + task 层 issue 主区块 + 调用者可裁定的豁免申请（待裁定）。 */
 function renderTaskChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
   const lines: string[] = []
@@ -937,6 +965,7 @@ function renderTaskChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: Exe
     for (const t of pendingTasks) lines.push(renderTaskItem(t))
     lines.push("")
   }
+  lines.push(...renderBlockerTrail(item, BLOCKER_TRAIL_TITLE_REVIEW))
   const issues = issueChildrenOf(item)
   const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
   lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
@@ -971,6 +1000,7 @@ function renderMergedChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: E
     for (const t of pendingTasks) lines.push(renderTaskItem(t))
     lines.push("")
   }
+  lines.push(...renderBlockerTrail(item, BLOCKER_TRAIL_TITLE_REVIEW))
   const issues = issueChildrenOf(item)
   const own = issues.filter((c) => isAgentOwnedIssue(c, ctxAgent))
   lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))

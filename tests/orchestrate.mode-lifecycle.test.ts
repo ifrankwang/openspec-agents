@@ -5,7 +5,8 @@
  * - 3.2 applyRecoveryState 模式感知：task_analysis / dev_impl 均落 in_progress/implement
  *   （task_analysis 重置 task children 全 todo，dev_impl 保留既有进度）；review 落
  *   review/quality_review——implement passed、quality_review failed tag 删除回 pending（passed 保留）、
- *   task children 缺省 done；reset_steps / review_layer 在 simple 下接受但空操作（值域校验不变）
+ *   task children 缺省 done；reset_steps 按模式生效（simple 仅 quality_review，含该值时清空
+ *   该 step 全部 tags），review_layer 在 simple 下接受但不生效（返回体警告）
  * - 收尾门禁保留：worktree 干净、blocking issue 终态、task 终态、blocker resolved
  * - 合并冲突返回 blocked 后 dev 解决冲突再重调 complete 完成收尾（spec:workflow-mode#收尾裸合并）
  */
@@ -191,27 +192,59 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
   })
 })
 
-describe("3.2 reset_steps / review_layer 在 simple 下空操作（值域校验不变）", () => {
-  test("reset_steps: [verify_tool] 接受但空操作：无 verify_tool tag 产生、currentStep 仍 quality_review", async () => {
+describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
+  test("reset_steps: [quality_review] → quality_review tags 清空（passed 也清）、currentStep 落 quality_review、引擎重派 reviewer", async () => {
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
+      // 注入「已通过但任务验证遗漏」的死锁残留态：quality_review passed + task child 卡 review
+      rewriteItem(wt, (item) => {
+        item.phase = "review"
+        item.currentStep = "quality_review"
+        item.tags = { "implement:openspec-developer": "passed", "quality_review:openspec-reviewer": "passed" }
+        item.children.find((c: any) => c.id === "1").phase = "review"
+      })
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } },
+        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["quality_review"] } },
         makeOrchCtx(wt),
       )
       const item = taskItemOf(wt)
       expect(item.currentStep).toBe("quality_review")
-      expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
+      expect(item.tags["implement:openspec-developer"]).toBe("passed")
+      // reset_steps 生效：quality_review 的 passed tag 也被清空（强制重审）
+      expect(item.tags["quality_review:openspec-reviewer"]).toBeUndefined()
       expect(Object.keys(item.tags).some((k) => k.startsWith("verify_"))).toBe(false)
+      // tag 清空后引擎重派 reviewer（recommend）
+      const { recommendForItem } = await import("../src/core/workflow/engine")
+      const rec = recommendForItem(item, SIMPLE_WF)
+      expect(rec.status).toBe("recommend")
+      expect(rec.stepId).toBe("quality_review")
+      expect(rec.agents).toContain("openspec-reviewer")
     } finally { teardown(root) }
   })
 
-  test("review_layer: quality 接受但空操作：无 verify_tool/verify_task passed tag", async () => {
+  test("simple 下传 full 模式的 reset_steps 值 → 模式不匹配报错", async () => {
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await init.execute(
+      const err = await init
+        .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } }, makeOrchCtx(wt))
+        .catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/verify_tool.*不属于当前模式（simple）的审查 step/)
+      const errQuality = await init
+        .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_quality"] } }, makeOrchCtx(wt))
+        .catch((e: Error) => e)
+      expect(errQuality).toBeInstanceOf(Error)
+      expect(errQuality.message).toMatch(/verify_quality.*不属于当前模式（simple）的审查 step/)
+    } finally { teardown(root) }
+  })
+
+  test("review_layer: quality 接受但不生效，返回体含警告", async () => {
+    const { root, wt } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      const out = await init.execute(
         { change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } },
         makeOrchCtx(wt),
       )
@@ -219,10 +252,13 @@ describe("3.2 reset_steps / review_layer 在 simple 下空操作（值域校验�
       expect(item.currentStep).toBe("quality_review")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
+      // 返回体显式警告：simple 无 review 子层，该参数未生效
+      expect(out).toContain("⚠️")
+      expect(out).toContain("review_layer 参数未生效")
     } finally { teardown(root) }
   })
 
-  test("非法 reset_steps 值仍报错（值域校验不变）", async () => {
+  test("非法 reset_steps 值仍报错（simple 模式值域校验）", async () => {
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -230,7 +266,7 @@ describe("3.2 reset_steps / review_layer 在 simple 下空操作（值域校验�
         .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["bogus"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/reset_steps 中的 step "bogus" 不合法/)
+      expect(err.message).toMatch(/reset_steps 中的 step "bogus" 不属于当前模式（simple）/)
     } finally { teardown(root) }
   })
 

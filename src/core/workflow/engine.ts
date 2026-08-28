@@ -9,6 +9,7 @@ import { WORK_ITEM_PHASES, BLOCKING_SEVERITIES, stepAgentIds, EXEMPT_REQUEST_KEY
 import type { LoadedWorkflow } from "./loader.ts"
 import { tagKey } from "./types.ts"
 import { reviewLayerFromMetadata, readIssueSource } from "../constants.ts"
+import { taskChildrenOf } from "../task-children.ts"
 
 const TERMINAL_PHASES: WorkItemPhase[] = ["done", "cancelled"]
 
@@ -555,6 +556,19 @@ export function recommendForItem(item: WorkItem, workflow: LoadedWorkflow): Engi
     // 避免"step 已通过"误导造成无人再触发迁移的静默死锁。
     const gateBlock = forwardAdvanceBlockReason(item, workflow, current.step)
     if (gateBlock) {
+      // 任务验证补交推导：review 阶段 step 全 passed 但门禁被 review 态 task child 拦截（任务验证
+      // 归属 step——verify_task/quality_review——passed 提交漏带 verified_tasks，或 full 模式下游
+      // 收尾 step 推进到 done 时暴露）时，返回该 step 全部 agent 由其经 opx_agent_submit 补交
+      // verified_tasks 覆盖全部待验证任务后推进（与 submit 重复提交守卫的补交放行条件同源：
+      // 仅携带 verified_tasks + 存在 review 态 task child），不再恒返回 agents=[] 形成静默死锁。
+      if (current.phaseName === "review" && taskChildrenOf(item).some((c) => c.phase === "review")) {
+        return {
+          status: "blocked",
+          stepId: current.step.id,
+          agents: stepAgentIds(current.step),
+          blockedReason: `${gateBlock}需该 step 审查者经 opx_agent_submit 补交 verified_tasks（覆盖全部待验证任务）后推进。`,
+        }
+      }
       return {
         status: "blocked",
         stepId: current.step.id,

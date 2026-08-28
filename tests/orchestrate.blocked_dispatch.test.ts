@@ -245,7 +245,12 @@ describe("recovery reset_steps 重置 review tag", () => {
       )
       await expectError(
         init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["implement"] } } as any, ctx.orch),
-        /reset_steps 中的 step "implement" 不合法/
+        /reset_steps 中的 step "implement" 不属于当前模式/
+      )
+      // full 模式传 simple 模式的 quality_review → 模式不匹配报错
+      await expectError(
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, ctx.orch),
+        /quality_review.*不属于当前模式（full）的审查 step/
       )
       // 抛错零变更：仍停留在 analyze
       expect(readItem(wt, CID).currentStep).toBe("analyze")

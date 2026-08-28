@@ -1,4 +1,4 @@
-import type { BuildPhaseTarget, ReviewLayer, ReviewVerifyStep, WorkflowMode } from "../types.ts"
+import type { BuildPhaseTarget, ReviewLayer, ReviewVerifyStep, SimpleReviewStep, WorkflowMode } from "../types.ts"
 
 export interface ToolContext {
   worktree: string
@@ -24,9 +24,11 @@ export interface InitParams {
     phase: BuildPhaseTarget
     review_layer?: ReviewLayer
     reopenIssues?: boolean
-    /** 重置指定 verify step 的审查 tags 为 pending（仅 phase=review 时有效，与 review_layer 互斥），
-     *  恢复后 currentStep 落在第一个未全部通过的 verify step，可能早于被重置的 step。 */
-    reset_steps?: ReviewVerifyStep[]
+    /** 重置指定审查 step 的审查 tags 为 pending（仅 phase=review 时有效，与 review_layer 互斥），
+     *  恢复后 currentStep 落在第一个未全部通过的审查 step，可能早于被重置的 step。
+     *  值按模式生效：full 模式为 verify_tool/verify_task/verify_quality，simple 模式为 quality_review
+     *  （跨模式值在运行时报错）。 */
+    reset_steps?: ReviewVerifyStep[] | SimpleReviewStep[]
   }
   /** 流程模式（full/simple）：首次新建编排状态时固化；已开始的变更仅在切组（其他任务组均已完成
    *  或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）

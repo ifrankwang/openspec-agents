@@ -231,7 +231,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(taskItemOf(wt).currentStep).toBe("verify_task")
 
       await agent_submit.execute(
-        { change_id: CID, step_id: "verify_task", verdict: "passed" },
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] },
         makeCtx("openspec-reviewer-task", wt)
       )
       expect(taskItemOf(wt).currentStep).toBe("verify_quality")
@@ -696,7 +696,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
         await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
-      await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed" }, makeCtx("openspec-reviewer-task", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
 
       // style reviewer 报 issue（metadata.source=openspec-reviewer-style）并 failed
       await agent_submit.execute(
@@ -2119,7 +2119,7 @@ describe("issue 复核（recheck）端到端", () => {
       await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
-      await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed" }, makeCtx("openspec-reviewer-task", wt))
+      await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
 
       // style reviewer 报 quality issue 并 failed → 回 implement
       await agent_submit.execute(

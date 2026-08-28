@@ -46,7 +46,8 @@ phases:
           - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；Info 级 issue 不阻塞提交，无需申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由（commit message 可补充），并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复；被驳回后须移除压制并真实修复"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
-          - "提交 opx_agent_submit：passed 时存在未完成或被驳回（open/rejected）的子任务必须全部列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1），全部子任务已验证时可省略；不可修 issue 申请豁免（exempt_issue_ids）"
+          - "blocker 上报后经 question 向用户确认处理方式，确认结果经 blocker_updates（blocker_id + user_response）上报置 resolved；人工执行任务凭用户确认留痕列入 completed_task_ids 重新提交（申报依据为 blocker 记录，不得凭空申报）"
+          - "提交 opx_agent_submit：passed 提交前须将全部已完成（含被驳回后修复的）子任务列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1）申报，全部子任务已验证时可省略；无法完成或人工执行的任务不得虚报，应经 verdict=failed + blocker 上报后凭留痕申报；不可修 issue 申请豁免（exempt_issue_ids）"
         constraints:
           - "禁用 edit/write 修改 `{{worktree_path}}/openspec/changes/` 下任何文档（spec/design/tasks/clarify）；唯一例外：所提交 fixed_issue_ids 中某 issue 的 file 字段指向该目录下文档时，仅允许按该 issue 的要求修改对应文档，不得扩大范围；本约束为提示词级约束，工具层不校验实际改动的文件"
           - "执行边界默认整个 worktree（无 analyze 环节，不生成边界白名单）"
@@ -83,6 +84,7 @@ phases:
           - "对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）"
           - "审查变更 diff 与 git log，识别变更中新增的压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）：视为豁免申请，核对 dev 是否已在压制处代码注释或 commit message 说明理由并申报豁免；未申报或理由不成立 → 报 issue（file=压制位置、line=压制行、rule=被压制规则名，severity 至少 Low，description/suggestion 写明判定门槛与理由），要求移除压制真实修复或补申报；理由成立 → 经 exempt_adjudications 裁定 dismissed"
           - "有 task 未通过时必须 verdict=failed 并经 failed_tasks 上报（task_id + reason）；passed 时不允许提供 failed_tasks"
+          - "对标注人工执行/环境不可验证的任务，核验视图 Blocker 留痕区块（resolved 且 user_response 记录用户确认）后经 verified_tasks 确认并在 validation_steps 留痕；无留痕且无法自行验证 → verdict=failed 经 failed_tasks 驳回并说明理由"
           - "报静态分析类 issue 时，rule 字段必填官方规则全名（命名格式遵循已加载的质量门类 skill 的规则导航索引），漏填将导致项目级豁免清单无法生效"
           - "报静态分析类 issue 时，description 必须含：①复现命令（非静默形态，含必要开关）；②实测数据（命中类清单/计数）；③规则默认阈值与当前项目配置对比（引用可改的配置文件路径）"
           - "按 opx_status 操作指引完成全部验证项，提交前将每项验证结果与证据填入 validation_steps 参数（未执行的项须填 skip_reason 注明原因），不得省略任何一项"

@@ -191,8 +191,8 @@ export const recoverySchema: JSONSchema = {
     reset_steps: {
       type: "array",
       description:
-        "重置指定 verify step 的通过标记为 pending（仅 phase=review 时有效，与 review_layer 互斥）。用于已 passed 但被本层遗漏复核/裁定阻塞的 review step 强制重新审查；恢复后 currentStep 落在第一个未全部通过的 verify step，可能早于被重置的 step。",
-      items: { type: "string", enum: ["verify_tool", "verify_task", "verify_quality"] },
+        "重置指定审查 step 的通过标记为 pending（仅 phase=review 时有效，与 review_layer 互斥）。用于已 passed 但被本层遗漏复核/裁定/任务验证阻塞的 review step 强制重新审查；恢复后 currentStep 落在第一个未全部通过的审查 step，可能早于被重置的 step。值按模式生效：full 模式合法值为 verify_tool/verify_task/verify_quality，simple 模式合法值为 quality_review；传入不属于当前模式的值会在运行时报错。",
+      items: { type: "string", enum: ["verify_tool", "verify_task", "verify_quality", "quality_review"] },
     },
   },
   required: ["phase"],
@@ -312,7 +312,7 @@ export const agentSubmitSchema: JSONSchema = {
     blockers: { type: "array", description: "analyze step：新增 blocker 列表", items: blockerItem },
     blocker_updates: {
       type: "array",
-      description: "analyze step：按 blocker_id 置 resolved 并记录用户答复",
+      description: "analyze / implement step：按 blocker_id 置 resolved 并记录用户答复（implement 下人工执行任务凭留痕重新申报的依据）",
       items: {
         type: "object",
         properties: {
@@ -349,12 +349,13 @@ export const agentSubmitSchema: JSONSchema = {
     },
     verified_tasks: {
       type: "array",
-      description: "verify_task step：验证通过的 task id",
+      description:
+        "verify_task / quality_review step（任务验证归属层）：逐项确认验证通过的 task id；passed 提交时 submitted task 必须被 verified_tasks/failed_tasks 全覆盖（工具强制门禁），漏带会被拒绝",
       items: { type: "string" },
     },
     failed_tasks: {
       type: "array",
-      description: "verify_task step：验证失败的 task 列表（含原因）",
+      description: "verify_task / quality_review step：验证失败的 task 列表（含原因）",
       items: taskVerifyItem,
     },
   },

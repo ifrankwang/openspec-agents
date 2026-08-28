@@ -58,6 +58,49 @@ function isSupplementOnly(params: AgentSubmitParams): boolean {
 }
 
 /**
+ * 判定本次提交是否「仅携带任务验证补交」（verified_tasks 非空，其余实质参数全空）。
+ * 供重复提交守卫的补交豁免：任务验证归属 step（verify_task/quality_review）上次 passed 提交
+ * 漏带 verified_tasks 导致 task children 卡 review 态（done 收口被拦截，见 engine
+ * recommendForItem 的 gateBlock 补交推导）时，允许仅补带 verified_tasks 重提解除阻塞；
+ * 空提交或携带其他实质参数的重复提交仍被守卫拒绝。放行须叠加「存在 review 态 task child」
+ * 条件（与引擎推导条件同源），防止放行面过宽。
+ */
+function isTaskVerificationSupplement(params: AgentSubmitParams): boolean {
+  if ((params.verified_tasks?.length ?? 0) === 0) return false
+  return (
+    (params.failed_tasks?.length ?? 0) === 0 &&
+    (params.new_children?.length ?? 0) === 0 &&
+    (params.fixed_issue_ids?.length ?? 0) === 0 &&
+    (params.exempt_issue_ids?.length ?? 0) === 0 &&
+    (params.exempt_adjudications?.length ?? 0) === 0 &&
+    (params.recheck_adjudications?.length ?? 0) === 0 &&
+    !params.boundary_expansion &&
+    (params.validation_steps?.length ?? 0) === 0 &&
+    params.test_results === undefined
+  )
+}
+
+/**
+ * 任务验证补交放行判定（重复提交守卫的豁免与必做清单门禁的跳过共用同源条件）：仅携带
+ * verified_tasks 的严格补交形态，且该 agent 在该 step 已 passed、item 存在 review 态
+ * （submitted）task child——与守卫放宽、引擎 gateBlock 补交推导条件同源。
+ * 必做门禁的跳过绑定本条件（而非仅形态判定）：首次提交（step 尚未 passed）不得借补交形态
+ * 跳过必做清单覆盖度校验——补交跳过的理由是完整审查在首次 passed 时已做过。
+ */
+function isTaskVerifySupplementAllowed(
+  item: WorkItem,
+  params: AgentSubmitParams,
+  stepId: string,
+  agent: string,
+): boolean {
+  return (
+    isTaskVerificationSupplement(params) &&
+    getStepVerdict(item, stepId, agent) === "passed" &&
+    taskChildrenOf(item).some((c) => c.phase === "review")
+  )
+}
+
+/**
  * 统一裁定一致性守卫：任一裁定参数含「驳回（rejected）」时，提交级 verdict 必须为 failed。
  * - exempt_adjudications 含 action==="rejected"（issue 回 todo 继续修复）→ verdict 必须为 failed
  * - recheck_adjudications 含 verdict==="rejected"（issue 回 todo + refix_count 递增 + 写 reject_reason）→ verdict 必须为 failed
@@ -232,9 +275,11 @@ function clearReviewVerificationTags(item: WorkItem): void {
   clearStepTags(item, "verify_quality")
 }
 
-/** blocker 提交后的 reset 助手：task children 全 todo + 清 review 层验证标记（对齐旧 resetForBlocker）。 */
+/** blocker 提交后的 reset 助手：task children 仅 todo/review 态回 todo（done 已验证不得降级，
+ *  对齐 handleImplementParams 提交时对 done 态的跳过语义）+ 清 review 层验证标记（对齐旧 resetForBlocker）。 */
 function resetTasksForBlocker(item: WorkItem): void {
   for (const child of taskChildrenOf(item)) {
+    if (child.phase === "done") continue
     child.phase = "todo"
     delete child.metadata["reject_reason"]
   }
@@ -264,16 +309,42 @@ function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
   }
 }
 
-/** implement step 参数处理：blocker（on_fail）、completed_task_ids + 覆盖门禁、self_check_results /
- *  test_results 申报存档。 */
+/** implement step 参数处理：blocker（on_fail）、blocker_updates 消费闭环 + 无未解决 blocker 门禁、
+ *  completed_task_ids + 覆盖门禁、self_check_results / test_results 申报存档。 */
 function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void {
   if (params.blocker) {
+    // 同轮组合显式拒绝（置于分支最前，先于一切写入）：blocker 分支在下方 return，同轮携带的
+    // blocker_updates 会被静默丢弃（丢失申报）。校验放行面只有分两轮：先 failed+blocker 上报新
+    // 阻塞，用户确认后下一轮再 blocker_updates + 重新提交。
+    if (params.blocker_updates?.length) {
+      throw new Error(
+        "不可在同一轮提交中同时上报新 blocker（blocker 参数）与更新旧 blocker（blocker_updates）。\n" +
+        "请分两轮处理：先以 verdict=failed + blocker 上报新阻塞；用户确认后，下一轮再携带 blocker_updates 记录答复并重新提交。"
+      )
+    }
     if (params.verdict !== "failed") {
       throw new Error("blocker 参数仅支持 verdict=failed 提交（on_fail 回退 analyze）。")
     }
     addItemBlockers(item, [params.blocker])
     resetTasksForBlocker(item)
     return
+  }
+
+  // blocker_updates 消费闭环（校验语义与 handleAnalyzeParams 一致）：按 blocker_id 置 resolved 并记录
+  // 用户答复。task 指向型 blocker（人工执行/环境不可验证任务）经用户确认留痕后，开发者凭该记录将对应
+  // 任务列入 completed_task_ids 重新申报，审查者核验留痕后方可在任务验证层确认。
+  // 位于 blocker 分支之外：blocker 是本轮上报参数（上方分支 return），blocker_updates 是后续轮次参数。
+  if (params.blocker_updates?.length) {
+    for (const u of params.blocker_updates) {
+      const blocker = itemBlockers(item).find((b) => b.id === u.blocker_id)
+      if (!blocker) throw new Error(`blocker "${u.blocker_id}" 不存在于 metadata.blockers 中。`)
+      if (blocker.status !== "awaiting_user") throw new Error(`blocker "${u.blocker_id}" 状态不是 awaiting_user，无法更新。`)
+      blocker.userResponse = u.user_response
+      blocker.status = "resolved"
+    }
+  }
+  if (params.verdict === "passed" && itemBlockers(item).some((b) => b.status !== "resolved")) {
+    throw new Error("存在未解决的 blocker，无法以 passed 提交 implement step。请先通过 blocker_updates 处理全部 blocker。")
   }
 
   const tasks = taskListOf(item)
@@ -305,7 +376,8 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
     throw new Error(
       `以下 task 处于 open/rejected 状态且未在 completed_task_ids 中：\n` +
       remaining.map((t) => `- #${t.id}(${t.status}) ${t.title}`).join("\n") +
-      `\n请将未完成的 task 列在 completed_task_ids 中，或改用 blocker 上报阻塞。`
+      `\ncompleted_task_ids 仅申报已完成可供验证的任务；无法完成或人工执行的任务不得虚报，` +
+      `应以 verdict=failed + blocker 上报（task_id 指向该任务），经用户确认后凭 blocker 留痕重新申报。`
     )
   }
 
@@ -342,9 +414,10 @@ function mergeBoundaryInto(item: WorkItem, expansion: NonNullable<AgentSubmitPar
  * - verify_tool：本次 new_children 含 Low+，或存在未终态的 Low+ tool 报源层阻塞 child
  * - verify_quality：本次 new_children 含 Low+ 且维度属于当前提交 agent，或存在未终态的 Low+ quality 报源层
  *   阻塞 child 且 dimension 属于当前提交 agent 维度（新报与遗留理由均按维度过滤，F3；报源层由 source 反推）
- * - quality_review（simple 合并审查）：本次 new_children 含 Low+，或存在未终态的 Low+ quality 报源层阻塞
- *   child（不按维度过滤——openspec-reviewer 无固定维度，对全部质量层负责；按 agentToReviewDimension 过滤
- *   会对该身份恒为 undefined 导致 failed 提交死锁）
+ * - quality_review（simple 合并审查）：本次 failed_tasks 非空，或 new_children 含 Low+，或存在未终态的
+ *   Low+ quality 报源层阻塞 child（不按维度过滤——openspec-reviewer 无固定维度，对全部质量层负责；按
+ *   agentToReviewDimension 过滤会对该身份恒为 undefined 导致 failed 提交死锁。simple 审查者合并承担任务
+ *   验证语义，failed_tasks 驳回任务与 Low+ issue 同为合法 failed 理由，与 verify_task 分支对齐）
  * - verify_cleanup：本次 new_children 含 Low+，或存在未终态的 Low+ 阻塞 child（不按维度/报源层过滤——
  *   收尾层须对全部残留阻塞负责，任何层的遗留阻塞都构成不通过理由）
  * 理由判定在 dedupeNewChildren 之后调用（F4）：传入的 newChildren 为已去重的 accepted，重复新报不构成理由。
@@ -376,11 +449,14 @@ function assertFailedHasReason(
   } else if (stepId === "quality_review") {
     // simple 合并审查 step：审查者（openspec-reviewer）不归属固定质量维度，理由判定不按
     // agentToReviewDimension 过滤（该值对 openspec-reviewer 为 undefined，按维度过滤会导致任何
-    // failed 提交都报「不存在未解决的阻塞 issue」死锁）。本次新报含 Low+ issue，或存在 quality
-    // 报源（sourcePhase === "quality"）未终态阻塞 issue，均构成不通过理由——simple 审查者对
-    // 全部质量层负责，与 full 模式 verify_quality 各维度分支互不影响。
+    // failed 提交都报「不存在未解决的阻塞 issue」死锁）。simple 审查者承担任务验证（verify_task
+    // 语义），failed_tasks 与 Low+ issue 同为合法 failed 理由：本次 failed_tasks 非空（驳回任务回退
+    // implement），或本次新报含 Low+ issue，或存在 quality 报源（sourcePhase === "quality"）未终态
+    // 阻塞 issue，均构成不通过理由——simple 审查者对全部质量层负责，与 full 模式 verify_quality
+    // 各维度分支互不影响。
     layerName = "AI 审查层"
     hasReason =
+      (params.failed_tasks?.length ?? 0) > 0 ||
       hasNewBlocking ||
       existingBlocking.some((c) => resolveChildIssueFields(c).sourcePhase === "quality")
   } else {
@@ -453,7 +529,17 @@ function handleReviewParams(
     }
   }
 
-  if (params.verified_tasks?.length || params.failed_tasks?.length) {
+  // 任务验证覆盖门禁（兜底）：verify_task / quality_review（任务验证归属 step）以 passed 提交时，
+  // 「submitted task 必须被 verified/failed 全覆盖」为无条件必查——reviewer 不得 passed 而不对任何
+  // 已申报任务表态（漏带 verified_tasks 会让 task children 卡 review 态，done 收口被拦截形成死锁）。
+  // 其余 review step 维持既有条件式（携带任一数组才进入校验）；verdict=failed 不做此强制
+  // （报 issue 回退时无须给全部任务表态）。
+  const isTaskVerifyStep = stepId === "verify_task" || stepId === "quality_review"
+  if (
+    params.verified_tasks?.length ||
+    params.failed_tasks?.length ||
+    (params.verdict === "passed" && isTaskVerifyStep)
+  ) {
     const tasks = taskListOf(item)
     const validIds = new Set(tasks.map((t) => t.id))
     const verified = normalizeTaskChildIds(params.verified_tasks ?? [], item)
@@ -476,7 +562,10 @@ function handleReviewParams(
     if (uncovered.length > 0) {
       throw new Error(
         `以下 submitted task 未被 verified_tasks 或 failed_tasks 覆盖：\n` +
-        uncovered.map((t) => `- #${t.id} ${t.title}`).join("\n")
+        uncovered.map((t) => `- #${t.id} ${t.title}`).join("\n") +
+        `\nverified_tasks 用于逐项确认已完成的任务；验证未通过的任务须以 failed_tasks 逐项驳回并设 verdict=failed 回退；` +
+        `人工执行或环境不可验证的任务不得虚报确认，应以 verdict=failed + failed_tasks 驳回，` +
+        `由开发者经 verdict=failed + blocker（task_id 指向该任务）上报、用户确认留痕后凭记录重新申报完成。`
       )
     }
     for (const id of verified) {
@@ -572,17 +661,22 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     // 重复提交守卫（仅 review step）：同 step 同 agent 已以 passed 通过后不允许重复提交；failed 允许重提
     // （回退重审期 failed tag 未被归因清空时须可重提，如 verify_task 仅 failed_tasks 驳回）。
-    // 补交豁免：仅携带裁定类参数（recheck_adjudications / exempt_adjudications，无其他实质参数）的补交放行——
-    // 上次提交漏带复核/豁免裁定导致本层 review 态 issue 阻塞门禁时（engine.blockedSupplementAgents 已推导
-    // 应补交的报源 reviewer），reviewer 可补带裁定重提解除阻塞；空提交/携带其他实质参数（含 fixed_issue_ids /
-    // exempt_issue_ids）的重复提交仍被拒绝。
+    // 补交豁免（两条对称通道，均要求严格形态——仅携带对应补交参数，无其他实质提交内容）：
+    // - 裁定补交：仅携带 recheck_adjudications / exempt_adjudications——上次提交漏带复核/豁免裁定导致
+    //   本层 review 态 issue 阻塞门禁时（engine.blockedSupplementAgents 已推导应补交的报源 reviewer），
+    //   reviewer 可补带裁定重提解除阻塞；
+    // - 任务验证补交：仅携带 verified_tasks 且存在 review 态 task child（与引擎 gateBlock 补交推导
+    //   条件同源）——任务验证归属 step 上次 passed 漏带 verified_tasks 导致 task children 卡 review
+    //   态、done 收口被拦截时，审查者可补交 verified_tasks 覆盖待验证任务后推进。
+    // 空提交或携带其他实质参数（含 fixed_issue_ids / exempt_issue_ids / new_children）的重复提交仍被拒绝。
     // 守卫在一切裁定（豁免/复核）之前执行，保证守卫拒绝时零副作用。step 归属按 stepMap 直接判定
     // （不依赖 assertSubmitRouting，保持越权 step 提交的裁定拦截语义不变）。
     const guardStepPhase = workflow.stepMap.get(params.step_id)?.phase.name
     if (
       guardStepPhase === "review" &&
       getStepVerdict(item, params.step_id, ctx.agent) === "passed" &&
-      !isSupplementOnly(params)
+      !isSupplementOnly(params) &&
+      !isTaskVerifySupplementAllowed(item, params, params.step_id, ctx.agent)
     ) {
       throw new Error(`重复提交守卫：agent "${ctx.agent}" 已在 step "${params.step_id}" 以 passed 通过，不允许重复提交。`)
     }
@@ -693,8 +787,13 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       const agentCfg = stepCfg.agents.find((a) => a.id === ctx.agent)
       handleReviewParams(item, params, newChildren, params.step_id, {
         capabilityTags: agentCfg?.capability_tags ?? [],
-        // 补交豁免（仅裁定参数，无实质提交）不重复校验必做清单覆盖度
-        skipMustDoGate: isSupplementOnly(params),
+        // 补交豁免（仅裁定参数 / 仅 verified_tasks 的任务验证补交，均无实质审查内容）不重复校验
+        // 必做清单覆盖度——完整审查在首次 passed 时已做过。任务验证补交的跳过与守卫放宽同源
+        //（isTaskVerifySupplementAllowed：已 passed 且存在 review 态 task child），首次提交
+        //（step 尚未 passed）不借补交形态跳过必做门禁。
+        skipMustDoGate:
+          isSupplementOnly(params) ||
+          isTaskVerifySupplementAllowed(item, params, params.step_id, ctx.agent),
       })
     } else if (stepPhase === "todo") {
       handleAnalyzeParams(item, params)
