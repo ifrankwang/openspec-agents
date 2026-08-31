@@ -70,6 +70,17 @@ export class FakeGitRunner implements GitRunner {
 
     if (cmd === "worktree") {
       if (rest[0] === "list") {
+        // porcelain 形态（收尾合并检出检测用）：主仓库条目始终存在，检出分支取 currentBranch；
+        // linked worktree 条目取 worktrees map。非 porcelain 形态保持旧输出（discoverDiskWorktrees 解析用）。
+        if (rest.includes("--porcelain")) {
+          const blocks = [
+            `worktree ${worktree}\nHEAD ${this.defaultBranchOid}\nbranch refs/heads/${this.currentBranch}`,
+          ]
+          for (const [p, info] of this.worktrees) {
+            blocks.push(`worktree ${p}\nHEAD ${this.defaultBranchOid}\nbranch refs/heads/${info.branch}`)
+          }
+          return blocks.join("\n\n")
+        }
         return Array.from(this.worktrees.entries())
           .map(([p, info]) => `${p} abc123 [${info.branch}]`)
           .join("\n")

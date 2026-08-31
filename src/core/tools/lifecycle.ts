@@ -1144,6 +1144,9 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   const mergeTarget = state.baseBranch
   if (branchName && !isReviewNone) {
     const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
+    if (mergeResult.blockedMessage) {
+      return [`- **status**: blocked`, mergeResult.blockedMessage].join("\n")
+    }
     if (!mergeResult.success) {
       return [
         `- **status**: blocked`,

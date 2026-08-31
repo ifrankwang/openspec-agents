@@ -1,6 +1,6 @@
 import path from "path"
 import { execFile } from "node:child_process"
-import { readFile, writeFile, stat, rm } from "node:fs/promises"
+import { readFile, writeFile, stat, rm, realpath } from "node:fs/promises"
 
 /** 判断路径是否存在于磁盘（fs 层判断，git 命令结果不作为存在性依据）。 */
 async function pathExists(p: string): Promise<boolean> {
@@ -217,30 +217,79 @@ export async function markTaskGroupCheckboxesComplete(
 }
 
 /**
- * 收尾裸合并：将任务组分支合并进基础分支，全程不触碰任何工作目录（worktreeless 底层命令）。
+ * 收尾合并：将任务组分支合并进基础分支。
  *
- * 主仓库工作区状态（当前分支、未提交改动、index）不受影响；冲突时目标分支引用未动、磁盘无半成品。
- * 序列：
+ * 先解析主仓库根（后续命令一律以主仓库根为 -C 目标，不沿用入参目录），再按目标分支的检出状态分流：
  * 1. `merge-base --is-ancestor` 幂等检查：源分支已是目标分支祖先（如人工解决冲突后重调）直接成功，
  *    不产生空合并提交；
- * 2. `merge-tree --write-tree`（需 git ≥ 2.38）内存试算合并树：退出码 1 = 冲突，直接返回；
- * 3. `commit-tree` 生成双父合并提交，`update-ref` 以试算前目标分支 oid 作旧值校验推进（CAS，防并发覆盖）。
+ * 2. 检出检测（`worktree list --porcelain`，按目标分支匹配 `branch refs/heads/<X>` 行）：
+ *    - 目标分支正被其它 linked worktree 检出，或正被主仓库检出且主仓库有未提交改动 →
+ *      返回 blockedMessage（未执行任何 git 变更动作，由上层转 blocked 文案）——
+ *      单靠 update-ref 推进分支指针会使检出方暂存区/工作区与分支引用失步（status 显示整套反向改动）；
+ *    - 目标分支正被主仓库检出且干净：仍先 `merge-tree --write-tree` 内存试算（冲突零副作用返回），
+ *      无冲突则执行真实 `git merge --no-ff`（由 git 维护检出方 index/工作区；失败时 `merge --abort`
+ *      兜底恢复后按冲突形态返回，理论上仅竞态会走到此分支）；
+ * 3. 无人检出（worktreeless 底层命令，主仓库工作区状态不受影响；冲突时目标分支引用未动、磁盘无半成品）：
+ *    `merge-tree --write-tree`（需 git ≥ 2.38）内存试算合并树：退出码 1 = 冲突，直接返回；
+ *    `commit-tree` 生成双父合并提交，`update-ref` 以试算前目标分支 oid 作旧值校验推进（CAS，防并发覆盖）。
  *
- * @param repoDir 仓库内任意目录（底层命令不读取工作区，不影响 HEAD/index）
+ * @param repoDir 仓库内任意目录（作为主仓库根解析起点）
  */
 export async function mergeBranchToTarget(
   repoDir: string,
   sourceBranch: string,
   targetBranch: string
-): Promise<{ success: boolean; conflict: boolean }> {
-  const ancestor = await runGitChecked(repoDir, ["merge-base", "--is-ancestor", sourceBranch, targetBranch])
+): Promise<{ success: boolean; conflict: boolean; blockedMessage?: string }> {
+  const mainRepo = (await resolveMainRepoRoot(repoDir)) ?? repoDir
+
+  const ancestor = await runGitChecked(mainRepo, ["merge-base", "--is-ancestor", sourceBranch, targetBranch])
   if (ancestor.success) return { success: true, conflict: false }
   // is-ancestor 退出码 1 = 尚未并入（继续合并）；其余为分支缺失等真实错误
   if (ancestor.exitCode !== 1) {
     throw new Error(`无法判断 "${sourceBranch}" 是否已并入 "${targetBranch}"：${ancestor.stderr}`)
   }
 
-  const mergeTree = await runGitChecked(repoDir, ["merge-tree", "--write-tree", "--messages", targetBranch, sourceBranch])
+  const checkedOutPath = await findWorktreeCheckingOut(mainRepo, targetBranch)
+  if (checkedOutPath) {
+    if (!(await sameDir(checkedOutPath, mainRepo))) {
+      return {
+        success: false,
+        conflict: false,
+        blockedMessage: [
+          `- **原因**: 目标分支 \`${targetBranch}\` 正被工作树 \`${checkedOutPath}\` 检出；自动推进分支指针会使该工作树的暂存区/工作区与分支引用失步，本次未执行任何合并动作。`,
+          `- **处理**: 请在该工作树手动执行 \`git merge ${sourceBranch}\`，或移除该工作树（\`git worktree remove ${checkedOutPath}\`）后重试。`,
+        ].join("\n"),
+      }
+    }
+    const status = await runGit(mainRepo, ["status", "--porcelain"])
+    if (status.trim().length > 0) {
+      return {
+        success: false,
+        conflict: false,
+        blockedMessage: [
+          `- **原因**: 目标分支 \`${targetBranch}\` 正被主仓库检出，且主仓库存在未提交改动；为避免覆盖本地改动，本次未执行任何合并动作（分支引用未动、无半成品）。`,
+          `- **处理**: 请先 commit 或 stash 主仓库改动后重试；或自行执行 \`git merge ${sourceBranch}\`（真实合并自带脏工作区保护）。`,
+        ].join("\n"),
+      }
+    }
+    const mergeTree = await runGitChecked(mainRepo, ["merge-tree", "--write-tree", "--messages", targetBranch, sourceBranch])
+    if (!mergeTree.success) {
+      // merge-tree 退出码 1 = 冲突；其余为分支缺失等真实错误
+      if (mergeTree.exitCode !== 1) {
+        throw new Error(`无法试算 "${sourceBranch}" → "${targetBranch}" 的合并：${mergeTree.stderr}`)
+      }
+      return { success: false, conflict: true }
+    }
+    const mergeResult = await runGitChecked(mainRepo, ["merge", "--no-ff", sourceBranch])
+    if (!mergeResult.success) {
+      // 理论上仅竞态会走到此分支：兜底中止，避免主仓库停留在合并中间态
+      await runGitChecked(mainRepo, ["merge", "--abort"])
+      return { success: false, conflict: true }
+    }
+    return { success: true, conflict: false }
+  }
+
+  const mergeTree = await runGitChecked(mainRepo, ["merge-tree", "--write-tree", "--messages", targetBranch, sourceBranch])
   if (!mergeTree.success) {
     // merge-tree 退出码 1 = 冲突；其余为分支缺失等真实错误
     if (mergeTree.exitCode !== 1) {
@@ -251,17 +300,17 @@ export async function mergeBranchToTarget(
   const treeOid = mergeTree.stdout.split("\n")[0].trim()
   if (!treeOid) throw new Error("merge-tree 未返回树对象，无法生成合并提交。")
 
-  const targetOid = (await runGit(repoDir, ["rev-parse", targetBranch])).trim()
-  const sourceOid = (await runGit(repoDir, ["rev-parse", sourceBranch])).trim()
+  const targetOid = (await runGit(mainRepo, ["rev-parse", targetBranch])).trim()
+  const sourceOid = (await runGit(mainRepo, ["rev-parse", sourceBranch])).trim()
   if (!targetOid || !sourceOid) {
     throw new Error(`无法解析分支 OID：target="${targetOid}" source="${sourceOid}"`)
   }
-  const commitOid = (await runGit(repoDir, [
+  const commitOid = (await runGit(mainRepo, [
     "commit-tree", treeOid, "-p", targetOid, "-p", sourceOid, "-m", `Merge branch '${sourceBranch}'`,
   ])).trim()
   if (!commitOid) throw new Error("git commit-tree 失败：无法创建合并提交。")
 
-  const updateRef = await runGitChecked(repoDir, ["update-ref", `refs/heads/${targetBranch}`, commitOid, targetOid])
+  const updateRef = await runGitChecked(mainRepo, ["update-ref", `refs/heads/${targetBranch}`, commitOid, targetOid])
   if (!updateRef.success) {
     throw new Error(`基础分支 "${targetBranch}" 已被并发推进，合并提交未写入（update-ref 旧值校验失败）：${updateRef.stderr}`)
   }
@@ -328,18 +377,53 @@ function parsePorcelainPaths(out: string): string[] {
 }
 
 /**
+ * 解析主仓库根：`.git` 为目录则该目录即主仓库根；`.git` 为文件（linked worktree）时经 discoverRepoRoot 推导。
+ * 解析失败（非 git 仓库等）返回 null，降级行为由调用方决定。
+ */
+async function resolveMainRepoRoot(worktreePath: string): Promise<string | null> {
+  try {
+    const st = await stat(path.join(worktreePath, ".git"))
+    return st.isDirectory() ? worktreePath : await discoverRepoRoot(worktreePath)
+  } catch {
+    return null
+  }
+}
+
+/** 跨 symlink 比较两路径是否指向同一目录（macOS /tmp → /private/tmp 等形态）；realpath 失败退回字面 resolve 比较。 */
+async function sameDir(a: string, b: string): Promise<boolean> {
+  try {
+    return (await realpath(a)) === (await realpath(b))
+  } catch {
+    return path.resolve(a) === path.resolve(b)
+  }
+}
+
+/**
+ * 在 `worktree list --porcelain` 输出中查找检出指定分支的 worktree 路径。
+ * porcelain 以空行分块，每块 `worktree <path>` 开头；bare 或 detached 块无 `branch` 行，跳过。
+ */
+async function findWorktreeCheckingOut(repoRoot: string, branch: string): Promise<string | null> {
+  const out = await runGit(repoRoot, ["worktree", "list", "--porcelain"])
+  for (const block of out.split("\n\n")) {
+    let wtPath = ""
+    let wtBranch = ""
+    for (const line of block.split("\n")) {
+      if (line.startsWith("worktree ")) wtPath = line.slice("worktree ".length).trim()
+      else if (line.startsWith("branch ")) wtBranch = line.slice("branch ".length).trim()
+    }
+    if (wtPath && wtBranch === `refs/heads/${branch}`) return wtPath
+  }
+  return null
+}
+
+/**
  * 检测主仓库下 openspec 文档是否存在未提交变更（修改/新增/改名），用于编排者视图的主分支污染诊断。
  * 兼容两种形态：`.git` 为目录（入参即主仓库，repoRoot 取自身）与 `.git` 为文件（走 discoverRepoRoot）。
  * 无法解析主仓库路径或主仓库干净时返回 null。
  */
 export async function detectMainRepoPollution(worktreePath: string): Promise<{ repoRoot: string; files: string[] } | null> {
-  let repoRoot: string
-  try {
-    const st = await stat(path.join(worktreePath, ".git"))
-    repoRoot = st.isDirectory() ? worktreePath : await discoverRepoRoot(worktreePath)
-  } catch {
-    return null
-  }
+  const repoRoot = await resolveMainRepoRoot(worktreePath)
+  if (!repoRoot) return null
   // 健壮性：git 调用失败（如非 git 仓库/权限/损坏）时返回 null，不使 opx_status 整体抛错；
   // 污染诊断属编排者视图的辅助信息，缺失不应阻断状态视图渲染。
   let out: string

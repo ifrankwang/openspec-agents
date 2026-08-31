@@ -177,7 +177,9 @@ describe("流转矩阵：审查通过收口", () => {
       await submit(wt, sessionId, "openspec-reviewer", { step_id: "quality_review", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
       expect(itemOf(wt, sessionId).phase).toBe("done")
       await complete_task_group.execute({ change_id: sessionId }, o)
-      expect(fakeGit.refUpdates.some((u) => u.ref === "refs/heads/develop")).toBe(true)
+      // 主仓库检出 develop（当前分支）→ 收尾走真实 merge --no-ff 合回 develop（分支指针由 git merge 自身推进，不经 update-ref CAS）
+      expect(fakeGit.mergedBranches).toContain(itemOf(wt, sessionId).metadata["branch_name"])
+      expect(fakeGit.refUpdates.some((u) => u.ref === "refs/heads/develop")).toBe(false)
     } finally { teardown(root) }
   })
 })
@@ -462,8 +464,9 @@ describe("full + thorough 组合关键路径", () => {
       }
       expect(itemOf(wt, sessionId).phase).toBe("done")
       await complete_task_group.execute({ change_id: sessionId }, o)
-      // full 形态收尾合回当前分支 develop
-      expect(fakeGit.refUpdates.some((u) => u.ref === "refs/heads/develop")).toBe(true)
+      // full 形态收尾合回当前分支 develop：主仓库检出 develop → 走真实 merge --no-ff（不经 update-ref CAS）
+      expect(fakeGit.mergedBranches).toContain(itemOf(wt, sessionId).metadata["branch_name"])
+      expect(fakeGit.refUpdates.some((u) => u.ref === "refs/heads/develop")).toBe(false)
     } finally { teardown(root) }
   })
 })

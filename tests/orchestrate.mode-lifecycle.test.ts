@@ -355,6 +355,8 @@ describe("收尾门禁保留（completeTaskGroupExecute）", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       const item = taskItemOf(wt)

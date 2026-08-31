@@ -132,6 +132,8 @@ describe("新流端到端 happy path", () => {
       expect(done.currentStep).toBeNull()
       expect(taskListOf(done).every((t: any) => t.status === "verified")).toBe(true)
 
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
       const r = await complete_task_group.execute({ change_id: CID }, ctx.orch)
       expect(r).toContain("任务组已完成并合并到")
       expect(readItem(wt, CID).metadata["completed_at"]).toBeDefined()

@@ -522,6 +522,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
       // children 全部终态（无遗留未解决 issue）
       expect(item.children.every((c: WorkItem) => c.phase === "done" || c.phase === "cancelled")).toBe(true)
 
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
       const r = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(r).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
@@ -673,6 +675,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
       writeFileSync(statePath, JSON.stringify(state, null, 2))
 
       const orch = makeOrchCtx(wt)
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
       const r1 = await complete_task_group.execute({ change_id: CID }, orch)
       expect(r1).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()

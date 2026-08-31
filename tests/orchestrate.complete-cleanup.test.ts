@@ -6,6 +6,9 @@
  * - 无分支引用时仅做 worktree 侧清理：目录消失即成功，不执行 branch -D、无残留警告
  * - 收尾裸合并（worktreeless 底层命令）：成功推进双父合并提交且全程无 checkout、冲突零副作用
  *   （目标分支引用未动 + 人工合并指引文案）、已并入重试幂等（跳过合并提交直接收尾清理）
+ * - 收尾合并检出检测：目标分支无人检出走 update-ref 原路径；主仓库检出且干净走真实 merge --no-ff
+ *   （先 merge-tree 试算）；主仓库检出且有未提交改动、或被其它 linked worktree 检出 → blockedMessage
+ *   且零 git 变更命令；试算冲突零副作用；真实 merge 失败时 merge --abort 兜底返回 conflict 形态
  *
  * 运行：bun test tests/orchestrate.complete-cleanup.test.ts
  */
@@ -13,7 +16,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { chmodSync, existsSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
-import { __setGitRunner } from "../src/core/git"
+import { __setGitRunner, mergeBranchToTarget } from "../src/core/git"
 import { agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import {
   makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState,
@@ -157,6 +160,8 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 原路径
+      fakeGit.currentBranch = "develop"
       fakeGit.branchOids.set("main", "target0000000000000000000000000000000001")
       fakeGit.branchOids.set(`task-group/${CID}/1`, "source000000000000000000000000000000001")
 
@@ -186,6 +191,8 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 主仓库检出非目标分支 → 目标分支无人检出，merge-tree 试算冲突零副作用
+      fakeGit.currentBranch = "develop"
       fakeGit.branchOids.set("main", "target0000000000000000000000000000000001")
       fakeGit.mergeTreeConflictOnNext = true
 
@@ -229,6 +236,115 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
       expect(fakeGit.worktrees.has(wtPathOf(wt))).toBe(false)
       expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+})
+
+describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出状态分流）", () => {
+
+  /** 无 git 变更动作命令（merge-tree/update-ref/commit-tree/merge 均不得出现）。 */
+  function assertNoMutatingCommand(fakeGit: FakeGitRunner): void {
+    for (const s of fakeGit.callSites) {
+      expect(["merge-tree", "update-ref", "commit-tree", "merge"]).not.toContain(s.args[0])
+    }
+  }
+
+  test("无人检出（主仓库检出非目标分支）→ worktreeless 原路径：commit-tree 双父 + update-ref CAS 推进", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.currentBranch = "develop"
+      fakeGit.branchOids.set("main", "target0000000000000000000000000000000001")
+      fakeGit.branchOids.set("feature", "source000000000000000000000000000000001")
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r).toEqual({ success: true, conflict: false })
+      const mergeSha = fakeGit.commitShas[fakeGit.commitShas.length - 1]
+      expect(fakeGit.refUpdates).toEqual([
+        { ref: "refs/heads/main", newOid: mergeSha, oldOid: "target0000000000000000000000000000000001" },
+      ])
+      expect(fakeGit.mergeCommitBranches).toContain("feature")
+      expect(fakeGit.mergedBranches).toEqual([])
+    } finally { teardown(root) }
+  })
+
+  test("主仓库检出且干净 → 先 merge-tree 试算再真实 merge --no-ff，不走 update-ref/commit-tree", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.branchOids.set("feature", "source000000000000000000000000000000001")
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r).toEqual({ success: true, conflict: false })
+      // 命令序列：merge-tree 试算先于真实 merge，真实 merge 以 --no-ff 携带源分支
+      const mergeTreeIdx = fakeGit.callLog.findIndex((l) => l.includes("merge-tree"))
+      const mergeIdx = fakeGit.callLog.findIndex((l) => l.startsWith("checked:merge "))
+      expect(mergeTreeIdx).toBeGreaterThanOrEqual(0)
+      expect(mergeIdx).toBeGreaterThan(mergeTreeIdx)
+      expect(fakeGit.mergedBranches).toEqual(["feature"])
+      // 真实合并路径不产生合并提交对象与分支指针 CAS 推进（由 git merge 自身推进）
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+    } finally { teardown(root) }
+  })
+
+  test("主仓库检出且有未提交改动 → blockedMessage、零 git 变更命令", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.dirtyPaths.add(wt)
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r.success).toBe(false)
+      expect(r.conflict).toBe(false)
+      expect(r.blockedMessage).toContain("commit 或 stash")
+      expect(r.blockedMessage).toContain("`git merge feature`")
+      assertNoMutatingCommand(fakeGit)
+    } finally { teardown(root) }
+  })
+
+  test("其它 linked worktree 检出目标分支 → blockedMessage 带该工作树路径、零 git 变更命令", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      const userWt = "/tmp/user-owned-wt-checkout"
+      fakeGit.currentBranch = "develop"
+      fakeGit.worktrees.set(userWt, { branch: "main", path: userWt })
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r.success).toBe(false)
+      expect(r.conflict).toBe(false)
+      expect(r.blockedMessage).toContain(userWt)
+      expect(r.blockedMessage).toContain("`git merge feature`")
+      expect(r.blockedMessage).toContain(`\`git worktree remove ${userWt}\``)
+      assertNoMutatingCommand(fakeGit)
+    } finally { teardown(root) }
+  })
+
+  test("主仓库检出且干净但 merge-tree 冲突 → 零副作用返回 conflict，不执行真实 merge", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.mergeTreeConflictOnNext = true
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r).toEqual({ success: false, conflict: true })
+      expect(fakeGit.mergedBranches).toEqual([])
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+    } finally { teardown(root) }
+  })
+
+  test("真实 merge 失败（竞态）→ merge --abort 兜底后按 conflict 形态返回", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.forceMergeFailure = true
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r).toEqual({ success: false, conflict: true })
+      expect(fakeGit.callLog.some((l) => l.includes("merge --abort"))).toBe(true)
+      expect(fakeGit.refUpdates.length).toBe(0)
     } finally { teardown(root) }
   })
 })

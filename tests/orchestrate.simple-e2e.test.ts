@@ -160,6 +160,8 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       expect(done.children.find((c: any) => c.externalId === "i1").phase).toBe("done")
 
       // ⑩ 收尾裸合并：直接合并分支并清理（无 verify_cleanup 环节）
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
