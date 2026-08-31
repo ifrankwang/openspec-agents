@@ -1,9 +1,9 @@
 import path from "path"
 import { rmdir } from "node:fs/promises"
-import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode } from "../types.ts"
-import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS } from "../types.ts"
+import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
+import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
@@ -12,7 +12,7 @@ import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
 import { loadWorkflowFile, resolveWorkflowPath, type LoadedWorkflow } from "../workflow/loader.ts"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags } from "../workflow/engine.ts"
+import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, REVIEW_FIX_POLICY_KEY } from "../workflow/engine.ts"
 import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
@@ -143,7 +143,7 @@ function applyRecoveryState(
   item: WorkItem,
   recovery: InitParams["recovery"],
   parsedTasks: ParsedTask[],
-  mode?: WorkflowMode,
+  state: Pick<OrchestrateState, "mode" | "kind" | "reviewScope">,
 ): void {
   // 恢复重建为已知状态后清除残留推进阻塞原因，避免 orchestrator 视图展示过期信息
   delete item.metadata["_advance_block_reason"]
@@ -151,6 +151,41 @@ function applyRecoveryState(
   resetInternalRetryCount(item)
   // 清除检查点标记残留：恢复重建为已知状态后 _checkpoint 已无意义（checkpoint 态属于中断中的 step）。
   delete item.metadata["_checkpoint"]
+  if (state.kind === "review") {
+    // 独立审查会话恢复：无 analyze 前置、无 task children；phase 值域入口已收敛为 review / dev_impl。
+    const phase = recovery?.phase
+    if (!phase || phase === "dev_impl") {
+      // 恢复进 implement：tags 整体重置（不残留 implement passed，否则 dev 不会被重派）
+      item.phase = "in_progress"
+      item.currentStep = "implement"
+      item.tags = {}
+      return
+    }
+    // review 分支：恢复进 review 时 implement 必然已通过
+    item.phase = "review"
+    item.tags["implement:openspec-developer"] = "passed"
+    // failed 审查标记删除回 pending（passed 保留——已审查通过无需重跑），对 review 两种颗粒度的
+    // step id（verify_* / quality_review）统一处理
+    for (const key of Object.keys(item.tags)) {
+      if (
+        key.startsWith("verify_tool:") || key.startsWith("verify_task:") ||
+        key.startsWith("verify_quality:") || key.startsWith("quality_review:")
+      ) {
+        if (item.tags[key] !== "passed") delete item.tags[key]
+      }
+    }
+    // reset_steps：清空指定审查 step 全部 tags（passed 也清，强制重审），值域已按形态校验
+    for (const stepId of recovery?.reset_steps ?? []) {
+      clearStepTags(item, stepId)
+    }
+    // currentStep 前移到第一个未全 passed 的审查 step（review workflow 生效，按颗粒度选文件）
+    const workflow = loadWorkflowFile(resolveWorkflowPath(state))
+    item.currentStep = firstUnpassedReviewStep(item, workflow)
+    // 全 passed 收口 done：review 会话无 task children，终态检查天然通过
+    if (item.currentStep === null) item.phase = "done"
+    return
+  }
+  const mode = state.mode
   if (mode === "simple") {
     const phase = recovery?.phase
     if (!phase || phase === "task_analysis" || phase === "dev_impl") {
@@ -281,20 +316,39 @@ function assertValidRecovery(recovery: InitParams["recovery"]): void {
 }
 
 /**
- * reset_steps 值域的模式感知校验（state 读取/固化后调用——有效模式 = state.mode ?? "full"）：
- * - full 模式仅接受 verify_tool/verify_task/verify_quality；
- * - simple 模式仅接受 quality_review；
- * 跨模式值抛错并列出当前模式的合法值。phase/review_layer/组合校验在 assertValidRecovery 前置
- * （错误早于任何状态变更且不落盘），值域校验依赖 state.mode 故后置到 state 读取之后——
+ * reset_steps 值域的形态感知校验（state 读取/固化后调用）：
+ * - 独立审查会话按颗粒度：thorough 仅接受 verify_tool/verify_task/verify_quality，simple 仅接受 quality_review；
+ * - change 会话 full 模式仅接受 verify_tool/verify_task/verify_quality，simple 模式仅接受 quality_review。
+ * 跨形态值抛错并列出当前形态的合法值。phase/review_layer/组合校验在 assertValidRecovery 前置
+ * （错误早于任何状态变更且不落盘），值域校验依赖 state 故后置到 state 读取之后——
  * state 读取不是状态变更，该原则不破坏。
  */
-function assertValidResetStepValues(recovery: InitParams["recovery"], mode: WorkflowMode): void {
+function assertValidResetStepValues(
+  recovery: InitParams["recovery"],
+  state: Pick<OrchestrateState, "mode" | "kind" | "reviewScope">,
+): void {
   if (!recovery?.reset_steps?.length) return
-  const valid = mode === "simple" ? SIMPLE_REVIEW_STEPS : REVIEW_VERIFY_STEPS
+  let valid: readonly string[]
+  let formLabel: string
+  if (state.kind === "review") {
+    if (state.reviewScope?.granularity === "simple") {
+      valid = SIMPLE_REVIEW_STEPS
+      formLabel = "独立审查会话（simple 颗粒度）"
+    } else {
+      valid = REVIEW_VERIFY_STEPS
+      formLabel = "独立审查会话（thorough 颗粒度）"
+    }
+  } else if ((state.mode ?? "full") === "simple") {
+    valid = SIMPLE_REVIEW_STEPS
+    formLabel = "simple 模式"
+  } else {
+    valid = REVIEW_VERIFY_STEPS
+    formLabel = "full 模式"
+  }
   for (const stepId of recovery.reset_steps) {
-    if (!(valid as readonly string[]).includes(stepId)) {
+    if (!valid.includes(stepId)) {
       throw new Error(
-        `reset_steps 中的 step "${stepId}" 不属于当前模式（${mode}）的审查 step，` +
+        `reset_steps 中的 step "${stepId}" 不属于当前会话形态（${formLabel}）的审查 step，` +
         `合法值：${valid.join("、")}。传入值："${stepId}"。`
       )
     }
@@ -320,6 +374,235 @@ function otherTaskGroupsSettled(state: OrchestrateState, targetGroupId: string):
     })
 }
 
+// ─── 独立审查会话（kind=review，不绑定 OpenSpec change）───
+
+/** 分支名等非法字符归一为 -（会话 id 推导用，保持确定性）。 */
+function normalizeSessionToken(s: string): string {
+  return s.replace(/[^A-Za-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "head"
+}
+
+/** 独立审查会话 id 确定性推导：pr → review-pr-<base>-<head>；full → review-full-<当前分支>-<yyyymmdd>。 */
+function deriveReviewSessionId(scope: ReviewScope, currentBranch: string): string {
+  if (scope.scopeType === "pr") {
+    return `review-pr-${normalizeSessionToken(scope.baseRef ?? "")}-${normalizeSessionToken(scope.headRef ?? "")}`
+  }
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, "")
+  return `review-full-${normalizeSessionToken(currentBranch)}-${day}`
+}
+
+/** 审查范围等价判定（幂等复用判定：scopeType/推导后的 baseRef/headRef/granularity/fix 全等）。 */
+function reviewScopeEquals(a: ReviewScope, b: ReviewScope): boolean {
+  return (
+    a.scopeType === b.scopeType && a.baseRef === b.baseRef && a.headRef === b.headRef &&
+    a.granularity === b.granularity && a.fix === b.fix
+  )
+}
+
+/** 校验独立审查入口的分支必须为存在的本地分支（收尾合并以 update-ref 推进本地分支引用，
+ *  origin/* 等远端 ref 会静默创建错误的本地分支，故显式拒绝）。 */
+async function assertLocalReviewBranch(worktree: string, branch: string, role: string): Promise<void> {
+  if (typeof branch !== "string" || branch.trim() === "" || /\s/.test(branch)) {
+    throw new Error(`独立审查会话的 ${role} 分支名不合法："${String(branch)}"。`)
+  }
+  if (branch.startsWith("origin/") || branch.startsWith("refs/remotes/")) {
+    throw new Error(
+      `独立审查会话的 ${role} 分支 "${branch}" 是远端引用：收尾合并只推进本地分支引用，远端引用会静默创建错误的本地分支。` +
+      `请改用对应的本地分支名（如需审查远端内容，先在本地建分支跟踪后再传入）。`
+    )
+  }
+  if (!(await isLocalBranch(worktree, branch))) {
+    const branches = await listLocalBranches(worktree)
+    throw new Error(
+      `独立审查会话的 ${role} 分支 "${branch}" 不是本地分支。当前本地分支：${branches.join("、") || "(无)"}。`
+    )
+  }
+}
+
+/** 解析并校验 review_scope 参数（枚举值域 + 分支本地性 + base 推导），返回规范化 ReviewScope 与当前分支。 */
+async function resolveReviewScope(
+  worktree: string,
+  raw: NonNullable<InitParams["review_scope"]>,
+): Promise<{ scope: ReviewScope; currentBranch: string }> {
+  const currentBranch = await getCurrentBranch(worktree)
+  if (raw.scope_type !== "pr" && raw.scope_type !== "full") {
+    throw new Error(`review_scope.scope_type 不合法，合法值：pr、full。传入值："${String(raw.scope_type)}"。`)
+  }
+  if (raw.granularity !== "simple" && raw.granularity !== "thorough") {
+    throw new Error(`review_scope.granularity 不合法，合法值：simple、thorough。传入值："${String(raw.granularity)}"。`)
+  }
+  if (raw.fix !== "none" && raw.fix !== "fix") {
+    throw new Error(`review_scope.fix 不合法，合法值：none、fix。传入值："${String(raw.fix)}"。`)
+  }
+  if (raw.scope_type === "full") {
+    if (raw.base_ref || raw.head_ref) {
+      throw new Error("review_scope.scope_type=full（全量审查）不接受 base_ref/head_ref——全量形态不界定分支区间。")
+    }
+    return { scope: { scopeType: "full", granularity: raw.granularity, fix: raw.fix }, currentBranch }
+  }
+  // pr 形态：head 必传；base 缺省推导（优先 main、其次 master，都不存在报错列出本地分支）
+  const headRef = raw.head_ref
+  if (!headRef) throw new Error("review_scope.scope_type=pr 必须提供 head_ref（审查目标分支，须为本地分支）。")
+  let baseRef = raw.base_ref
+  if (!baseRef) {
+    if (await isLocalBranch(worktree, "main")) baseRef = "main"
+    else if (await isLocalBranch(worktree, "master")) baseRef = "master"
+    else {
+      const branches = await listLocalBranches(worktree)
+      throw new Error(
+        `review_scope 未传 base_ref 且无法自动推导（main 与 master 均不是本地分支）。请显式传入 base_ref。当前本地分支：${branches.join("、") || "(无)"}。`
+      )
+    }
+  }
+  await assertLocalReviewBranch(worktree, baseRef, "base_ref")
+  await assertLocalReviewBranch(worktree, headRef, "head_ref")
+  return { scope: { scopeType: "pr", baseRef, headRef, granularity: raw.granularity, fix: raw.fix }, currentBranch }
+}
+
+/** 构造独立审查会话的虚拟组 WorkItem（无 task children，初始即落 review 阶段首个审查 step）。 */
+function createReviewWorkItem(scope: ReviewScope, sessionId: string): WorkItem {
+  const item = createInitialWorkItem({
+    id: `task:${REVIEW_TASK_GROUP_ID}`,
+    source: "review",
+    externalId: REVIEW_TASK_GROUP_ID,
+    type: "task",
+    title: "独立代码审查",
+    description: "独立代码审查（不绑定 OpenSpec change）",
+    labels: ["standalone-review"],
+  })
+  item.phase = "review"
+  item.currentStep = scope.granularity === "thorough" ? "verify_tool" : "quality_review"
+  item.metadata["name"] = "独立代码审查"
+  item.metadata["task_count"] = 0
+  item.metadata["source"] = "review"
+  item.metadata["review_session_id"] = sessionId
+  // 引擎无 state 访问：item.metadata.review_fix_policy 为引擎消费的单一事实源（fail→done 短路依据），
+  // 由 init 从 state.reviewScope.fix 写入，二者恒一致（state 为配置事实源，metadata 为引擎读侧投影）。
+  item.metadata[REVIEW_FIX_POLICY_KEY] = scope.fix
+  return item
+}
+
+/**
+ * 独立审查会话 init（review_scope 入口）：
+ * - 同参数重复 init 幂等（复用既有会话）；已有 review 会话传不同参数报错防误覆盖；
+ * - 会话 id 确定性推导并在返回体回传，后续所有工具以 change_id 形式传入该会话 id；
+ * - 不走 tasks.md 解析 / mode 校验 / mode 字段写入；recovery 仅接受 phase=review。
+ */
+async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<string> {
+  const args = params
+  if (args.change_id || args.task_group_id || args.base_branch || args.mode) {
+    throw new Error(
+      "review_scope 与 change_id/task_group_id 是两种互斥入口（同传报错、都不传报错，二选一）；" +
+      "base_branch 与 mode 仅 change 会话入口有效，独立审查会话不使用。"
+    )
+  }
+  if (args.recovery) {
+    if (args.recovery.phase !== "review") {
+      throw new Error(`独立审查会话的 recovery 仅支持 phase="review"（无分析阶段），传入值："${args.recovery.phase}"。`)
+    }
+    if (args.recovery.review_layer) {
+      throw new Error("独立审查会话不支持 review_layer（按颗粒度整体审查），如需重置指定层请用 reset_steps。")
+    }
+    if (args.recovery.reopenIssues) {
+      throw new Error("独立审查会话不支持 reopenIssues。")
+    }
+  }
+  const { scope, currentBranch } = await resolveReviewScope(ctx.worktree, args.review_scope!)
+  const sessionId = deriveReviewSessionId(scope, currentBranch)
+  let state = await readStateByChangeId(ctx.worktree, sessionId)
+  if (state) {
+    if (state.kind !== "review" || !state.reviewScope) {
+      throw new Error(`会话 id "${sessionId}" 已被非独立审查会话占用，请核对后重试（防止误覆盖既有进度）。`)
+    }
+    if (!reviewScopeEquals(state.reviewScope, scope)) {
+      throw new Error(
+        `独立审查会话 "${sessionId}" 已存在且审查范围不同（已固化：${JSON.stringify(state.reviewScope)}，传入：${JSON.stringify(scope)}）。` +
+        `会话 id 由审查范围推导，重复 init 仅支持同参数幂等复用；需不同范围请调整参数（id 随之变化）。`
+      )
+    }
+    if (args.recovery) {
+      const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
+      if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
+      assertValidResetStepValues(args.recovery, state)
+      applyRecoveryState(item, args.recovery, [], state)
+      await writeState(ctx.worktree, state)
+      return `独立审查会话 "${sessionId}" 已恢复到 review 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。后续工具以 change_id="${sessionId}" 传入。`
+    }
+    return [
+      "独立审查会话已初始化（复用既有会话）。",
+      "",
+      `- **会话 ID**: \`${sessionId}\``,
+      `- **说明**: 后续所有 opx_* 工具以 \`change_id="${sessionId}"\` 传入。`,
+    ].join("\n")
+  }
+  if (args.recovery) {
+    throw new Error(`独立审查会话 "${sessionId}" 不存在，无法按 recovery 恢复。请先不带 recovery 初始化。`)
+  }
+  // baseBranch 双语义：worktree 分支 fork 源与快进合并源（pr=head_ref、full=当前分支），
+  // 同时是 fix 模式收尾合回目标（merge_target）；fix=none 收尾不合并不使用。
+  const baseBranch = scope.scopeType === "pr" ? scope.headRef! : currentBranch
+  state = {
+    changeId: sessionId,
+    isolationNamespace: generateIsolationNamespace(sessionId),
+    taskGroupId: REVIEW_TASK_GROUP_ID,
+    baseBranch,
+    workItems: [createReviewWorkItem(scope, sessionId)],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    kind: "review",
+    reviewScope: scope,
+  }
+  await writeState(ctx.worktree, state)
+  const granularityLabel = scope.granularity === "thorough" ? "三层审查（工具检查 → 回归验证 → 五维度质量审查）" : "单层合并审查"
+  const fixLabel = scope.fix === "fix" ? "审并修（失败回退修复后重审）" : "只审不修（issue 报告即交付物）"
+  const scopeLabel = scope.scopeType === "pr" ? `PR 区间 ${scope.baseRef}..${scope.headRef}` : "全量代码库"
+  return [
+    "独立审查会话已初始化。",
+    "",
+    `- **会话 ID**: \`${sessionId}\``,
+    `- **审查范围**: ${scopeLabel}`,
+    `- **颗粒度**: ${granularityLabel}`,
+    `- **修复策略**: ${fixLabel}`,
+    "",
+    `- **说明**: 后续所有 opx_* 工具以 \`change_id="${sessionId}"\` 传入（含 opx_orch_set_worktree / opx_status / opx_agent_submit / 收尾）。`,
+  ].join("\n")
+}
+
+/** 既有独立审查会话按 change_id 入口的恢复（task_group_id 可缺省，虚拟组 review）。 */
+async function initReviewRecovery(params: InitParams, state: OrchestrateState, ctx: ToolContext): Promise<string> {
+  const args = params
+  if (args.mode || args.base_branch) {
+    throw new Error("独立审查会话不使用 mode / base_branch 参数（审查范围在首次 init 经 review_scope 固化）。")
+  }
+  if (args.task_group_id && args.task_group_id !== REVIEW_TASK_GROUP_ID) {
+    throw new Error(`独立审查会话的虚拟任务组固定为 "${REVIEW_TASK_GROUP_ID}"，传入值："${args.task_group_id}"。`)
+  }
+  if (args.recovery) {
+    if (args.recovery.phase === "task_analysis") {
+      throw new Error('独立审查会话无分析阶段，recovery.phase="task_analysis" 不适用（仅支持 review / dev_impl）。')
+    }
+    if (args.recovery.review_layer) {
+      throw new Error("独立审查会话不支持 review_layer（按颗粒度整体审查），如需重置指定层请用 reset_steps。")
+    }
+    if (args.recovery.reopenIssues) {
+      throw new Error("独立审查会话不支持 reopenIssues。")
+    }
+    assertValidResetStepValues(args.recovery, state)
+  }
+  const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
+  if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
+  if (args.recovery) {
+    applyRecoveryState(item, args.recovery, [], state)
+    await writeState(ctx.worktree, state)
+    return `独立审查会话 "${state.changeId}" 已恢复到 ${args.recovery.phase} 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。`
+  }
+  return [
+    "独立审查会话已就绪（复用既有会话）。",
+    "",
+    `- **会话 ID**: \`${state.changeId}\``,
+    `- **说明**: 后续所有 opx_* 工具以 \`change_id="${state.changeId}"\` 传入。`,
+  ].join("\n")
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_init")
 
@@ -335,14 +618,33 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     (args as any).recovery = parsed
   }
   assertValidRecovery(args.recovery)
+
+  // 入口分流：review_scope（独立审查会话）与 change_id/task_group_id 互斥——同传报错、都不传报错
+  if (args.review_scope !== undefined) {
+    return initReviewSession(args, ctx)
+  }
+  if (!args.change_id || !args.task_group_id) {
+    if (args.change_id) {
+      // 已存在的独立审查会话按 change_id（会话 id）恢复：虚拟组 review，task_group_id 可缺省
+      const existing = await readStateByChangeId(ctx.worktree, args.change_id)
+      if (existing?.kind === "review") {
+        return initReviewRecovery(args, existing, ctx)
+      }
+    }
+    throw new Error(
+      "初始化需要两种入口之一：change 会话传 change_id + task_group_id；独立审查会话传 review_scope（会话 id 由审查范围推导并在返回体回传）。两种入口互斥，不可同传或都不传。"
+    )
+  }
+  const changeId = args.change_id
+
   // mode 值域校验：值域外一律拒绝（无论 state 是否已存在），错误早于任何状态变更且不落盘
   if (args.mode !== undefined && args.mode !== "full" && args.mode !== "simple") {
     throw new Error(`mode 参数不合法，合法值：full、simple。传入值："${String(args.mode)}"。`)
   }
 
-  const parsedGroups = await parseAllTaskGroupsFromMd(ctx.worktree, args.change_id)
+  const parsedGroups = await parseAllTaskGroupsFromMd(ctx.worktree, changeId)
   if (parsedGroups.length === 0) {
-    throw new Error(`无法从 tasks.md 解析出任务组，请检查文件 openspec/changes/${args.change_id}/tasks.md。`)
+    throw new Error(`无法从 tasks.md 解析出任务组，请检查文件 openspec/changes/${changeId}/tasks.md。`)
   }
   const targetGroup = parsedGroups.find((g) => g.id === args.task_group_id)
   if (!targetGroup) {
@@ -355,7 +657,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 逐任务组解析 tasks.md 子任务（构造各 task WorkItem 的 task children 用）
   const tasksByGroup = new Map<string, ParsedTask[]>()
   for (const g of parsedGroups) {
-    tasksByGroup.set(g.id, await parseTasksMdForGroup(ctx.worktree, args.change_id, g.id))
+    tasksByGroup.set(g.id, await parseTasksMdForGroup(ctx.worktree, changeId, g.id))
   }
 
   // base_branch 是 ref 而非严格 branch：只做非空 + 无空白字符等基本检查（完整分支名校验由 git check-ref-format 承担）
@@ -365,7 +667,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     }
   }
   const baseBranch = args.base_branch || await getCurrentBranch(ctx.worktree)
-  let state = await readStateByChangeId(ctx.worktree, args.change_id)
+  let state = await readStateByChangeId(ctx.worktree, changeId)
   const wasCurrentGroup = state?.taskGroupId === args.task_group_id
 
   // state 已存在时的 mode 变更窗口校验/更新（位于 for 循环前——循环内非活跃组新建 item 与
@@ -395,8 +697,8 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
 
   if (!state) {
     state = {
-      changeId: args.change_id,
-      isolationNamespace: generateIsolationNamespace(args.change_id),
+      changeId,
+      isolationNamespace: generateIsolationNamespace(changeId),
       taskGroupId: args.task_group_id,
       baseBranch,
       workItems: [],
@@ -413,7 +715,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
 
   // reset_steps 值域的模式感知校验：位于 state 读取/固化之后（有效模式 = state.mode ?? "full"，
   // 与 applyRecoveryState 消费的生效模式一致）、一切状态变更与落盘之前，跨模式值报错不落盘
-  assertValidResetStepValues(args.recovery, state.mode ?? "full")
+  assertValidResetStepValues(args.recovery, state)
 
   // 按 tasks.md 构造全部任务组的 task WorkItem（单轨：workItems 为唯一事实源）
   for (const group of parsedGroups) {
@@ -506,7 +808,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       item.metadata["base_ref"] = null
     }
 
-    applyRecoveryState(item, args.recovery, groupTasks, state.mode)
+    applyRecoveryState(item, args.recovery, groupTasks, state)
     refreshMeta(item)
     if (!existing) state.workItems.push(item)
   }
@@ -523,6 +825,23 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     parts.push("\n\n⚠️ simple 模式无 review 子层（仅 quality_review 单层审查），recovery.review_layer 参数未生效。")
   }
   return parts.join("")
+}
+
+/** 独立审查会话的 worktree 引用绑定（双基准拆分）：
+ *  - merge_target（合回目标）独立存 metadata：fix 模式收尾合回（pr=head_ref、full=当前分支，即 baseBranch）；fix=none 收尾销毁不合并；
+ *  - base_ref（审查锚点）仅 pr 形态设置 = merge-base(base_ref, head_ref)；full 形态不设（全量语义，视图渲染「全量代码库」锚点）。 */
+async function bindReviewWorktreeRefs(item: WorkItem, worktreePath: string, branch: string, state: OrchestrateState): Promise<void> {
+  item.metadata["worktree_path"] = worktreePath
+  item.metadata["branch_name"] = branch
+  item.metadata["merge_target"] = state.baseBranch
+  if (state.reviewScope?.scopeType === "pr" && state.reviewScope.baseRef) {
+    const baseRef = await getMergeBase(worktreePath, state.reviewScope.baseRef)
+    if (baseRef) {
+      item.metadata["base_ref"] = baseRef
+      return
+    }
+  }
+  delete item.metadata["base_ref"]
 }
 
 async function bindWorktreeRefs(
@@ -562,12 +881,17 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
       throw new Error(`分支名 "${rawBranch}" 不合法，请修正后重试。`)
     }
   }
-  const branch = rawBranch || `task-group/${state.changeId}/${state.taskGroupId}`
+  // 独立审查会话：分支命名 review/<sessionId>、worktree 布局 .worktree/<sessionId>/review
+  // （discoverDiskWorktrees 按 review/ 前缀识别为可恢复磁盘痕迹）
+  const isReview = state.kind === "review"
+  const branch = rawBranch || (isReview ? `review/${state.changeId}` : `task-group/${state.changeId}/${state.taskGroupId}`)
   let wtPath: string
   if (params.worktree_path) {
     wtPath = assertPathWithin(repoRoot, params.worktree_path, "worktree_path")
   } else {
-    wtPath = path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
+    wtPath = isReview
+      ? path.join(repoRoot, ".worktree", state.changeId, "review")
+      : path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
   }
 
   const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
@@ -590,7 +914,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     const baseHead = await runGit(repoRoot, ["rev-parse", state.baseBranch])
     const mergeResult = await runGitChecked(existingPath, ["merge", "--ff-only", baseHead])
     if (mergeResult.success) {
-      await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
+      if (isReview) await bindReviewWorktreeRefs(item, existingPath, branch, state)
+      else await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
       reused = true
     } else {
       const clean = await isWorktreeClean(existingPath)
@@ -605,7 +930,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
         10
       )
       if (localCommitCount > 0 || Number.isNaN(localCommitCount)) {
-        await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
+        if (isReview) await bindReviewWorktreeRefs(item, existingPath, branch, state)
+        else await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
         reused = true
       } else {
         // 复用失败的清理走共享清理函数：目录侧（git remove + fs 兜底 + prune）与分支删除统一语义
@@ -621,9 +947,18 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   }
 
   if (!reused) {
+    // 建分支 fork 源：pr 形态为 head_ref、full 形态为当前分支（两者均为 state.baseBranch）
     const forkBranch = state.baseBranch
     await runGit(repoRoot, ["worktree", "add", "-b", branch, wtPath, forkBranch])
-    await bindWorktreeRefs(item, wtPath, branch, forkBranch, { requireBaseRef: true })
+    if (isReview) {
+      await bindReviewWorktreeRefs(item, wtPath, branch, state)
+      // pr 形态审查锚点（merge-base）必须可得，缺失即建引用失败（对齐 change 路径的 requireBaseRef）
+      if (state.reviewScope?.scopeType === "pr" && !item.metadata["base_ref"]) {
+        throw new Error(`worktree 创建成功但无法获取 ${state.reviewScope.baseRef} 与 ${state.baseBranch} 的 merge-base：${wtPath}`)
+      }
+    } else {
+      await bindWorktreeRefs(item, wtPath, branch, forkBranch, { requireBaseRef: true })
+    }
   }
 
   await writeState(ctx.worktree, state)
@@ -689,7 +1024,9 @@ export async function statusExecute(params: StatusParams, ctx: ToolContext): Pro
       const checkpoint =
         typeof item.metadata["_tool_review_checkpoint"] === "string" ? item.metadata["_tool_review_checkpoint"] : undefined
       const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : undefined
-      toolChanges = await detectChanges(wtPath, { checkpoint, baseRef })
+      // 独立审查 full 形态：审查锚点为全量代码库，返回全量哨兵（视图渲染「全量代码库」而非「未检出变更」）
+      const scopeFull = state.kind === "review" && state.reviewScope?.scopeType === "full"
+      toolChanges = await detectChanges(wtPath, { checkpoint, baseRef, scopeFull })
     }
   }
   // 统计本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时写入 exempted_hit 标记）
@@ -715,6 +1052,37 @@ async function sweepEmptyWorktreeParents(repoRoot: string, removedDir: string, c
   try { await rmdir(worktreeLevelDir) } catch {}
 }
 
+/** 独立审查会话收尾的审查结果摘要：issue 按严重级别与维度归并计数（markdown）。 */
+function renderReviewIssueSummary(item: WorkItem): string {
+  const issues = item.children.filter((c) => c.type === "issue")
+  const lines = ["## 审查结果摘要", ""]
+  if (issues.length === 0) {
+    lines.push("- 未报出任何 issue。", "")
+    return lines.join("\n")
+  }
+  const bySeverity = new Map<string, number>()
+  const byDimension = new Map<string, number>()
+  for (const c of issues) {
+    const sev = c.severity ?? "Info"
+    const dim = String(c.metadata["dimension"] ?? "style")
+    bySeverity.set(sev, (bySeverity.get(sev) ?? 0) + 1)
+    byDimension.set(dim, (byDimension.get(dim) ?? 0) + 1)
+  }
+  lines.push(`- **issue 总数**: ${issues.length}`)
+  lines.push(`- **按严重级别**: ${[...bySeverity.entries()].map(([k, v]) => `${k}=${v}`).join("、")}`)
+  lines.push(`- **按维度**: ${[...byDimension.entries()].map(([k, v]) => `${k}=${v}`).join("、")}`)
+  lines.push("")
+  lines.push("| severity | dimension | 文件位置 | 描述 |", "|----------|-----------|----------|------|")
+  for (const c of issues) {
+    const file = typeof c.metadata["file"] === "string" ? c.metadata["file"] : ""
+    const line = typeof c.metadata["line"] === "number" ? c.metadata["line"] : 0
+    const loc = file ? `${file}${line > 0 ? `:${line}` : ""}` : "(无)"
+    lines.push(`| ${c.severity ?? "Info"} | ${String(c.metadata["dimension"] ?? "style")} | \`${loc}\` | ${c.description.replace(/\|/g, "\\|")} |`)
+  }
+  lines.push("")
+  return lines.join("\n")
+}
+
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_complete_task_group")
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
@@ -738,8 +1106,12 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
     if (!clean) throw new Error(`worktree "${worktreePath}" 存在未 commit 内容，请先 commit 再完成任务组。`)
   }
 
+  // 独立审查会话双维度放宽（其余门禁不动）：
+  // - fix=none（只审）：issue 报告即交付物，openIssues 门禁放宽（issue 停留 todo 态为合法收口形态）；
+  // - 审并修（fix，两种颗粒度）：门禁保留（阻塞 issue 未终态拒绝收尾）。
+  const isReviewNone = state.kind === "review" && state.reviewScope?.fix === "none"
   const openIssues = item.children.filter((c) => isBlockingSeverity(c.severity) && !isTerminalPhase(c.phase))
-  if (openIssues.length > 0) {
+  if (!isReviewNone && openIssues.length > 0) {
     throw new Error(`存在 ${openIssues.length} 个 Low 及以上的未解决 issue 未处理，请先修复或申请豁免。`)
   }
 
@@ -767,8 +1139,10 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
     }
   }
 
+  // 合并按修复策略：fix 模式合回 merge_target（pr=head_ref、full=当前分支，即 baseBranch）；
+  // fix=none 不合并（issue 报告即交付物），直接销毁 worktree 与分支。
   const mergeTarget = state.baseBranch
-  if (branchName) {
+  if (branchName && !isReviewNone) {
     const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
     if (!mergeResult.success) {
       return [
@@ -810,8 +1184,16 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   }
   item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
-  const doneMessage = `任务组已完成并合并到 "${mergeTarget}"。`
   const notes = [cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
+  if (state.kind === "review") {
+    // 独立审查会话收尾返回审查结果摘要（issue 计数按严重级别/维度归并，只审模式的交付物形态）
+    const summary = renderReviewIssueSummary(item)
+    const doneMessage = isReviewNone
+      ? `独立审查会话已完成（只审模式，未合并，worktree 与分支已销毁）。`
+      : `独立审查会话已完成并合并到 "${mergeTarget}"。`
+    return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}\n${summary}` : `${doneMessage}\n${summary}`
+  }
+  const doneMessage = `任务组已完成并合并到 "${mergeTarget}"。`
   return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}` : doneMessage
 }
 

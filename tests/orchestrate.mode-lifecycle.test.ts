@@ -231,12 +231,12 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
         .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/verify_tool.*不属于当前模式（simple）的审查 step/)
+      expect(err.message).toMatch(/verify_tool.*不属于当前会话形态（simple 模式）的审查 step/)
       const errQuality = await init
         .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_quality"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(errQuality).toBeInstanceOf(Error)
-      expect(errQuality.message).toMatch(/verify_quality.*不属于当前模式（simple）的审查 step/)
+      expect(errQuality.message).toMatch(/verify_quality.*不属于当前会话形态（simple 模式）的审查 step/)
     } finally { teardown(root) }
   })
 
@@ -266,7 +266,7 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
         .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["bogus"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/reset_steps 中的 step "bogus" 不属于当前模式（simple）/)
+      expect(err.message).toMatch(/reset_steps 中的 step "bogus" 不属于当前会话形态（simple 模式）/)
     } finally { teardown(root) }
   })
 

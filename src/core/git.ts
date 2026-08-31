@@ -157,6 +157,18 @@ export async function getMergeBase(worktree: string, baseBranch: string): Promis
   return runGit(worktree, ["merge-base", "HEAD", baseBranch])
 }
 
+/** 校验本地分支存在（refs/heads/<name> 严格本地命名空间，不含远端跟踪 ref）。 */
+export async function isLocalBranch(worktree: string, branch: string): Promise<boolean> {
+  const r = await runGitChecked(worktree, ["rev-parse", "--verify", `refs/heads/${branch}`])
+  return r.success
+}
+
+/** 列出全部本地分支名（refs/heads 命名空间）。 */
+export async function listLocalBranches(worktree: string): Promise<string[]> {
+  const out = await runGit(worktree, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+  return out.split("\n").map((l) => l.trim()).filter(Boolean)
+}
+
 export async function isWorktreeClean(worktree: string): Promise<boolean> {
   const out = await runGit(worktree, ["status", "--porcelain"])
   return out.length === 0
@@ -263,7 +275,8 @@ export async function discoverDiskWorktrees(worktree: string): Promise<{ branch:
     const m = line.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
     if (m) {
       const branch = m[2].trim()
-      if (branch.startsWith("task-group/")) {
+      // 独立审查会话 worktree 分支（review/<sessionId>）与任务组分支（task-group/）同为可恢复磁盘痕迹
+      if (branch.startsWith("task-group/") || branch.startsWith("review/")) {
         result.push({ branch, path: m[1].trim() })
       }
     }
@@ -343,6 +356,8 @@ export async function detectMainRepoPollution(worktreePath: string): Promise<{ r
 export interface DetectChangesResult {
   files: string[]
   hasNonDocChange: boolean
+  /** 全量审查哨兵：kind=review 且 scopeType=full 时置 true（审查锚点为全量代码库，非「未检出变更」）。 */
+  scopeFull?: boolean
 }
 
 /**
@@ -361,11 +376,14 @@ export interface DetectChangesResult {
  * @param worktreePath worktree 路径
  * @param opts.checkpoint 上次工具检查点的 commit sha；undefined/null 视为无检查点
  * @param opts.baseRef 无检查点时的兜底基准 ref（worktree 创建时的 merge-base）
+ * @param opts.scopeFull 全量审查哨兵（独立审查会话 full 形态）：不界定变更区间，直接返回
+ *        scopeFull=true 供视图渲染「全量代码库」锚点（而非误报「未检出变更」）
  */
 export async function detectChanges(
   worktreePath: string,
-  opts: { checkpoint?: string | null; baseRef?: string | null },
+  opts: { checkpoint?: string | null; baseRef?: string | null; scopeFull?: boolean },
 ): Promise<DetectChangesResult> {
+  if (opts.scopeFull) return { files: [], hasNonDocChange: false, scopeFull: true }
   const files: string[] = []
   let gitFailed = false
   const range = opts.checkpoint || opts.baseRef || undefined

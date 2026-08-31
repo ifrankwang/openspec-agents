@@ -34,6 +34,27 @@ export type QualityLayerProgress = Record<ReviewDimension, DimensionVerdict>
 /** 流程模式：full（默认，analyze → implement → 三重审查+收尾验证）或 simple（implement → quality_review → done）。 */
 export type WorkflowMode = "full" | "simple"
 
+/** 独立审查会话的审查范围类型：pr=按 base..head 分支区间审查，full=全量代码库审查。 */
+export type ReviewScopeType = "pr" | "full"
+/** 独立审查颗粒度：thorough=三层审查（verify_tool → verify_task → verify_quality），simple=单层合并审查（quality_review）。 */
+export type ReviewGranularity = "simple" | "thorough"
+/** 独立审查修复策略：none=只审不修（issue 报告即交付物），fix=审并修（失败回 implement 修复闭环）。 */
+export type ReviewFixPolicy = "none" | "fix"
+
+/** 独立审查会话的审查范围（opx_orch_init 的 review_scope 参数固化，不绑定 OpenSpec change）。 */
+export interface ReviewScope {
+  scopeType: ReviewScopeType
+  /** pr 形态的基准本地分支（init 推导后固化；full 形态缺省）。 */
+  baseRef?: string
+  /** pr 形态的头部本地分支（审查目标分支；full 形态缺省）。 */
+  headRef?: string
+  granularity: ReviewGranularity
+  fix: ReviewFixPolicy
+}
+
+/** 独立审查会话的固定虚拟任务组 id（workItem id 为 task:review，无 tasks.md / task children）。 */
+export const REVIEW_TASK_GROUP_ID = "review"
+
 export interface ExecutionBoundary {
   allowed_directories: string[]
   allowed_packages: string[]
@@ -144,4 +165,9 @@ export interface OrchestrateState {
    *  （切组且其他任务组均已完成或从未激活，或 recovery.phase=task_analysis 重制当前组）内
    *  可被 mode 参数更新。 */
   mode?: WorkflowMode
+  /** 会话形态：review=独立审查会话（不绑定 OpenSpec change，无 tasks.md 解析 / mode 字段）；
+   *  缺省视为 change 会话（读时兜底，不写回旧 state）。workflow 选择按 kind 优先于 mode。 */
+  kind?: "review"
+  /** kind=review 时的审查范围（granularity 决定 workflow 文件、fix 决定 fail 方向转移策略）。 */
+  reviewScope?: ReviewScope
 }

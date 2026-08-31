@@ -310,6 +310,16 @@ export function suspendItem(item: WorkItem, reason: string): void {
 
 export type TransitionDirection = "pass" | "fail"
 
+/** fix=none 只审会话的修复策略 metadata 键（引擎无 state 访问，item.metadata 为引擎消费单一事实源，
+ *  由 init 从 state.reviewScope.fix 写入）。 */
+export const REVIEW_FIX_POLICY_KEY = "review_fix_policy"
+
+/** 读取 item 的独立审查修复策略（非 review 会话返回 undefined）。 */
+export function reviewFixPolicyOf(item: WorkItem): "none" | "fix" | undefined {
+  const v = item.metadata[REVIEW_FIX_POLICY_KEY]
+  return v === "none" || v === "fix" ? v : undefined
+}
+
 export interface TransitionResult {
   advanced: boolean
   reason?: string
@@ -324,6 +334,18 @@ function resolveStepInPhase(workflow: LoadedWorkflow, stepId: string): { step: S
 
 function phaseOrderIndex(phase: WorkItemPhase): number {
   return WORK_ITEM_PHASES.indexOf(phase)
+}
+
+/** done 转移的统一收口：不走 forwardGatePassed（短路），置 done 前显式检查 task children 全部终态
+ *  （未完成子任务不得收尾；issue blocking 检查已在 stepCanPass 处理；review 会话无 task children 天然通过）。 */
+function applyDoneTransition(item: WorkItem): TransitionResult {
+  const unfinishedTasks = item.children.filter((child) => child.type === "task" && !isTerminalPhase(child.phase))
+  if (unfinishedTasks.length > 0) {
+    return { advanced: false, reason: "存在未完成的子任务（task children 未达终态），无法进入 done。" }
+  }
+  item.phase = "done"
+  item.currentStep = null
+  return { advanced: true, target: "done" }
 }
 
 /**
@@ -346,16 +368,15 @@ export function applyTransition(
 
   const target = direction === "pass" ? current.step.transitions.on_pass : current.step.transitions.on_fail
 
+  // fix=none 只审会话：fail 方向转移目标 implement 为拓扑统一声明的死 step（review workflow 的
+  // on_fail 一律写 implement），策略短路直达 done——不可拦截转移：failed tag 滞留会让审查者被
+  // 无限重派死锁。done 收口只检查 task children 终态，review 会话无 task children 天然通过，
+  // issue 报告即交付物（收尾 openIssues 门禁对 fix=none 放宽）。
+  if (direction === "fail" && target === "implement" && reviewFixPolicyOf(item) === "none") {
+    return applyDoneTransition(item)
+  }
   if (target === "done") {
-    // done 转移不走 forwardGatePassed（短路），置 done 前须显式检查 task children 全部终态
-    // （未完成子任务不得收尾；issue blocking 检查已在 stepCanPass 处理）。
-    const unfinishedTasks = item.children.filter((child) => child.type === "task" && !isTerminalPhase(child.phase))
-    if (unfinishedTasks.length > 0) {
-      return { advanced: false, reason: "存在未完成的子任务（task children 未达终态），无法进入 done。" }
-    }
-    item.phase = "done"
-    item.currentStep = null
-    return { advanced: true, target: "done" }
+    return applyDoneTransition(item)
   }
   if (target === "halt") {
     suspendItem(item, "halt")
@@ -507,6 +528,17 @@ export function recommendForItem(item: WorkItem, workflow: LoadedWorkflow): Engi
       stepId: null,
       agents: [],
       blockedReason: `WorkItem phase="${item.phase}" 在 workflow 中无对应 step 容器。`,
+    }
+  }
+
+  // fix=none 只审会话防御：fail 方向已被策略短路映射 done，implement 逻辑上不可达；
+  // 若因状态异常（如 recovery 误置）落进 implement，不推荐分派（否则只审会话出现修复动作）。
+  if (current.step.id === "implement" && reviewFixPolicyOf(item) === "none") {
+    return {
+      status: "blocked",
+      stepId: current.step.id,
+      agents: [],
+      blockedReason: "只审（fix=none）会话不可进入 implement（修复步骤逻辑上不可达），请核对 state 后按需调用 opx_orch_init(recovery=...) 恢复。",
     }
   }
 

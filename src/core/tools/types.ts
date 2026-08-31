@@ -17,8 +17,18 @@ export interface ToolResult {
 }
 
 export interface InitParams {
-  change_id: string
-  task_group_id: string
+  /** change 会话入口必传；独立审查入口（review_scope）不传（会话 id 由 review_scope 推导并在返回体回传）。 */
+  change_id?: string
+  /** change 会话入口必传；独立审查会话用固定虚拟组 review（recovery 时可缺省）。 */
+  task_group_id?: string
+  /** 独立审查会话入口：与 change_id/task_group_id 互斥（同传报错、都不传报错）。 */
+  review_scope?: {
+    scope_type: "pr" | "full"
+    base_ref?: string
+    head_ref?: string
+    granularity: "simple" | "thorough"
+    fix: "none" | "fix"
+  }
   base_branch?: string
   recovery?: {
     phase: BuildPhaseTarget

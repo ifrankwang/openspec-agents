@@ -71,7 +71,7 @@ export function renderWorkflowStatusView(
     return renderSuspended(item)
   }
   if (item.phase === "done" || item.phase === "cancelled") {
-    return renderTerminalPhase(item)
+    return renderTerminalPhase(item, options.state)
   }
   if (rec.status === "blocked") {
     if (caller.orchestrator) {
@@ -155,8 +155,11 @@ function renderSuspended(item: WorkItem): string {
   ].join("\n")
 }
 
-/** 终态渲染：done 区分已完成（completed_at 已写）与待收尾；cancelled 呈现已取消。 */
-function renderTerminalPhase(item: WorkItem): string {
+/** 终态渲染：done 区分已完成（completed_at 已写）与待收尾；cancelled 呈现已取消。
+ *  独立审查会话（kind=review）待收口时渲染审查结果报告视图（issue 按严重级别/维度/文件位置归并，
+ *  只审模式的交付物）——fix=none 下 issue 停留 todo 态、step tag=failed、item=done 为合法组合，
+ *  报告视图不渲染豁免/复核操作提示（该通道在只审模式下是死路，无修复者消费裁定结论）。 */
+function renderTerminalPhase(item: WorkItem, state?: OrchestrateState): string {
   if (item.phase === "cancelled") {
     return [
       "# 🚫 任务组已取消",
@@ -164,6 +167,27 @@ function renderTerminalPhase(item: WorkItem): string {
       "- **说明**: 该 WorkItem 已取消，编排停止，请结束当前会话。",
       "",
     ].join("\n")
+  }
+  if (state?.kind === "review") {
+    if (item.metadata["completed_at"] !== undefined) {
+      return [
+        "# ✅ 独立审查会话已完成",
+        "",
+        `- **完成时间**: ${item.metadata["completed_at"]}`,
+        "",
+        "审查结果摘要见收尾返回体（opx_orch_complete_task_group）。",
+        "",
+      ].join("\n")
+    }
+    const lines = [
+      "# 🏁 独立审查已完成，待收尾",
+      "",
+      renderReviewReport(item),
+      "",
+      "全部审查层已收口。调用 `opx_orch_complete_task_group` 完成收尾（只审模式销毁 worktree 不合并，审并修模式合并回目标分支）。",
+      "",
+    ]
+    return lines.join("\n")
   }
   if (item.metadata["completed_at"] !== undefined) {
     return [
@@ -181,6 +205,42 @@ function renderTerminalPhase(item: WorkItem): string {
     "全部审核层已通过。调用 `opx_orch_complete_task_group` 合并分支并完成收尾。",
     "",
   ].join("\n")
+}
+
+/** 独立审查报告视图：issue 按严重级别/维度/文件位置归并的最终报告形态（views 同构渲染共享）。 */
+function renderReviewReport(item: WorkItem): string {
+  const issues = issueChildrenOf(item)
+  if (issues.length === 0) return "未报出任何 issue。"
+  const bySeverity = new Map<string, number>()
+  const byDimension = new Map<string, number>()
+  for (const c of issues) {
+    const sev = c.severity ?? "Info"
+    const f = resolveChildIssueFields(c)
+    bySeverity.set(sev, (bySeverity.get(sev) ?? 0) + 1)
+    byDimension.set(f.dimension, (byDimension.get(f.dimension) ?? 0) + 1)
+  }
+  const lines = [
+    "## 审查结果报告",
+    "",
+    `- **issue 总数**: ${issues.length}`,
+    `- **按严重级别**: ${[...bySeverity.entries()].map(([k, v]) => `${k}=${v}`).join("、")}`,
+    `- **按维度**: ${[...byDimension.entries()].map(([k, v]) => `${k}=${v}`).join("、")}`,
+    "",
+  ]
+  for (const sev of ["Critical", "High", "Medium", "Low", "Info"]) {
+    const group = issues.filter((c) => (c.severity ?? "Info") === sev)
+    if (group.length === 0) continue
+    lines.push(`### ${sev}（${group.length} 个）`, "")
+    for (const c of group) {
+      const id = c.externalId ?? c.id.replace(/^issue:/, "")
+      const f = resolveChildIssueFields(c)
+      lines.push(`- Issue #${id} | 维度:${f.dimension}${f.file ? ` | \`${formatFilePath(f.file, f.line)}\`` : ""}`)
+      lines.push(`  - 描述：${c.description}`)
+      if (typeof c.metadata["suggestion"] === "string") lines.push(`  - 建议：${c.metadata["suggestion"]}`)
+    }
+    lines.push("")
+  }
+  return lines.join("\n")
 }
 
 /** blocked 视图：调用者若为当前 step 轮次 agent 用 blocked_agent 文案，否则用通用 blocked 文案。
@@ -499,7 +559,8 @@ function renderAgentWorking(
 
   // tool review 检查点增量三分支（A4）：仅 verify_tool 的 reviewer-tool 且提供了变更检测结果时生效；
   // toolChanges 缺省（未预计算）时维持既有全量渲染，不误伤其他 agent/step 的通用渲染。
-  if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges) {
+  // 独立审查 full 形态（scopeFull 哨兵）不走三分支——审查锚点为全量代码库，非「未检出变更」。
+  if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges && !toolChanges.scopeFull) {
     const { active, pending } = toolPendingChildren(item, ctxAgent)
     if (!toolChanges.hasNonDocChange && active.length === 0 && pending.length === 0) {
       return renderToolDirectSubmit(exemptedHits)
@@ -564,7 +625,9 @@ function renderAgentWorking(
   // test_results），作为分级复验的事实输入——低成本实跑对照、高成本项核验申报+抽样重放均以该申报为
   // 证据源。仅 quality_review step 渲染（消费方是 reviewer）；implement 视图与其余 step 视图不受影响
   //（dev 自己刚产出该申报，无需回显）。
-  if (step?.id === "quality_review") {
+  // 开发者自检申报区块仅 change 会话渲染（simple 模式 quality_review 的分级复验事实输入）；
+  // 独立审查会话无该数据源（无 dev 实施申报语义），不渲染空区块。
+  if (step?.id === "quality_review" && state.kind !== "review") {
     lines.push(...renderDevSelfCheckDeclaration(item.metadata))
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
@@ -843,6 +906,14 @@ function renderToolChangesEvidence(
   const baseRef = tg.baseRef ?? undefined
   const rangeRef = checkpoint ?? baseRef
   const lines = [`## 本次变更证据（${label.title}）`, ""]
+  // 独立审查 full 形态哨兵：审查锚点为全量代码库（无区间可界定），不渲染「未检出变更」误报
+  if (toolChanges.scopeFull) {
+    lines.push(
+      "- **口径**: 全量代码库审查（独立审查 full 形态）——无区间界定，工具检查与审查覆盖整个代码库",
+      "",
+    )
+    return [lines.join("\n")]
+  }
   if (checkpoint) {
     lines.push(
       `- **口径**: 本次为「${label.title}（${checkpoint}..HEAD）」的增量区间（含已提交与未提交的非 openspec 变更）；` +

@@ -202,25 +202,58 @@ export const recoverySchema: JSONSchema = {
 export const orchInitSchema: JSONSchema = {
   type: "object",
   properties: {
-    change_id: { type: "string", minLength: 1, description: "OpenSpec 变更 ID" },
+    change_id: { type: "string", minLength: 1, description: "OpenSpec 变更 ID（change 会话入口；与 review_scope 二选一）" },
     task_group_id: {
       type: "string",
       minLength: 1,
-      description: "要初始化的任务组 ID。无 recovery 重复调用当前组时保留进度；切换任务组时仅初始化目标组。",
+      description: "要初始化的任务组 ID（change 会话入口）。无 recovery 重复调用当前组时保留进度；切换任务组时仅初始化目标组。独立审查会话恢复时可不传。",
     },
     base_branch: {
       type: "string",
-      description: "基准分支名（如 main、develop），用于计算 merge-base 和 worktree fork 源。未传则自动从当前 git 分支推导。",
+      description: "基准分支名（如 main、develop），用于计算 merge-base 和 worktree fork 源。未传则自动从当前 git 分支推导。仅 change 会话入口有效。",
     },
     recovery: recoverySchema,
     mode: {
       type: "string",
       enum: ["full", "simple"],
       description:
-        "流程模式选择：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
+        "流程模式选择（仅 change 会话入口有效，独立审查会话不使用）：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
+    },
+    review_scope: {
+      type: "object",
+      description:
+        "独立审查会话入口（不绑定 OpenSpec change）：与 change_id/task_group_id 互斥——同传报错、都不传报错，两种入口二选一。会话 id 由审查范围确定性推导并在返回体回传，后续所有工具以 change_id 形式传入该会话 id。",
+      properties: {
+        scope_type: {
+          type: "string",
+          enum: ["pr", "full"],
+          description: "审查范围：pr=按 base_ref..head_ref 本地分支区间审查；full=全量代码库审查",
+        },
+        base_ref: {
+          type: "string",
+          minLength: 1,
+          description: "pr 形态的基准本地分支。缺省自动推导（优先 main、其次 master）。须为本地分支（origin/* 等远端 ref 不受支持——收尾合并只推进本地分支引用）",
+        },
+        head_ref: {
+          type: "string",
+          minLength: 1,
+          description: "pr 形态的头部本地分支（审查目标分支，pr 必传）。须为本地分支（origin/* 等远端 ref 不受支持）",
+        },
+        granularity: {
+          type: "string",
+          enum: ["simple", "thorough"],
+          description: "审查颗粒度：simple=单层合并审查；thorough=三层审查（工具检查→回归验证→五维度质量审查）",
+        },
+        fix: {
+          type: "string",
+          enum: ["none", "fix"],
+          description: "修复策略：none=只审不修（issue 报告即交付物，审查失败直接收口出报告）；fix=审并修（审查失败回退修复，修复后重审）",
+        },
+      },
+      required: ["scope_type", "granularity", "fix"],
+      additionalProperties: false,
     },
   },
-  required: ["change_id", "task_group_id"],
   additionalProperties: false,
 }
 

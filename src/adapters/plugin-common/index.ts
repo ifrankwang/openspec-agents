@@ -6,7 +6,7 @@
  *
  * 生成产物为一个完整插件目录：plugin.json 清单 + agents/*.md（从 assets/agents 转换、
  * 排除主代理模板、frontmatter 仅保留 name/description）+ skills/<名>/（含 orchestrator 与
- * reference/ 附属文件）+ assets/workflows/（task.yaml workflow 定义，bundle 内按部署深度
+ * reference/ 附属文件）+ assets/workflows/（task/review 系列 workflow 定义，bundle 内按部署深度
  * 逐级上溯探测读取）+ .mcp.json（stdio + 自包含 bundle 入口 + 当前项目 worktree + 默认
  * 无人值守）+ .mcp-server/cli.mjs 自包含 bundle（node 直接执行，不依赖 node_modules）。
  */

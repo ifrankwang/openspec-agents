@@ -59,6 +59,8 @@ export class FakeGitRunner implements GitRunner {
   mergeCommitBranches: string[] = []
   /** 结构化调用记录（run/runChecked 通用），断言某命令是否以特定目录为目标。 */
   callSites: { dir: string; args: string[]; checked: boolean }[] = []
+  /** 本地分支集合（rev-parse --verify refs/heads/<name> 与 for-each-ref refs/heads 判定源）。 */
+  localBranches = new Set<string>(["main", "master"])
 
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
@@ -94,6 +96,9 @@ export class FakeGitRunner implements GitRunner {
     }
 
     if (cmd === "merge-base") return this.baseRef
+    if (cmd === "for-each-ref" && rest.some((a) => a.includes("refs/heads"))) {
+      return Array.from(this.localBranches).join("\n")
+    }
     if (cmd === "rev-list" && rest[0] === "--count") {
       if (rest[1] && /^[0-9a-f]{7,}\.\./.test(rest[1])) return String(this.mainAheadCount)
       return String(this.revListCount)
@@ -164,6 +169,14 @@ export class FakeGitRunner implements GitRunner {
     this.callLog.push(`checked:${args.join(" ")}`)
     this.callSites.push({ dir: worktree, args, checked: true })
     const cmd = args[0]
+
+    // 本地分支存在性校验（独立审查入口）：refs/heads/<name> 命中 localBranches 才算存在
+    if (cmd === "rev-parse" && args[1] === "--verify") {
+      const branch = args[2]?.replace(/^refs\/heads\//, "") ?? ""
+      return this.localBranches.has(branch)
+        ? { success: true, stdout: this.defaultBranchOid, stderr: "", exitCode: 0 }
+        : { success: false, stdout: "", stderr: `fatal: refs/heads/${branch}: not a valid ref`, exitCode: 128 }
+    }
 
     if (cmd === "diff") {
       if (this.failDiff) return { success: false, stdout: "", stderr: "fatal: diff 失败", exitCode: 1 }

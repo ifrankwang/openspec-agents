@@ -54,12 +54,21 @@ export function resolveTaskWorkflowPath(moduleUrl: string): string {
 export const TASK_WORKFLOW_PATH = resolveTaskWorkflowPath(import.meta.url)
 /** simple 流程文件（implement → quality_review → done），与 task.yaml 同目录随插件 bundle 分发。 */
 export const SIMPLE_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "task-simple.yaml")
+/** 独立审查会话（thorough 颗粒度）流程文件：三层审查 + implement 修复闭环。 */
+export const REVIEW_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "review.yaml")
+/** 独立审查会话（simple 颗粒度）流程文件：单层合并审查 + implement 修复闭环。 */
+export const REVIEW_SIMPLE_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "review-simple.yaml")
 
 /**
- * 按 state.mode 选择 workflow 文件：simple → task-simple.yaml，其余（full 或旧 state 缺 mode）→ task.yaml。
- * 旧 state 无 mode 字段一律按 full 处理（读时兜底，不写回），与 D2 固化语义一致。
+ * 选择 workflow 文件：kind 优先于 mode——
+ * - kind=review（独立审查会话，无 mode 字段）：按 reviewScope.granularity 选 review.yaml / review-simple.yaml；
+ * - change 会话：mode=simple → task-simple.yaml，其余（full 或旧 state 缺 mode）→ task.yaml。
+ * 旧 state 无 mode 一律按 full 处理（读时兜底，不写回），与 D2 固化语义一致。
  */
-export function resolveWorkflowPath(state: Pick<OrchestrateState, "mode">): string {
+export function resolveWorkflowPath(state: Pick<OrchestrateState, "mode" | "kind" | "reviewScope">): string {
+  if (state.kind === "review") {
+    return state.reviewScope?.granularity === "simple" ? REVIEW_SIMPLE_WORKFLOW_PATH : REVIEW_WORKFLOW_PATH
+  }
   return state.mode === "simple" ? SIMPLE_WORKFLOW_PATH : TASK_WORKFLOW_PATH
 }
 

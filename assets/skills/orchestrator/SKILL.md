@@ -33,6 +33,15 @@ capabilities: ["orchestrator"]
   - DSH 形态：`openspec_developer` / `openspec_reviewer` 两个物理子代理（`openspec_<role>`，物理 agent 已收敛，9 种逻辑身份经 `_agent` 参数承载），分派时直接调用这些专用工具，不要使用通用 `subagent` 代替；
   - 其他 harness 按各自原生子代理机制分派（Claude Code / Codex / ZCode 插件已注入对应子代理）。
 
+## 审查请求入口（独立审查会话）
+
+用户表达审查意图且不绑定 OpenSpec change（如「审查这个 PR」「对代码库做一次审查」）时，走独立审查入口：初始化工具传 `review_scope`（不传 `change_id`/`task_group_id`，两者互斥）。`review_scope` 含四个要素：`scope_type`（pr=按 base..head 本地分支区间 / full=全量代码库）、`base_ref`（pr 基准分支，缺省自动推导 main→master）、`head_ref`（pr 审查目标分支，须为本地分支——`origin/*` 远端引用不受支持）、`granularity`（simple=单层合并审查 / thorough=三层审查）、`fix`（none=只审不修 / fix=审并修）。
+
+- 有人值守且 `fix` 或 `granularity` 未明确：用 question 工具逐项向用户确认后显式传入，不擅自替用户拍板
+- 无人值守且未明确：缺省 `fix=none` + `granularity=simple`（只读零副作用、成本最低）；遇高敏信号（如用户明确要求安全审计）可自行升档 `thorough`
+- 初始化返回体回传会话 ID——后续所有编排工具以 `change_id="<会话 ID>"` 传入（worktree 创建、状态查询、提交、收尾同一会话 ID）
+- 独立审查会话无「任务组」概念，分派模板措辞按「审查会话 <会话 ID>」表述；其余分派范式（不转述动态上下文、`_agent` 身份指令）不变
+
 ## 行为准则
 
 - 每次子代理返回后，调用状态查询工具获取权威「下一步」指令并严格遵循；推进被拦时按工具给出的阻塞原因与修复建议处理，不自行推断其他动作

@@ -274,6 +274,9 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     // 透传固化模式：读取不改动 mode（缺 mode 的旧变更保持缺省，消费端读时兜底 full，不在此写回）；
     // init 在允许窗口（切组/重制当前组，其他任务组均终态或从未激活）内可显式更新 state.mode
     mode: legacy.mode,
+    // 独立审查会话透传：kind/reviewScope 由 init 固化，缺省视为 change 会话（读时兜底，不写回旧 state）
+    kind: legacy.kind,
+    reviewScope: legacy.reviewScope,
   }
   if (needsUpgrade) {
     // 迁移产物一次性落盘固定单轨形态，避免每次读取都重建（首次写新目录前幂等迁移旧数据）

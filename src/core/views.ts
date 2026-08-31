@@ -108,7 +108,20 @@ export function renderWorktreeSection(
   if (tg.worktreePath) {
     lines.push(`- **路径**: \`${tg.worktreePath}\``)
     lines.push(`- **分支**: \`${tg.branchName || "(none)"}\``)
-    if (tg.baseRef) lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
+    if (state.kind === "review") {
+      // 独立审查会话：渲染「审查范围」锚点——pr 形态为 base..head 区间（base_ref 存 merge-base 锚点），
+      // full 形态为全量代码库（base_ref 不设，不得渲染为「未检出变更」）
+      if (state.reviewScope?.scopeType === "pr" && tg.baseRef) {
+        lines.push(
+          `- **审查范围**: PR 区间审查（${state.reviewScope.baseRef}..${state.reviewScope.headRef}）——` +
+            `用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本区间已提交变更文件`,
+        )
+      } else {
+        lines.push("- **审查范围**: 全量代码库审查（无区间界定，工具检查与审查覆盖整个代码库）")
+      }
+    } else if (tg.baseRef) {
+      lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
+    }
     lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行；严禁直接修改主仓库/主分支路径下的文件（如 `<repo>/openspec/...`）")
     lines.push("- **路径解析**: 推荐阅读文档均为相对 worktree 路径的引用，一律以 worktree 路径为基准解析，禁止从主仓库根目录解析")
   } else {
