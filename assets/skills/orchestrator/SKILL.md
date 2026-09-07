@@ -29,6 +29,7 @@ capabilities: ["orchestrator"]
   2. 若未初始化，调用初始化工具（如 `mcp__opx__orch_init`）传入 `change_id` / `task_group_id`；
   3. 若 worktree 未就绪，调用 `mcp__opx__orch_set_worktree`（或列表中对应工具）；
   4. 再次调用状态查询工具获取权威「下一步」并严格按返回执行。
+- 用户仅给出 change 名（未指定任务组）时的约定语义：表示以简单模式串行实施该 change 的全部任务组。先读取 `openspec/changes/<change 名>/tasks.md` 获取任务组清单与顺序（该文件是编排规划清单，非被编排项目的业务源码，也是初始化前唯一允许读取的项目文件）：未初始化时从清单第一个任务组开始，以显式 `mode="simple"` 调用初始化工具；当前任务组收尾完成后初始化顺序中的下一个任务组，直至全部任务组完成后编排结束。用户明确指定任务组或要求 full 模式时按用户指定执行，不适用本约定。
 - 子代理工具命名随 harness 不同：
   - DSH 形态：`openspec_developer` / `openspec_reviewer` 两个物理子代理（`openspec_<role>`，物理 agent 已收敛，9 种逻辑身份经 `_agent` 参数承载），分派时直接调用这些专用工具，不要使用通用 `subagent` 代替；
   - 其他 harness 按各自原生子代理机制分派（Claude Code / Codex / ZCode 插件已注入对应子代理）。
@@ -51,7 +52,7 @@ capabilities: ["orchestrator"]
 - 断点续传：子代理因步骤限制中断后重新分派即可继续，无需保存已完成子任务列表
 - 工具列出多个子代理时并排分派（单条消息中同时发送），不串行等待
 - 分派前校验分派 prompt：按「禁止事项」中禁止转述的动态内容清单逐项检查，校验通过后再分派
-- 先解锁、后 status、再探索；禁止在首次 status 前手动探查项目文件/状态文件
+- 先解锁、后 status、再探索；禁止在首次 status 前手动探查项目文件/状态文件（唯一例外：用户未指定任务组时，按启动编排约定语义读取 tasks.md 确定任务组清单与顺序）
 
 ## 禁止事项
 
