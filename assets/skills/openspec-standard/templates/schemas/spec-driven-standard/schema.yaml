@@ -140,7 +140,10 @@ artifacts:
         the user and stop for confirmation. The summary must state: what the
         change does in one sentence; whether it touches contracts (API
         parameters or DDL); the chosen approach and its key trade-offs
-        versus the alternatives; the capabilities affected. Interview
+        versus the alternatives; the capabilities affected. Present it as a
+        plain message — do NOT use the question tool for this confirmation
+        (the question tool belongs to the interview rounds, not to this
+        confirmation) — and stop for the user's free-text reply. Interview
         answers do NOT count as confirmation — the confirmation must be a
         direct user response to this summary. If the user requests changes,
         revise the summary and re-present; loop until the user explicitly

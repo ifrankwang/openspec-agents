@@ -32,9 +32,10 @@
 
 <!-- The crystallized approach: chosen direction, key decisions, 2-3 alternatives
      considered with tradeoffs, and the plan summary the user explicitly confirmed
-     (interview answers alone do not count as confirmation). This is the HARD-GATE
-     output — proposal, specs, design, and tasks must stay consistent with what is
-     recorded here. -->
+     (interview answers alone do not count as confirmation; the summary must be a
+     plain message listing the key points — never a question-tool prompt). This is
+     the HARD-GATE output — proposal, specs, design, and tasks must stay consistent
+     with what is recorded here. -->
 
 ## Authoring Tier
 
