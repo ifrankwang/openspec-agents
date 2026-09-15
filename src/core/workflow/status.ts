@@ -6,7 +6,7 @@ import type { ExemptionRecord } from "../exemptions.ts"
 import type { LoadedWorkflow } from "./loader.ts"
 import type { EngineRecommendation } from "./engine.ts"
 import type { DetectChangesResult } from "../git.ts"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, isTaskGroupSettled, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
 import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.ts"
 import { resolveChildIssueFields } from "./reset.ts"
 import { taskListOf, issueChildrenOf } from "../task-children.ts"
@@ -14,7 +14,9 @@ import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
   renderAgentSummaries, renderDevSelfCheckDeclaration, renderTaskItem, formatFilePath, formatSeverity,
   isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
+  extractDeploymentNoteLines,
 } from "../views.ts"
+import { taskGroupFromWorkItem } from "../derive.ts"
 import { resolveMustDoForCaps, SKIP_REASON_FORMAT } from "../tools/gate.ts"
 
 export interface WorkflowStatusViewOptions {
@@ -71,7 +73,7 @@ export function renderWorkflowStatusView(
     return renderSuspended(item)
   }
   if (item.phase === "done" || item.phase === "cancelled") {
-    return renderTerminalPhase(item, options.state)
+    return renderTerminalPhase(item, options.state, caller)
   }
   if (rec.status === "blocked") {
     if (caller.orchestrator) {
@@ -158,8 +160,10 @@ function renderSuspended(item: WorkItem): string {
 /** 终态渲染：done 区分已完成（completed_at 已写）与待收尾；cancelled 呈现已取消。
  *  独立审查会话（kind=review）待收口时渲染审查结果报告视图（issue 按严重级别/维度/文件位置归并，
  *  只审模式的交付物）——fix=none 下 issue 停留 todo 态、step tag=failed、item=done 为合法组合，
- *  报告视图不渲染豁免/复核操作提示（该通道在只审模式下是死路，无修复者消费裁定结论）。 */
-function renderTerminalPhase(item: WorkItem, state?: OrchestrateState): string {
+ *  报告视图不渲染豁免/复核操作提示（该通道在只审模式下是死路，无修复者消费裁定结论）。
+ *  change 会话两形态在编排视角下追加「部署注意事项」区块（见 renderDeploymentNotesSection），
+ *  子代理视角维持既有文案。 */
+function renderTerminalPhase(item: WorkItem, state?: OrchestrateState, caller?: StatusViewCaller): string {
   if (item.phase === "cancelled") {
     return [
       "# 🚫 任务组已取消",
@@ -197,6 +201,7 @@ function renderTerminalPhase(item: WorkItem, state?: OrchestrateState): string {
       "",
       "编排已完成并收尾。",
       "",
+      ...renderDeploymentNotesSection(state, caller),
     ].join("\n")
   }
   return [
@@ -204,7 +209,39 @@ function renderTerminalPhase(item: WorkItem, state?: OrchestrateState): string {
     "",
     "全部审核层已通过。调用 `opx_orch_complete_task_group` 合并分支并完成收尾。",
     "",
+    ...renderDeploymentNotesSection(state, caller),
   ].join("\n")
+}
+
+/** 终态视图的「部署注意事项」区块（仅编排视角、change 会话渲染）：指引编排者读主仓库规划文档提取
+ *  部署要点，并聚合各任务组 self_check_results 申报的「部署注意点:」前缀行（实施补充点，编排者纯转述）。
+ *  渲染前提：change 全部任务组均终态或从未激活（isTaskGroupSettled，含当前组——渲染到终态时当前组必已
+ *  终态），存在未收口组时不渲染（两形态维持既有文案）。全部组无实施补充点时省略补充点段（不渲染空段）。 */
+function renderDeploymentNotesSection(state: OrchestrateState | undefined, caller: StatusViewCaller | undefined): string[] {
+  if (!caller?.orchestrator || !state || state.kind === "review") return []
+  const taskGroups = state.workItems.filter((w) => w.id.startsWith("task:"))
+  if (!taskGroups.every(isTaskGroupSettled)) return []
+  const lines = [
+    "## 部署注意事项汇报",
+    "",
+    "向用户汇报本次变更的部署注意事项：",
+    "",
+    `- 阅读主仓库 \`openspec/changes/${state.changeId}/\` 下规划文档（design.md、tasks.md、proposal.md、specs/）提取部署要点：数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化`,
+    "- 无规划文档时跳过文档提取，仅转述下方实施补充点",
+    "",
+  ]
+  const supplementary = taskGroups.flatMap((g) => {
+    const notes = extractDeploymentNoteLines(g.metadata)
+    if (notes.length === 0) return []
+    const tg = taskGroupFromWorkItem(g)
+    return [`- ${tg.name}(${tg.id}):`, ...notes.map((n) => `  - ${n}`)]
+  })
+  if (supplementary.length > 0) {
+    lines.push("实施补充点（开发者实施时申报，原样转述）：", "")
+    lines.push(...supplementary)
+    lines.push("")
+  }
+  return lines
 }
 
 /** 独立审查报告视图：issue 按严重级别/维度/文件位置归并的最终报告形态（views 同构渲染共享）。 */

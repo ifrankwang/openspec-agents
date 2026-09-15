@@ -74,6 +74,7 @@ phases:
           - "提交前完成自检并经 self_check_results 汇总"
           - "提交前按已加载的维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次变更文件逐项自检（聚焦本轮变更文件，不扩散全量代码），自检结论与工具检查结果一并汇总进 self_check_results；修复被驳回 issue 后再次提交前同样须按维度规范类 skill 对变更文件自检后再提交"
           - "自检须覆盖已加载的维度规范类 skill 的全部检查点，self_check_results 按维度逐项列结论（通过/遗留及理由），禁止仅汇总工具检查结果"
+          - "实施产出的部署注意点（数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化）凡属规划文档（design.md/tasks.md/proposal.md/specs/）未记载的，随提交在 self_check_results 中以 `部署注意点:` 开头的独立行逐条申报（每个注意点独占一行）；规划文档已记载的不重复申报；修复轮重新提交时保留既有部署注意点行"
           - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；Info 级 issue 不阻塞提交，无需申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由（commit message 可补充），并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复；被驳回后须移除压制并真实修复"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"

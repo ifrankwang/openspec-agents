@@ -14,9 +14,9 @@
  */
 import { describe, expect, test } from "bun:test"
 
-import { loadWorkflow } from "../src/core/workflow/loader"
+import { loadWorkflow, loadWorkflowFile, TASK_WORKFLOW_PATH, SIMPLE_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
-import { renderDevSelfCheckDeclaration } from "../src/core/views"
+import { renderDevSelfCheckDeclaration, extractDeploymentNoteLines } from "../src/core/views"
 
 // ─── 基建 ───
 
@@ -321,5 +321,70 @@ describe("renderDevSelfCheckDeclaration 开发者自检申报渲染", () => {
     expect(renderDevSelfCheckDeclaration({})).toEqual([])
     expect(renderDevSelfCheckDeclaration({ self_check_results: "  ", test_results: "" })).toEqual([])
     expect(renderDevSelfCheckDeclaration({ self_check_results: 42, test_results: null })).toEqual([])
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  8. 部署注意点行提取（终态视图「部署注意事项」区块的实施补充点数据源）
+// ═══════════════════════════════════════════════════════════════
+
+describe("extractDeploymentNoteLines 部署注意点行提取", () => {
+  test("前缀行命中（含行首空白容错），命中行去除行尾空白后原样保留", () => {
+    expect(
+      extractDeploymentNoteLines({
+        self_check_results: "构建验证通过\n  部署注意点: 新增配置项 deploy.switch 需在部署前开启  \n维度自检通过",
+      }),
+    ).toEqual(["部署注意点: 新增配置项 deploy.switch 需在部署前开启"])
+  })
+
+  test("非前缀行排除（前缀出现在行中/行首非约定前缀均不命中）", () => {
+    expect(
+      extractDeploymentNoteLines({
+        self_check_results: "自检结论提及部署注意点但未置于行首\n部署注意事项: 行首是「事项」而非「点」，非约定前缀",
+      }),
+    ).toEqual([])
+  })
+
+  test("行首为全角冒号「部署注意点：」不命中（约定前缀为半角冒号）", () => {
+    expect(
+      extractDeploymentNoteLines({ self_check_results: "部署注意点：全角冒号行不参与提取" }),
+    ).toEqual([])
+  })
+
+  test("前缀约定防漂移：两种模式 workflow 的 implement instructions 均含「部署注意点:」申报条目", () => {
+    // 申报端（workflow 配置）与提取端（views.ts，由上方单测用例锚定）共用同一前缀字面量，
+    // 任一侧单改前缀未同步另一侧时本用例失败
+    for (const path of [TASK_WORKFLOW_PATH, SIMPLE_WORKFLOW_PATH]) {
+      const impl = loadWorkflowFile(path).stepMap.get("implement")
+      expect(impl).toBeDefined()
+      const declared = (impl!.step.instructions ?? []).filter(
+        (i) => i.includes("部署注意点:") && i.includes("self_check_results"),
+      )
+      expect(declared.length).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  test("无 self_check_results / 空串 / 非字符串 → 返回空数组", () => {
+    expect(extractDeploymentNoteLines({})).toEqual([])
+    expect(extractDeploymentNoteLines({ self_check_results: "   " })).toEqual([])
+    expect(extractDeploymentNoteLines({ self_check_results: 42 })).toEqual([])
+  })
+
+  test("多行混合命中：仅收集前缀行且保持出现顺序", () => {
+    expect(
+      extractDeploymentNoteLines({
+        self_check_results:
+          "部署注意点: 数据结构变更脚本须先于服务发布执行\n构建通过\n部署注意点: 新增缓存键前缀需运维同步",
+      }),
+    ).toEqual([
+      "部署注意点: 数据结构变更脚本须先于服务发布执行",
+      "部署注意点: 新增缓存键前缀需运维同步",
+    ])
+  })
+
+  test("命中行保留前缀本身（便于转述端直接输出）", () => {
+    const out = extractDeploymentNoteLines({ self_check_results: "部署注意点: 外部接口契约新增必填字段" })
+    expect(out).toHaveLength(1)
+    expect(out[0].startsWith("部署注意点:")).toBe(true)
   })
 })

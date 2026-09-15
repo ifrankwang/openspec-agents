@@ -32,6 +32,18 @@ export function isTerminalPhase(phase: WorkItemPhase): boolean {
   return phase === "done" || phase === "cancelled"
 }
 
+/** 任务组「终态或从未激活」（mode 切换窗口与终态视图共享的单一判定）：
+ *  done 或 completed_at 已设置即终态；否则须无执行痕迹（tags 为空）且全部 task children
+ *  处于 todo 或终态。 */
+export function isTaskGroupSettled(item: WorkItem): boolean {
+  if (item.phase === "done" || item.metadata["completed_at"] !== undefined) return true
+  const noTags = Object.keys(item.tags).length === 0
+  const childrenSettled = item.children
+    .filter((c) => c.type === "task")
+    .every((c) => c.phase === "todo" || isTerminalPhase(c.phase))
+  return noTags && childrenSettled
+}
+
 export function isBlockingSeverity(severity: string | undefined): boolean {
   return severity !== undefined && (BLOCKING_SEVERITIES as readonly string[]).includes(severity)
 }

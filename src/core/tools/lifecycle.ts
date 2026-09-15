@@ -12,7 +12,7 @@ import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
 import { loadWorkflowFile, resolveWorkflowPath, type LoadedWorkflow } from "../workflow/loader.ts"
-import { createInitialWorkItem, isBlockingSeverity, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, REVIEW_FIX_POLICY_KEY } from "../workflow/engine.ts"
+import { createInitialWorkItem, isBlockingSeverity, isTaskGroupSettled, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, REVIEW_FIX_POLICY_KEY } from "../workflow/engine.ts"
 import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
@@ -357,21 +357,12 @@ function assertValidResetStepValues(
 
 /**
  * 判断目标组以外的全部任务组（workItems 中 `task:` 前缀、非目标组）是否"终态或从未激活"，
- * 即 mode 切换窗口（W1 切组 / W2 重制当前组）的共同前置条件：
- * - 终态：item.phase === "done" 或 metadata.completed_at 已设置；
- * - 从未激活：无执行痕迹——tags 为空且所有 task children 的 phase 均为 todo 或终态（isTerminalPhase）。
+ * 即 mode 切换窗口（W1 切组 / W2 重制当前组）的共同前置条件（判定单一事实源：isTaskGroupSettled）。
  */
 function otherTaskGroupsSettled(state: OrchestrateState, targetGroupId: string): boolean {
   return state.workItems
     .filter((w) => w.id.startsWith("task:") && w.id !== `task:${targetGroupId}`)
-    .every((item) => {
-      if (item.phase === "done" || item.metadata["completed_at"] !== undefined) return true
-      const noTags = Object.keys(item.tags).length === 0
-      const childrenSettled = item.children
-        .filter((c) => c.type === "task")
-        .every((c) => c.phase === "todo" || isTerminalPhase(c.phase))
-      return noTags && childrenSettled
-    })
+    .every(isTaskGroupSettled)
 }
 
 // ─── 独立审查会话（kind=review，不绑定 OpenSpec change）───

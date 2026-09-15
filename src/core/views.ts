@@ -199,6 +199,25 @@ export function renderDevSelfCheckDeclaration(metadata: Record<string, unknown>)
   return lines
 }
 
+// ─── 部署注意点提取 ───
+
+/** self_check_results 申报中实施补充点的行前缀（与 workflow 配置 implement instructions 的申报格式约定一致）。 */
+const DEPLOYMENT_NOTE_PREFIX = "部署注意点:"
+
+/** 从任务组 WorkItem 的 self_check_results 申报中提取「部署注意点:」前缀行（实施补充点，
+ *  规划文档未记载、开发者实施时申报）；无命中返回空数组。命中行去除行首尾空白后原样保留
+ * （含前缀本身，便于转述端直接输出）。 */
+export function extractDeploymentNoteLines(metadata: Record<string, unknown>): string[] {
+  const raw = metadata["self_check_results"]
+  if (typeof raw !== "string" || raw.trim() === "") return []
+  const hits: string[] = []
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith(DEPLOYMENT_NOTE_PREFIX)) hits.push(trimmed)
+  }
+  return hits
+}
+
 // ─── 占位符插值层 ───
 
 /** 插值白名单：仅这些 key 可被 {{key}} 占位符引用，其余一律保留原文（防配置注入任意动态值）。 */

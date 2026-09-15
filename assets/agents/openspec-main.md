@@ -6,6 +6,7 @@ permission:
   read:
     "*": deny
     "openspec/states/*": allow
+    "openspec/changes/*": allow
   edit: deny
   write: deny
   grep: allow

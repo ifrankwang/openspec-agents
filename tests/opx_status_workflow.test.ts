@@ -783,6 +783,174 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  // ─── 终态视图「部署注意事项」区块（仅编排视角 + change 全部任务组收口时渲染）───
+
+  /** 构造任务组 WorkItem（缺省 done 终态；metadata.name 承载任务组名供视图投影）。 */
+  function makeGroupItem(id: string, name: string, metadata: Record<string, unknown> = {}): any {
+    return {
+      id: `task:${id}`,
+      externalId: id,
+      source: "openspec",
+      type: "task",
+      title: name,
+      description: name,
+      phase: "done",
+      suspended: false,
+      currentStep: null,
+      tags: {},
+      metadata: { name, ...metadata },
+      children: [],
+      labels: ["openspec-change"],
+    }
+  }
+
+  test("终态待收尾 + 编排视角 + 全组收口 + 有部署注意点行 → 渲染部署注意事项区块", async () => {
+    const root = `/tmp/wf-m1d-g-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "done"
+    item.currentStep = null
+    item.metadata["self_check_results"] = "构建验证通过\n部署注意点: 新增配置项需在部署前开启功能开关\n维度自检通过"
+    writeStateSync(wt, state)
+
+    const o = makeOrchCtx(wt)
+    const output = await status.execute({ change_id: CID }, o)
+    expect(output).toContain("任务组已完成，待收尾")
+    expect(output).toContain("## 部署注意事项汇报")
+    // 文档提取指引（changeId 路径）
+    expect(output).toContain(`openspec/changes/${CID}/`)
+    // 实施补充点行（含分组标识与原样前缀行）
+    expect(output).toContain("G1(1):")
+    expect(output).toContain("部署注意点: 新增配置项需在部署前开启功能开关")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("终态已完成形态（completed_at 已设置）同样渲染部署注意事项区块", async () => {
+    const root = `/tmp/wf-m1d-h-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "done"
+    item.currentStep = null
+    item.metadata["completed_at"] = new Date().toISOString()
+    item.metadata["self_check_results"] = "自检通过\n部署注意点: 数据结构变更脚本须先于服务发布执行"
+    writeStateSync(wt, state)
+
+    const o = makeOrchCtx(wt)
+    const output = await status.execute({ change_id: CID }, o)
+    expect(output).toContain("编排已完成并收尾")
+    expect(output).toContain("## 部署注意事项汇报")
+    expect(output).toContain("部署注意点: 数据结构变更脚本须先于服务发布执行")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("无任何部署注意点行 → 渲染文档提取指引但不渲染实施补充点段", async () => {
+    const root = `/tmp/wf-m1d-i-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "done"
+    item.currentStep = null
+    item.metadata["self_check_results"] = "构建验证通过，无部署相关变更"
+    writeStateSync(wt, state)
+
+    const o = makeOrchCtx(wt)
+    const output = await status.execute({ change_id: CID }, o)
+    expect(output).toContain("## 部署注意事项汇报")
+    expect(output).toContain(`openspec/changes/${CID}/`)
+    // 补充点段整体缺失（不渲染空段）：以段首标识行判定
+    expect(output).not.toContain("实施补充点（开发者实施时申报")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("存在未收口的其它任务组 → 不渲染部署注意事项区块", async () => {
+    const root = `/tmp/wf-m1d-j-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "done"
+    item.currentStep = null
+    // 其它组：tags 非空且 phase 非终态 → 未 settled
+    state.workItems.push({
+      ...makeGroupItem("2", "G2"),
+      phase: "in_progress",
+      currentStep: "implement",
+      tags: { "implement:openspec-developer": "pending" },
+    })
+    writeStateSync(wt, state)
+
+    const o = makeOrchCtx(wt)
+    const output = await status.execute({ change_id: CID }, o)
+    expect(output).toContain("任务组已完成，待收尾")
+    expect(output).not.toContain("## 部署注意事项汇报")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("子代理视角（非编排视角）→ 不渲染部署注意事项区块", async () => {
+    const root = `/tmp/wf-m1d-k-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "done"
+    item.currentStep = null
+    item.metadata["self_check_results"] = "自检通过\n部署注意点: 中间件配置需同步调整"
+    writeStateSync(wt, state)
+
+    const d = makeCtx("openspec-developer", wt)
+    const output = await status.execute({ change_id: CID }, d)
+    expect(output).toContain("任务组已完成，待收尾")
+    expect(output).not.toContain("## 部署注意事项汇报")
+    expect(output).not.toContain("部署注意点: 中间件配置需同步调整")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
+  test("多任务组前缀行聚合：各组命中行按组分条渲染", async () => {
+    const root = `/tmp/wf-m1d-l-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    await driveToReview(wt)
+
+    const state = readStateSync(wt)
+    const item = taskItemOf(state)
+    item.phase = "done"
+    item.currentStep = null
+    item.metadata["self_check_results"] = "自检通过\n部署注意点: 第一组的部署注意点"
+    // 第二组：done 终态（settled），自带命中行
+    state.workItems.push(makeGroupItem("2", "G2", { self_check_results: "构建通过\n部署注意点: 第二组的部署注意点" }))
+    writeStateSync(wt, state)
+
+    const o = makeOrchCtx(wt)
+    const output = await status.execute({ change_id: CID }, o)
+    expect(output).toContain("## 部署注意事项汇报")
+    expect(output).toContain("G1(1):")
+    expect(output).toContain("部署注意点: 第一组的部署注意点")
+    expect(output).toContain("G2(2):")
+    expect(output).toContain("部署注意点: 第二组的部署注意点")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("orchestrator：阶段进展/审核进度统计（tags 汇总 + children 统计）", async () => {
     const root = `/tmp/wf-m1d-f-${Date.now()}`
     const wt = freshWt(root)
