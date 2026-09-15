@@ -6,9 +6,10 @@
  * - 无分支引用时仅做 worktree 侧清理：目录消失即成功，不执行 branch -D、无残留警告
  * - 收尾裸合并（worktreeless 底层命令）：成功推进双父合并提交且全程无 checkout、冲突零副作用
  *   （目标分支引用未动 + 人工合并指引文案）、已并入重试幂等（跳过合并提交直接收尾清理）
- * - 收尾合并检出检测：目标分支无人检出走 update-ref 原路径；主仓库检出且干净走真实 merge --no-ff
- *   （先 merge-tree 试算）；主仓库检出且有未提交改动、或被其它 linked worktree 检出 → blockedMessage
- *   且零 git 变更命令；试算冲突零副作用；真实 merge 失败时 merge --abort 兜底返回 conflict 形态
+ * - 收尾合并检出检测：目标分支无人检出走 update-ref 原路径；主仓库检出时先 merge-tree 内存拟合并，
+ *   冲突零副作用返回；无冲突按主仓库脏文件与「合并将写入文件」的重合判定分流——重合或部分暂存
+ *   blocked 且零变更命令，无重合执行真实 merge（完整暂存走 restore --staged → merge → add 无损还原）；
+ *   或被其它 linked worktree 检出 → blockedMessage；真实 merge 失败时 merge --abort 兜底返回 conflict 形态
  *
  * 运行：bun test tests/orchestrate.complete-cleanup.test.ts
  */
@@ -243,9 +244,10 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
 describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出状态分流）", () => {
 
   /** 无 git 变更动作命令（merge-tree/update-ref/commit-tree/merge 均不得出现）。 */
+  /** 断言零变更命令：merge-tree 为内存只读试算不算变更；真实变更动作（merge/update-ref/commit-tree/restore/add）不得出现。 */
   function assertNoMutatingCommand(fakeGit: FakeGitRunner): void {
     for (const s of fakeGit.callSites) {
-      expect(["merge-tree", "update-ref", "commit-tree", "merge"]).not.toContain(s.args[0])
+      expect(["merge", "update-ref", "commit-tree", "restore", "add"]).not.toContain(s.args[0])
     }
   }
 
@@ -288,16 +290,85 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
     } finally { teardown(root) }
   })
 
-  test("主仓库检出且有未提交改动 → blockedMessage、零 git 变更命令", async () => {
+  test("主仓库脏且与合并写入重合 → blockedMessage 列重合文件、零变更命令", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
-      fakeGit.dirtyPaths.add(wt)
+      fakeGit.statusPorcelainOutput.set(wt, "M  src/App.java\n M docs/notes.md")
+      fakeGit.mergeWrittenOut = "src/App.java"
 
       const r = await mergeBranchToTarget(wt, "feature", "main")
 
       expect(r.success).toBe(false)
       expect(r.conflict).toBe(false)
-      expect(r.blockedMessage).toContain("commit 或 stash")
+      expect(r.blockedMessage).toContain("src/App.java")
+      // 未重合的脏文件不进重合清单
+      expect(r.blockedMessage).not.toContain("docs/notes.md")
+      expect(r.blockedMessage).toContain("`git merge feature`")
+      assertNoMutatingCommand(fakeGit)
+    } finally { teardown(root) }
+  })
+
+  test("主仓库脏但与合并写入无重合（未暂存）→ 真实 merge 成功、不触碰暂存区", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.statusPorcelainOutput.set(wt, " M src/unrelated.java")
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r).toEqual({ success: true, conflict: false })
+      expect(fakeGit.mergedBranches).toEqual(["feature"])
+      // 未暂存路径无需暂存区绕行
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:restore"))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:add"))).toBe(false)
+    } finally { teardown(root) }
+  })
+
+  test("主仓库完整暂存且无重合 → restore --staged → merge → add 无损还原", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.statusPorcelainOutput.set(wt, "M  staged-file.txt")
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r).toEqual({ success: true, conflict: false })
+      expect(fakeGit.mergedBranches).toEqual(["feature"])
+      // 命令顺序：restore --staged 先于 merge，add 兜底还原在后且携带暂存文件
+      const restoreIdx = fakeGit.callLog.findIndex((l) => l.startsWith("checked:restore --staged"))
+      const mergeIdx = fakeGit.callLog.findIndex((l) => l.startsWith("checked:merge "))
+      const addLines = fakeGit.callLog.map((l, i) => ({ l, i })).filter(({ l, i }) => l.startsWith("checked:add") && i > mergeIdx)
+      expect(restoreIdx).toBeGreaterThanOrEqual(0)
+      expect(mergeIdx).toBeGreaterThan(restoreIdx)
+      expect(addLines.length).toBeGreaterThanOrEqual(1)
+      expect(addLines.some(({ l }) => l.includes("staged-file.txt"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("主仓库完整暂存但真实 merge 失败 → merge --abort 兜底 + add 仍还原暂存态、返回 conflict", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.statusPorcelainOutput.set(wt, "M  staged-file.txt")
+      fakeGit.forceMergeFailure = true
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r.success).toBe(false)
+      expect(r.conflict).toBe(true)
+      expect(fakeGit.callLog.some((l) => l.includes("merge --abort"))).toBe(true)
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:add") && l.includes("staged-file.txt"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("主仓库部分暂存（同文件既有已暂存又有未暂存改动）→ blockedMessage、零变更命令", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      fakeGit.statusPorcelainOutput.set(wt, "MM partial-file.txt")
+      fakeGit.unstagedDeltaOut = "partial-file.txt"
+
+      const r = await mergeBranchToTarget(wt, "feature", "main")
+
+      expect(r.success).toBe(false)
+      expect(r.conflict).toBe(false)
+      expect(r.blockedMessage).toContain("部分暂存")
       expect(r.blockedMessage).toContain("`git merge feature`")
       assertNoMutatingCommand(fakeGit)
     } finally { teardown(root) }
@@ -345,6 +416,30 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
       expect(r).toEqual({ success: false, conflict: true })
       expect(fakeGit.callLog.some((l) => l.includes("merge --abort"))).toBe(true)
       expect(fakeGit.refUpdates.length).toBe(0)
+    } finally { teardown(root) }
+  })
+
+  test("流程级：合并写入重合 blocked → 用户 commit 后重试成功（completed_at 补写、worktree 随成功收尾清理）", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+
+      fakeGit.statusPorcelainOutput.set(wt, "M  src/App.java")
+      fakeGit.mergeWrittenOut = "src/App.java"
+      const out1 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(out1).toContain("blocked")
+      expect(out1).toContain("src/App.java")
+      // 零副作用：completed_at 未写、worktree 保留
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(existsSync(wtPathOf(wt))).toBe(true)
+
+      // 用户 commit 掉重合文件后重试 → 成功收尾
+      fakeGit.statusPorcelainOutput.delete(wt)
+      const out2 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(out2).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      expect(existsSync(wtPathOf(wt))).toBe(false)
     } finally { teardown(root) }
   })
 })

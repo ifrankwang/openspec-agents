@@ -11,6 +11,7 @@
 
 - **多工具支持**：Claude Code、Codex、ZCode、DeepSeek Harness（DSH）、OpenCode 均可原生接入。
 - **规范驱动**：直接消费 OpenSpec 变更规范（proposal / design / tasks / specs），流程与规范一一对应。
+- **提案标准化**：内置 OpenSpec 提案标准（关联场景清点、契约变更详列、动笔前访谈与用户确认），一键初始化到任意项目，在提 change 阶段防漏考虑、防拆分割裂。
 - **智能体团队**：不再是单个 AI 从头写到尾，而是「实现者 + 审查者 + 质量把关者」分工协作，结果更稳。
 - **质量门禁**：实现之后经过工具检查、任务验证与多维度质量审查；发现的问题自动回退修复，也可按规则豁免并留痕。任务验证层（任务审查 / 合并审查）以通过（passed）提交时必须逐项确认全部已申报任务（verified_tasks 全覆盖为工具强制门禁）；已通过但漏带确认导致阻塞时，审查者可补交确认结果解除阻塞。simple 模式下验证按性质分流——开发者执行确定性检查并申报，审查者分级复验（低成本项实跑、高成本项核验申报加抽样重放）并专注对抗性判断。
 - **隔离执行**：每个变更在独立的环境中实施，互不干扰；变更完成后合并并清理。
@@ -71,6 +72,20 @@ npm install -D @ifrankwang/openspec-agents
 > Please install and enable the openspec-agents plugin for my current AI coding tool, then run the OpenSpec change orchestration workflow on this repository.
 
 如果已经安装，只需说一句「请运行 openspec-agents 编排流程」即可开工。AI 会负责完成安装、初始化、任务分派与质量把关的全部步骤。
+
+## 标准化提 change（提案标准初始化）
+
+插件内置一套 OpenSpec 提案标准，在「提 change」阶段就把好质量关：
+
+- **关联场景清点**：动笔前以代码检索为证据，枚举变更触及能力的全部消费方（功能入口、共享处理逻辑、数据流下游）；共享处理逻辑变更时全部消费入口必须同一 change 统一适配，防止同一逻辑两边割裂维护。
+- **契约变更详列 / 动笔前访谈门 / 用户确认门**：DDL 与接口契约逐条列明；决策树访谈穷尽疑点；方案摘要经用户确认后才动笔。
+- **任务组实质变更主体**：任务组以真实代码变更为主体，禁止收尾验证组与人工门禁任务。
+
+在装了插件的工具里，于目标项目的**常规主代理会话**（非编排流程中的主代理——编排人格禁止修改文件，无法执行初始化）说一句：
+
+> 初始化 openspec 提案标准
+
+即可把标准写入该项目（`openspec/config.yaml` + `openspec/schemas/spec-driven-standard/`），此后该项目用 openspec 提 change 自动遵循标准。已初始化的项目重跑即升级到最新标准，项目自定义 rules 条目与 context 保留；标准方法论自包含，不依赖任何外部 skill。
 
 ## 工作原理（简述）
 

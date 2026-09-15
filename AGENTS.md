@@ -24,7 +24,7 @@ tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/
 | 目录 | 内容 |
 |------|------|
 | `assets/agents/` | 子代理定义文件（`openspec-*.md`）与主代理注入模板（`openspec-main.md`）。frontmatter（mode/description/permission）、角色定位、严重级别判例、审查内容与工具权限边界在此修改。 |
-| `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`，以及编排主代理 skill（`orchestrator/SKILL.md`）。扫描遵循标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
+| `assets/skills/` | 项目分发的 skill（供子代理加载），如 `ddd-architecture/SKILL.md`、`api-test/SKILL.md`，以及主代理调用的 skill（`orchestrator/SKILL.md` 编排准则、`openspec-standard/SKILL.md` 提案标准初始化）。扫描遵循标准发现路径（多个优先级目录），同名 skill 优先取自先扫到的目录。 |
 | `assets/workflows/` | workflow 定义（`task.yaml`）。引擎按此驱动 step 流转与 agent 归属，并承载 step 级语义（instructions/constraints）与顶层 `common` 共享语义。 |
 | `.agents/skills/` | 项目内部分析用 skill，如 `openspec-agents-optimizer`、`openspec-finish`。非子代理加载目标。 |
 | `src/core/tools/` | 编排工具实现（生命周期 / 通用 step 提交）与工具参数纯 JSON Schema。行为以源码为准。 |

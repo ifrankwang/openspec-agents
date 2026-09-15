@@ -20,6 +20,10 @@ export class FakeGitRunner implements GitRunner {
   worktreeOpenspecDirty = new Set<string>()
   cachedDiffOut = ""
   diffOut = ""
+  /** 收尾合并「合并将写入文件清单」输出（diff --name-only --no-renames <ref> <treeOid> 形态）。 */
+  mergeWrittenOut = ""
+  /** 暂存-工作区差异输出（diff --name-only -- <paths> 形态；非空 = 部分暂存）。 */
+  unstagedDeltaOut = ""
   treeShas: string[] = []
   commitShas: string[] = []
   mainAheadCount = 0
@@ -148,6 +152,19 @@ export class FakeGitRunner implements GitRunner {
     }
     if (cmd === "diff") {
       if (rest[0] === "--cached") return this.cachedDiffOut
+      // 收尾合并两个新形态独立匹配（不误撞 diffOut 恒返回，也不误撞 reconcileMainPollution
+      // 的 `diff --name-only <ref> <ref> -- <files>` 两 ref 带 -- 尾参形态）：
+      // - 合并写入清单：--name-only --no-renames <ref> <treeOid>（无 .. 区间、无 -- 尾参、恰两个位置 ref）
+      // - 暂存-工作区差异：--name-only -- <paths>（-- 前无位置 ref）
+      const dashIdx = rest.indexOf("--")
+      const posArgs = rest.filter((a) => !a.startsWith("-"))
+      const refsBeforeDash = dashIdx >= 0 ? rest.slice(0, dashIdx).filter((a) => !a.startsWith("-")) : posArgs
+      if (rest.includes("--name-only") && dashIdx === -1 && posArgs.length === 2 && !rest.some((a) => a.includes(".."))) {
+        return this.mergeWrittenOut
+      }
+      if (rest.includes("--name-only") && dashIdx >= 0 && refsBeforeDash.length === 0) {
+        return this.unstagedDeltaOut
+      }
       return this.diffOut
     }
 

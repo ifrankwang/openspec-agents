@@ -216,19 +216,86 @@ export async function markTaskGroupCheckboxesComplete(
   }
 }
 
+/** 单条 `git status --porcelain` 条目：XY 状态码 + 涉及路径（重命名条目含 old/new 双路径）。 */
+interface StatusEntry {
+  x: string
+  y: string
+  paths: string[]
+}
+
+/** 去除 porcelain/diff 输出中路径的包裹引号（特殊字符路径会被 git 以双引号包裹）。 */
+function unquotePath(p: string): string {
+  const t = p.trim()
+  return t.startsWith('"') && t.endsWith('"') && t.length >= 2 ? t.slice(1, -1) : t
+}
+
+/**
+ * 解析 `git status --porcelain` 为结构化条目（独立于 parsePorcelainPaths，后者仅取新路径且被
+ * detectChanges / reconcileMainPollution 依赖，语义不可原地变更）。
+ * 重命名条目（`R  old -> new`）双向路径都计入——两侧路径都可能与合并写入清单重合。
+ *
+ * 注意：GitRunner 的 run/runChecked 都对 stdout 整体 trim()，porcelain 首行若以空格开头（X=' ' 的
+ * 未暂存条目）会被吃掉前导空格、列位整体左移一格。porcelain v1 的位置 2 恒为分隔空格，据此识别
+ * 被破坏的首行并补正。
+ */
+function parseStatusEntries(out: string): StatusEntry[] {
+  const entries: StatusEntry[] = []
+  for (const raw of out.split("\n")) {
+    if (raw.length < 4) continue
+    let line = raw
+    if (line[2] !== " ") {
+      // 位置 2 非分隔空格 = 首行被整体 trim 破坏（X=' ' 条目吃掉前导空格，列位左移一格）
+      if (line[1] !== " ") continue
+      line = ` ${line}`
+    }
+    if (line[0] === " " && line[1] === " ") continue
+    const pathPart = line.slice(3)
+    const arrow = pathPart.indexOf(" -> ")
+    const paths = arrow >= 0
+      ? [unquotePath(pathPart.slice(0, arrow)), unquotePath(pathPart.slice(arrow + 4))]
+      : [unquotePath(pathPart)]
+    if (paths.every((p) => p !== "")) entries.push({ x: line[0], y: line[1], paths })
+  }
+  return entries
+}
+
+/** 解析 `git diff --name-only` 输出为路径列表（含引号路径解包）。 */
+function parseDiffNameOnly(out: string): string[] {
+  return out.split("\n").map(unquotePath).filter(Boolean)
+}
+
+/**
+ * 两条路径是否重合（脏文件 ↔ 合并将写入文件）：尾斜杠归一后相等（未跟踪目录 `dir/` 与文件 `dir`
+ * 同名冲突），或互为路径段前缀（未跟踪目录 `dir/` 覆盖目录下任意写入路径，双向判定）。
+ */
+function pathsOverlap(a: string, b: string): boolean {
+  const na = a.replace(/\/+$/, "")
+  const nb = b.replace(/\/+$/, "")
+  if (!na || !nb) return false
+  if (na === nb) return true
+  return na.startsWith(`${nb}/`) || nb.startsWith(`${na}/`)
+}
+
 /**
  * 收尾合并：将任务组分支合并进基础分支。
  *
  * 先解析主仓库根（后续命令一律以主仓库根为 -C 目标，不沿用入参目录），再按目标分支的检出状态分流：
- * 1. `merge-base --is-ancestor` 幂等检查：源分支已是目标分支祖先（如人工解决冲突后重调）直接成功，
- *    不产生空合并提交；
+ * 1. `merge-base --is-ancestor` 幂等检查（重试幂等根基，禁止移除）：源分支已是目标分支祖先
+ *    （如人工解决冲突后重调）直接成功，不产生空合并提交；
  * 2. 检出检测（`worktree list --porcelain`，按目标分支匹配 `branch refs/heads/<X>` 行）：
- *    - 目标分支正被其它 linked worktree 检出，或正被主仓库检出且主仓库有未提交改动 →
- *      返回 blockedMessage（未执行任何 git 变更动作，由上层转 blocked 文案）——
- *      单靠 update-ref 推进分支指针会使检出方暂存区/工作区与分支引用失步（status 显示整套反向改动）；
- *    - 目标分支正被主仓库检出且干净：仍先 `merge-tree --write-tree` 内存试算（冲突零副作用返回），
- *      无冲突则执行真实 `git merge --no-ff`（由 git 维护检出方 index/工作区；失败时 `merge --abort`
- *      兜底恢复后按冲突形态返回，理论上仅竞态会走到此分支）；
+ *    - 目标分支正被其它 linked worktree 检出 → 返回 blockedMessage（未执行任何 git 变更动作，
+ *      由上层转 blocked 文案）——单靠 update-ref 推进分支指针会使检出方暂存区/工作区与分支引用失步
+ *      （status 显示整套反向改动）；
+ *    - 目标分支正被主仓库检出（无论是否干净）：先 `merge-tree --write-tree` 内存拟合并
+ *      （零副作用；退出码 1 = 冲突，按冲突形态返回），无冲突时以拟合并产出树精确计算
+ *      「合并将写入的文件清单」，与主仓库脏文件（已暂存/未暂存/未跟踪；重命名双向路径；
+ *      未跟踪目录按路径段前缀双向匹配）求重合后分流：
+ *      * 有重合 → blocked（列出重合文件；真实合并会覆盖本地改动，交由人工处理）；
+ *      * 无重合且存在已暂存改动 → 完整暂存（暂存内容与工作区一致）时走无损路径：
+ *        `restore --staged` → 真实合并 → finally `git add` 还原暂存态（合并不触碰这些文件）；
+ *        部分暂存（同一文件既有已暂存又有未暂存改动）→ blocked（自动操作会破坏暂存粒度）；
+ *      * 无重合且仅未暂存/未跟踪脏 → 直接真实 `git merge --no-ff`（git 对无关脏文件安全保留；
+ *        失败时 `merge --abort` 兜底恢复）；
  * 3. 无人检出（worktreeless 底层命令，主仓库工作区状态不受影响；冲突时目标分支引用未动、磁盘无半成品）：
  *    `merge-tree --write-tree`（需 git ≥ 2.38）内存试算合并树：退出码 1 = 冲突，直接返回；
  *    `commit-tree` 生成双父合并提交，`update-ref` 以试算前目标分支 oid 作旧值校验推进（CAS，防并发覆盖）。
@@ -261,17 +328,6 @@ export async function mergeBranchToTarget(
         ].join("\n"),
       }
     }
-    const status = await runGit(mainRepo, ["status", "--porcelain"])
-    if (status.trim().length > 0) {
-      return {
-        success: false,
-        conflict: false,
-        blockedMessage: [
-          `- **原因**: 目标分支 \`${targetBranch}\` 正被主仓库检出，且主仓库存在未提交改动；为避免覆盖本地改动，本次未执行任何合并动作（分支引用未动、无半成品）。`,
-          `- **处理**: 请先 commit 或 stash 主仓库改动后重试；或自行执行 \`git merge ${sourceBranch}\`（真实合并自带脏工作区保护）。`,
-        ].join("\n"),
-      }
-    }
     const mergeTree = await runGitChecked(mainRepo, ["merge-tree", "--write-tree", "--messages", targetBranch, sourceBranch])
     if (!mergeTree.success) {
       // merge-tree 退出码 1 = 冲突；其余为分支缺失等真实错误
@@ -280,9 +336,76 @@ export async function mergeBranchToTarget(
       }
       return { success: false, conflict: true }
     }
+    const mergedTreeOid = mergeTree.stdout.split("\n")[0].trim()
+
+    const statusRes = await runGitChecked(mainRepo, ["status", "--porcelain"])
+    if (!statusRes.success) {
+      throw new Error(`无法读取主仓库工作区状态：${statusRes.stderr}`)
+    }
+    const entries = parseStatusEntries(statusRes.stdout)
+
+    if (entries.length > 0) {
+      const dirtyPaths = [...new Set(entries.flatMap((e) => e.paths))]
+      const written = parseDiffNameOnly(
+        await runGit(mainRepo, ["diff", "--name-only", "--no-renames", targetBranch, mergedTreeOid]),
+      )
+      const overlap = written.filter((w) => dirtyPaths.some((d) => pathsOverlap(d, w)))
+      if (overlap.length > 0) {
+        return {
+          success: false,
+          conflict: false,
+          blockedMessage: [
+            `- **原因**: 目标分支 \`${targetBranch}\` 正被主仓库检出，且以下本地改动文件与任务组合并将写入的文件重合；为避免覆盖本地改动，本次未执行任何合并动作（分支引用未动、无半成品）：`,
+            ...overlap.map((f) => `  - \`${f}\``),
+            `- **处理**: 请先 commit/stash/移除上述文件的本地改动后重试；或自行执行 \`git merge ${sourceBranch}\`（真实合并自带脏工作区保护）。`,
+          ].join("\n"),
+        }
+      }
+
+      // 已暂存条目：X 列非空且非 ?（?? 为未跟踪）；重命名双向路径都须纳入还原
+      const stagedPaths = [...new Set(entries.filter((e) => e.x !== " " && e.x !== "?").flatMap((e) => e.paths))]
+      if (stagedPaths.length > 0) {
+        // 完整暂存判定：暂存区与工作区无差异。git merge 对 index 相对 HEAD 的任何差异一律拒绝
+        // （与合并是否重合无关），需先取消暂存绕行；部分暂存场景自动还原会丢失暂存粒度，拒绝代劳。
+        const unstagedDelta = await runGit(mainRepo, ["diff", "--name-only", "--", ...stagedPaths])
+        if (parseDiffNameOnly(unstagedDelta).length > 0) {
+          return {
+            success: false,
+            conflict: false,
+            blockedMessage: [
+              `- **原因**: 主仓库存在部分暂存文件（同一文件既有已暂存又有未暂存改动），自动合并会改变暂存粒度；本次未执行任何合并动作（分支引用未动、无半成品）。`,
+              `- **处理**: 请先 commit 或 stash，或补全/取消暂存后重试；或自行执行 \`git merge ${sourceBranch}\`。`,
+            ].join("\n"),
+          }
+        }
+        // 无损路径：取消暂存 → 真实合并（不触碰这些文件）→ 兜底重新暂存还原
+        let unstagedByUs = false
+        try {
+          const restore = await runGitChecked(mainRepo, ["restore", "--staged", "--", ...stagedPaths])
+          if (!restore.success) throw new Error(`git restore --staged 失败（未执行合并）：${restore.stderr}`)
+          unstagedByUs = true
+          const mergeResult = await runGitChecked(mainRepo, ["merge", "--no-ff", sourceBranch])
+          if (!mergeResult.success) {
+            // 理论上仅竞态会走到此分支：兜底中止，避免主仓库停留在合并中间态
+            await runGitChecked(mainRepo, ["merge", "--abort"])
+            return { success: false, conflict: true }
+          }
+          return { success: true, conflict: false }
+        } finally {
+          if (unstagedByUs) {
+            const readd = await runGitChecked(mainRepo, ["add", "--", ...stagedPaths])
+            if (!readd.success) {
+              // 暂存态还原失败不可静默：合并已发生，抛错让上层感知（重试时 is-ancestor 幂等短路）
+              throw new Error(`合并后还原暂存态失败（git add）：${readd.stderr}；请人工核对这些文件的暂存状态`)
+            }
+          }
+        }
+      }
+    }
+
     const mergeResult = await runGitChecked(mainRepo, ["merge", "--no-ff", sourceBranch])
     if (!mergeResult.success) {
-      // 理论上仅竞态会走到此分支：兜底中止，避免主仓库停留在合并中间态
+      // 兜底中止，避免主仓库停留在合并中间态（无重合脏文件时 git 自身保护仍会拒绝越界写入）
       await runGitChecked(mainRepo, ["merge", "--abort"])
       return { success: false, conflict: true }
     }
