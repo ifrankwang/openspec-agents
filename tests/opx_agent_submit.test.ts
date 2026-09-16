@@ -527,7 +527,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       const r = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(r).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
-      expect(fakeGit.mergeCommitBranches).toContain("task-group/agent-submit/1")
+      expect(fakeGit.mergeCommitBranches).toContain("change/agent-submit")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -675,7 +675,9 @@ describe("opx_agent_submit 通用 step 提交", () => {
       writeFileSync(statePath, JSON.stringify(state, null, 2))
 
       const orch = makeOrchCtx(wt)
-      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径。
+      // 手工 state 携带旧模型分支名（task-group/...）：complete 的 create-or-reuse 会从基准 tip
+      // 创建该分支（升级路径），随后漂移检查按 fork 祖先关系放行、合并以旧分支名执行。
       fakeGit.currentBranch = "develop"
       const r1 = await complete_task_group.execute({ change_id: CID }, orch)
       expect(r1).toContain("任务组已完成并合并到")

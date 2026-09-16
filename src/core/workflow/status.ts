@@ -6,7 +6,7 @@ import type { ExemptionRecord } from "../exemptions.ts"
 import type { LoadedWorkflow } from "./loader.ts"
 import type { EngineRecommendation } from "./engine.ts"
 import type { DetectChangesResult } from "../git.ts"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity, isTaskGroupSettled, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, isTaskGroupSettled, isFinalTaskGroup, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
 import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.ts"
 import { resolveChildIssueFields } from "./reset.ts"
 import { taskListOf, issueChildrenOf } from "../task-children.ts"
@@ -162,7 +162,9 @@ function renderSuspended(item: WorkItem): string {
  *  只审模式的交付物）——fix=none 下 issue 停留 todo 态、step tag=failed、item=done 为合法组合，
  *  报告视图不渲染豁免/复核操作提示（该通道在只审模式下是死路，无修复者消费裁定结论）。
  *  change 会话两形态在编排视角下追加「部署注意事项」区块（见 renderDeploymentNotesSection），
- *  子代理视角维持既有文案。 */
+ *  子代理视角维持既有文案。done 文案按「是否最后一个收口任务组」（isFinalTaskGroup，与 complete
+ *  收口判定单一事实源）分流：非最后组仅本组完成（代码尚未落基准，不得误导为已收尾）；
+ *  最后组已完成即 change 收口已合并。 */
 function renderTerminalPhase(item: WorkItem, state?: OrchestrateState, caller?: StatusViewCaller): string {
   if (item.phase === "cancelled") {
     return [
@@ -193,13 +195,16 @@ function renderTerminalPhase(item: WorkItem, state?: OrchestrateState, caller?: 
     ]
     return lines.join("\n")
   }
+  const finalGroup = state ? isFinalTaskGroup(state, item) : true
   if (item.metadata["completed_at"] !== undefined) {
     return [
       "# ✅ 任务组已完成",
       "",
       `- **完成时间**: ${item.metadata["completed_at"]}`,
       "",
-      "编排已完成并收尾。",
+      finalGroup
+        ? "本任务组为最后一个收口任务组，change 收口已完成：变更分支已合并回基准分支，编排已完成并收尾。"
+        : "本任务组已完成，变更保留在 change 分支上，待全部任务组完成后统一收口合并。",
       "",
       ...renderDeploymentNotesSection(state, caller),
     ].join("\n")
@@ -207,7 +212,10 @@ function renderTerminalPhase(item: WorkItem, state?: OrchestrateState, caller?: 
   return [
     "# 🏁 任务组已完成，待收尾",
     "",
-    "全部审核层已通过。调用 `opx_orch_complete_task_group` 合并分支并完成收尾。",
+    "全部审核层已通过。",
+    finalGroup
+      ? "调用 `opx_orch_complete_task_group` 完成 change 收口（把变更分支合并回基准分支并清理）。"
+      : "调用 `opx_orch_complete_task_group` 完成任务组收尾（变更保留在 change 分支，统一收口时合并）。",
     "",
     ...renderDeploymentNotesSection(state, caller),
   ].join("\n")
@@ -226,7 +234,7 @@ function renderDeploymentNotesSection(state: OrchestrateState | undefined, calle
     "",
     "向用户汇报本次变更的部署注意事项：",
     "",
-    `- 阅读主仓库 \`openspec/changes/${state.changeId}/\` 下规划文档（design.md、tasks.md、proposal.md、specs/）提取部署要点：数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化`,
+    `- 阅读主仓库 \`openspec/changes/${state.changeId}/\` 下规划文档（design.md、tasks.md、proposal.md、specs/）提取部署要点：数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化、依赖清单/构建配置变更（合并后需在主仓库重装依赖、重新构建）`,
     "- 无规划文档时跳过文档提取，仅转述下方实施补充点",
     "",
   ]
@@ -646,7 +654,7 @@ function renderAgentWorking(
   lines.push(...renderStepSemantics(step, common, stepCtx))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   // 证据区块注入：展示检查点增量口径的本次变更证据（文件清单 + 区间 diff 命令），与 Worktree 区块
-  // 「变更范围」（baseRef..HEAD 整个 change 累计口径）区分，供审查者审查变更内容后按操作指引裁量是否可免
+  // 「变更范围」（baseRef..HEAD 本任务组累计口径）区分，供审查者审查变更内容后按操作指引裁量是否可免
   // 全量工具检查（裁量语义由 workflow 配置单源承载，此处仅渲染事实证据）。
   // - verify_tool（full 分支③有变更 → 全量路径）：仅 reviewer-tool + 已预计算变更检测结果
   //   （hasNonDocChange=true）时渲染；分支①②提前返回、toolChanges 缺省路径不经过此处，不误伤其他 agent/step。
@@ -677,7 +685,7 @@ function renderAgentWorking(
   lines.push(...eff.lines)
   n = eff.nextNum
   if (tg.worktreePath && tg.baseRef) {
-    lines.push(`${n++}. 用上方「变更范围」命令获取本 change 全部已提交变更文件清单，作为本次实施/修改范围；审查/报告范围以当前 step 指令为准`)
+  lines.push(`${n++}. 用上方「变更范围」命令获取本任务组的已提交变更文件清单，作为本次实施/修改范围；审查/报告范围以当前 step 指令为准`)
   }
   lines.push(`${n++}. 执行当前 step（\`${rec.stepId}\`）职责范围内的全部工作——遵循所有已加载 skill 的全部规范与约束`)
   lines.push(`${n++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
@@ -928,7 +936,7 @@ const EVIDENCE_KIND_LABELS: Record<ChangesEvidenceKind, { title: string; lastChe
 /** 证据区块：检查点增量口径的本次变更证据（文件清单 + 区间 diff 命令）。verify_tool 分支③（全量路径）
  *  与 quality_review（simple 合并审查）共用，经 kind 区分口径措辞（「自上次工具检查」/「自上次合并审查」）。
  *  有检查点时标注「本次为自上次审查（checkpoint..HEAD）增量区间」，与 Worktree 区块「变更范围」
- *  （baseRef..HEAD 整个 change 累计口径）区分；无检查点（首次进入）时标注基线兜底口径，与变更范围一致；
+ *  （baseRef..HEAD 本任务组累计口径）区分；无检查点（首次进入）时标注基线兜底口径，与变更范围一致；
  *  无检查点亦无基线基准时不渲染 diff 命令（无法界定区间）。仅渲染事实证据，不做变更性质判定——
  *  裁量语义由 workflow 配置操作指引单源承载。 */
 function renderToolChangesEvidence(
@@ -954,7 +962,7 @@ function renderToolChangesEvidence(
   if (checkpoint) {
     lines.push(
       `- **口径**: 本次为「${label.title}（${checkpoint}..HEAD）」的增量区间（含已提交与未提交的非 openspec 变更）；` +
-        `与上方「变更范围」（${baseRef ?? "(无)"}..HEAD 整个 change 累计口径）不同`,
+        `与上方「变更范围」（${baseRef ?? "(无)"}..HEAD 本任务组累计口径）不同`,
       "",
     )
   } else if (baseRef) {

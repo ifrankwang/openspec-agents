@@ -3,7 +3,7 @@ import { execFile } from "node:child_process"
 import { readFile, writeFile, stat, rm, realpath } from "node:fs/promises"
 
 /** 判断路径是否存在于磁盘（fs 层判断，git 命令结果不作为存在性依据）。 */
-async function pathExists(p: string): Promise<boolean> {
+export async function pathExists(p: string): Promise<boolean> {
   try {
     await stat(p)
     return true
@@ -155,6 +155,18 @@ export async function getCurrentBranch(worktree: string): Promise<string> {
 
 export async function getMergeBase(worktree: string, baseBranch: string): Promise<string> {
   return runGit(worktree, ["merge-base", "HEAD", baseBranch])
+}
+
+/**
+ * 判断 <a> 是否为 <b> 的祖先（`merge-base --is-ancestor`）。
+ * 退出码 0=是祖先、1=不是祖先；其余退出码（分支/oid 缺失等真实错误）抛错，不静默降级。
+ * 消费点：change 收口的基准分支漂移检查（基准 tip 须为 change 分支祖先）与 scope 端点历史校验。
+ */
+export async function isAncestor(worktree: string, a: string, b: string): Promise<boolean> {
+  const r = await runGitChecked(worktree, ["merge-base", "--is-ancestor", a, b])
+  if (r.success) return true
+  if (r.exitCode === 1) return false
+  throw new Error(`无法判断 "${a}" 是否为 "${b}" 的祖先：${r.stderr}`)
 }
 
 /** 校验本地分支存在（refs/heads/<name> 严格本地命名空间，不含远端跟踪 ref）。 */
@@ -355,7 +367,7 @@ export async function mergeBranchToTarget(
           success: false,
           conflict: false,
           blockedMessage: [
-            `- **原因**: 目标分支 \`${targetBranch}\` 正被主仓库检出，且以下本地改动文件与任务组合并将写入的文件重合；为避免覆盖本地改动，本次未执行任何合并动作（分支引用未动、无半成品）：`,
+            `- **原因**: 目标分支 \`${targetBranch}\` 正被主仓库检出，且以下本地改动文件与变更分支合并将写入的文件重合；为避免覆盖本地改动，本次未执行任何合并动作（分支引用未动、无半成品）：`,
             ...overlap.map((f) => `  - \`${f}\``),
             `- **处理**: 请先 commit/stash/移除上述文件的本地改动后重试；或自行执行 \`git merge ${sourceBranch}\`（真实合并自带脏工作区保护）。`,
           ].join("\n"),
@@ -440,6 +452,10 @@ export async function mergeBranchToTarget(
   return { success: true, conflict: false }
 }
 
+/** 可恢复磁盘 worktree 的分支前缀集合：change/（change 常驻 worktree）、review/（独立审查会话）、
+ *  task-group/（旧每任务组模型残留，过渡期保留识别以便恢复/人工清理）。 */
+export const RESTORABLE_WORKTREE_BRANCH_PREFIXES = ["change/", "review/", "task-group/"] as const
+
 export async function discoverDiskWorktrees(worktree: string): Promise<{ branch: string; path: string }[]> {
   const result: { branch: string; path: string }[] = []
   const wtList = await runGit(worktree, ["worktree", "list"])
@@ -447,8 +463,7 @@ export async function discoverDiskWorktrees(worktree: string): Promise<{ branch:
     const m = line.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
     if (m) {
       const branch = m[2].trim()
-      // 独立审查会话 worktree 分支（review/<sessionId>）与任务组分支（task-group/）同为可恢复磁盘痕迹
-      if (branch.startsWith("task-group/") || branch.startsWith("review/")) {
+      if (RESTORABLE_WORKTREE_BRANCH_PREFIXES.some((p) => branch.startsWith(p))) {
         result.push({ branch, path: m[1].trim() })
       }
     }

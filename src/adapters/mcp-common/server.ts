@@ -43,7 +43,7 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   },
   opx_orch_set_worktree: {
     description:
-      "确保目标组的 git worktree 就绪。若已存在则复用，否则按规范自动创建（分支 task-group/{changeId}/{taskGroupId}，路径 .worktree/{changeId}/task-group-{taskGroupId}）。只补齐资源，不改变阶段。",
+      "确保目标组的 git worktree 就绪。change 会话按 change 模型 create-or-reuse：分支 change/{changeId} 不存在时从基准分支 tip 创建，worktree 常驻于 .worktree/{changeId}/ws，全部任务组串行复用（复用校验：目录缺失自愈重建、openspec 文档脏自动提交、代码文件脏拒绝）。只补齐资源，不改变阶段。",
     schema: setWorktreeSchema,
     execute: (args, ctx) => setWorktreeExecute(args as any, ctx),
   },
@@ -55,7 +55,7 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   },
   opx_orch_complete_task_group: {
     description:
-      "完成任务组收尾：合并 task-group 分支到 baseBranch → 清理 worktree 与分支。须在收尾验证（verify_cleanup）通过后调用。合并冲突、主仓库本地改动文件与合并写入文件重合、或存在部分暂存文件时中止并返回 blocked（保留 worktree/分支）；主仓库无关脏文件不阻塞合并。",
+      "完成任务组收尾。非最后任务组仅做门禁与范围标记（不合并、不销毁）；最后一个任务组收口时把 change 分支（change/{changeId}）一次性合并回 baseBranch（基准分支漂移或文本冲突时回退到收尾验证 verify_cleanup 并返回 blocked），成功后销毁 worktree 并删分支。须在收尾验证（verify_cleanup）通过后调用。主仓库本地改动文件与合并写入文件重合、或存在部分暂存文件时中止并返回 blocked（保留 worktree/分支）；主仓库无关脏文件不阻塞合并。",
     schema: completeTaskGroupSchema,
     execute: (args, ctx) => completeTaskGroupExecute(args as any, ctx),
   },

@@ -1,11 +1,12 @@
 # simple task workflow：simple 模式的 OpenSpec change 任务流转
-# 对应编排阶段：实现（in_progress）→ 合并审查（review）→ 完成（done）；无 analyze / verify_* / verify_cleanup 环节
+# 对应编排阶段：实现（in_progress）→ 合并审查（review）→ 完成（done）；无 analyze / verify_* 环节。
+# verify_cleanup 仅作收口漂移/冲突回退落点（quality_review on_pass 直达 done，正常流转不经过）
 # 语义归属：step 级 instructions/constraints 定义各 step 专属语义；
 # 跨所有 step 共享内容收敛到顶层 common（step 自动继承）；非 step 归属的引擎状态文案不进配置。
 # 占位符 {{key}} 经 interpolateText 注入动态值，缺值保留原文。
 # 注意：simple 无 analyze 环节，execution_boundary 永不写入，step constraints 不得含
 # {{allowed_directories}} / {{allowed_packages}} / {{notes}} 边界占位符（缺值会原样渲染），执行边界默认整个 worktree。
-# implement/quality_review 的压制与隔离/清理约束与 task.yaml 同步维护
+# implement/quality_review/verify_cleanup 的压制与隔离/清理约束与 task.yaml 同步维护
 id: task-simple
 name: Simple Task Workflow
 max_retries: 10
@@ -43,7 +44,7 @@ phases:
           - "提交前完成自检并经 self_check_results 汇总：每项检查须含执行命令与结果摘要（证据可核验，供审查者分级复验对照与核验申报），禁止仅报结论不附证据"
           - "提交前按已加载的维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次变更文件逐项自检（聚焦本轮变更文件，不扩散全量代码），自检结论与工具检查结果一并汇总进 self_check_results；修复被驳回 issue 后再次提交前同样须按维度规范类 skill 对变更文件自检后再提交"
           - "自检须覆盖已加载的维度规范类 skill 的全部检查点，self_check_results 按维度逐项列结论（通过/遗留及理由），禁止仅汇总工具检查结果"
-          - "实施产出的部署注意点（数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化）凡属规划文档（design.md/tasks.md/proposal.md/specs/）未记载的，随提交在 self_check_results 中以 `部署注意点:` 开头的独立行逐条申报（每个注意点独占一行）；规划文档已记载的不重复申报；修复轮重新提交时保留既有部署注意点行"
+          - "实施产出的部署注意点（数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化、依赖清单/构建配置变更（合并后需在主仓库重装依赖、重新构建））凡属规划文档（design.md/tasks.md/proposal.md/specs/）未记载的，随提交在 self_check_results 中以 `部署注意点:` 开头的独立行逐条申报（每个注意点独占一行）；规划文档已记载的不重复申报；修复轮重新提交时保留既有部署注意点行"
           - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；Info 级 issue 不阻塞提交，无需申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由（commit message 可补充），并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复；被驳回后须移除压制并真实修复"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
@@ -98,3 +99,22 @@ phases:
           - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
           - "压制类 issue 严重级别至少 Low"
           - "有实质变更时，低成本实跑项的工具检查及首轮对抗审查覆盖全量代码；非本轮变更文件的工具违规同样必须映射为 issue（命中项目级豁免清单的按 Info，不重新豁免；其余非本轮引入问题按原严重级别上报），不得以不在变更清单或未越界修改为由丢弃；高成本项按核验申报口径执行（复核轮按轮次口径收敛，不重走首轮全量）"
+      - id: verify_cleanup
+        agents:
+          - id: openspec-developer
+            capability_tags: [cleanup, api-testing, dev-practices, efficiency]
+        transitions:
+          on_pass: done
+          on_fail: verify_cleanup
+        instructions:
+          - "将基准分支（{{base_branch}}）最新代码合并进当前工作分支（git merge 基准分支），解决合并冲突；修复范围仅限合并冲突涉及文件与回归失败定位文件（改动仅用于解决合并引入的问题，禁止借机扩大范围）"
+          - "合并后回归复验：按已加载的开发实践规范执行构建验证；按已加载的接口测试规范启动服务并执行接口测试（含关键数据产出/搬迁回归断言）；全部通过才算通过，不分失败来源（含基准分支新代码引入的失败）"
+          - "按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的扫描分析项目；无对应 skill 规范时跳过并在申报中注明"
+          - "清理后确认工作分支 git status 干净（含未跟踪文件）"
+          - "逐项申报 validation_steps（completed + 证据；未执行项以 completed=false + 结构化 skip_reason 申报：{\"item\":\"<必做项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}）"
+          - "自报 issue 必须在本 step 内收敛至终态（修复后自行复核通过，或申请豁免后自行裁定）后再提交；报 issue 时显式声明归因维度 dimension（该维度仅作归因标签，不代表对应维度 reviewer 会复核此 issue）"
+          - "存在无法解决的残留或回归失败 → verdict=failed 并报 Low+ issue（显式声明归因维度 dimension）"
+          - "完成后调用 opx_agent_submit 提交裁决"
+        constraints:
+          - "可 bash 执行构建/测试/清理命令；禁止 edit/write 任何 {{worktree_path}} 之外的文件"
+          - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question"

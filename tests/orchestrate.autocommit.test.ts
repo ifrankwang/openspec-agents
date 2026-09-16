@@ -207,7 +207,7 @@ describe("reviewer 家族 submit 自动提交（文档直改兜底）", () => {
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx("openspec-developer", wt),
       )
-      const wtPath = join(wt, ".worktree", CID, "task-group-1")
+      const wtPath = join(wt, ".worktree", CID, "ws")
       fakeGit.dirtyPaths.add(wtPath)
       fakeGit.callLog.length = 0
 

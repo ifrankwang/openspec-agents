@@ -210,14 +210,14 @@ export const orchInitSchema: JSONSchema = {
     },
     base_branch: {
       type: "string",
-      description: "基准分支名（如 main、develop），用于计算 merge-base 和 worktree fork 源。未传则自动从当前 git 分支推导。仅 change 会话入口有效。",
+      description: "基准分支名（如 main、develop），作为 change 分支（change/{changeId}）的 fork 源与收口合并目标。未传则自动从当前 git 分支推导。仅 change 会话入口有效。",
     },
     recovery: recoverySchema,
     mode: {
       type: "string",
       enum: ["full", "simple"],
       description:
-        "流程模式选择（仅 change 会话入口有效，独立审查会话不使用）：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
+        "流程模式选择（仅 change 会话入口有效，独立审查会话不使用）：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，verify_cleanup 仅作收口漂移/冲突回退落点，正常流转不经过，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
     },
     review_scope: {
       type: "object",
@@ -261,8 +261,8 @@ export const setWorktreeSchema: JSONSchema = {
   type: "object",
   properties: {
     change_id: { type: "string", minLength: 1, description: "change ID" },
-    worktree_path: { type: "string", description: "git worktree 的绝对路径（可选，不传则按规范自动生成）" },
-    branch_name: { type: "string", description: "worktree 对应的分支名（可选，不传则按规范 task-group/{changeId}/{taskGroupId}）" },
+    worktree_path: { type: "string", description: "git worktree 的绝对路径（可选，不传则按规范自动生成 .worktree/{changeId}/ws）" },
+    branch_name: { type: "string", description: "worktree 对应的分支名（可选，不传则按 change 模型确定性派生：change/{changeId}，整个 change 串行复用同一分支与常驻 worktree）" },
   },
   required: ["change_id"],
   additionalProperties: false,

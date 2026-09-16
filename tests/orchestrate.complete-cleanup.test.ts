@@ -1,15 +1,16 @@
 /**
- * 任务组收尾清理测试（opx_orch_complete_task_group 清理段）：
+ * 任务组收尾/收口测试（change 分支模型）：
+ * - 非最后任务组：门禁 → 勾选 → scope_end → completed_at；无合并、无销毁（变更保留在 change 分支）
+ * - 最后任务组两段式收口：
+ *   1) 前置漂移检查：基准分支已推进（base 非 change 分支祖先）→ blocked + 回退 verify_cleanup
+ *      （completed_at 不写、worktree/分支保留、无合并命令），重新收尾验证通过后重放 → 合并成功 → 清理
+ *   2) 漂移通过 → mergeBranchToTarget：update-ref CAS 推进断言改 change 模型（change/{changeId} 源分支）
+ *   3) 合并成功 → 销毁 worktree + 删分支 → completed_at
  * - 补救链物理成功：git worktree remove 失败时经文件系统兜底删除 + prune，分支正常删除，无残留警告
- * - 完全残留：目录被只读父目录锁死无法删除时，收尾不阻断（completed_at 照写），返回体给出残留警告区块
+ * - 完全残留：目录被只读父目录锁死无法删除时，收口不阻断（completed_at 照写），返回体给出残留警告区块
  *   与人工处理命令，metadata.cleanup_residual 落盘，且不执行 branch -D
  * - 无分支引用时仅做 worktree 侧清理：目录消失即成功，不执行 branch -D、无残留警告
- * - 收尾裸合并（worktreeless 底层命令）：成功推进双父合并提交且全程无 checkout、冲突零副作用
- *   （目标分支引用未动 + 人工合并指引文案）、已并入重试幂等（跳过合并提交直接收尾清理）
- * - 收尾合并检出检测：目标分支无人检出走 update-ref 原路径；主仓库检出时先 merge-tree 内存拟合并，
- *   冲突零副作用返回；无冲突按主仓库脏文件与「合并将写入文件」的重合判定分流——重合或部分暂存
- *   blocked 且零变更命令，无重合执行真实 merge（完整暂存走 restore --staged → merge → add 无损还原）；
- *   或被其它 linked worktree 检出 → blockedMessage；真实 merge 失败时 merge --abort 兜底返回 conflict 形态
+ * - is-ancestor 幂等：人工/外部已把 change 并入基准后重调，短路后走清理收尾
  *
  * 运行：bun test tests/orchestrate.complete-cleanup.test.ts
  */
@@ -36,8 +37,9 @@ function fresh(): { root: string; wt: string; fakeGit: FakeGitRunner } {
   return { root, wt, fakeGit }
 }
 
+/** change 模型常驻 worktree 路径：.worktree/{changeId}/ws */
 function wtPathOf(wt: string): string {
-  return join(wt, ".worktree", CID, "task-group-1")
+  return join(wt, ".worktree", CID, "ws")
 }
 
 /** 读当前 task WorkItem（落盘 JSON）。 */
@@ -45,10 +47,10 @@ function taskItemOf(wt: string): any {
   return readState(wt, CID)!.workItems.find((w: any) => w.id === "task:1")
 }
 
-function writeStateFile(wt: string, mutate: (item: any) => void): void {
+function writeStateFile(wt: string, mutate: (state: any) => void): void {
   const statePath = join(wt, "openspec", "states", `${CID}.json`)
   const state = JSON.parse(readFileSync(statePath, "utf-8"))
-  mutate(state.workItems.find((w: any) => w.id === "task:1"))
+  mutate(state)
   writeFileSync(statePath, JSON.stringify(state, null, 2))
 }
 
@@ -63,6 +65,102 @@ async function driveToDone(wt: string): Promise<void> {
     makeCtx(REVIEWER, wt),
   )
 }
+
+/** 收尾验证重放（漂移/冲突回退后）：developer 提交 verify_cleanup passed → done。 */
+async function repassCleanup(wt: string): Promise<void> {
+  await agent_submit.execute(
+    { change_id: CID, step_id: "verify_cleanup", verdict: "passed" },
+    makeCtx(DEV, wt),
+  )
+}
+
+describe("非最后任务组：完成不合并、不销毁", () => {
+
+  test("存在未收口的其它任务组 → completed_at 写入但无合并命令，worktree 与 change 分支保留", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      // 构造组 2 已激活（tags 非空 + 子任务非 todo）→ 组 1 不是最后一个收口任务组
+      writeStateFile(wt, (state) => {
+        const g2 = state.workItems.find((w: any) => w.id === "task:2")
+        g2.tags["implement:openspec-developer"] = "pending"
+        g2.children[0].phase = "in_progress"
+      })
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成")
+      expect(out).toContain("统一收口合并")
+      expect(out).not.toContain("任务组已完成并合并到")
+      // 无合并、无销毁：completed_at 写入，worktree 与分支保留，零合并命令
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      expect(existsSync(wtPathOf(wt))).toBe(true)
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("merge-tree"))).toBe(false)
+      // 任务组 scope 端点已标记（勾选提交后的 change 分支 tip）
+      expect(taskItemOf(wt).metadata["scope_start_oid"]).toBeDefined()
+      expect(taskItemOf(wt).metadata["scope_end_oid"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+})
+
+describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新收尾验证 → 重放合并", () => {
+
+  test("基准分支漂移 → blocked + 回退 verify_cleanup，重放后合并成功并清理", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
+      // 漂移注入：基准 tip 不再是 change 分支祖先（多 change 并行推进了基准分支）
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      // blocked 事实文案：无「请分派 X」流转指令，结尾指引重新查询 opx_status
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("漂移")
+      expect(blocked).toContain("重新查询 opx_status 获取分派指引")
+      // 禁止任何「请分派 X」流转指令
+      expect(blocked).not.toContain("请分派")
+      // 回退落点：状态回退到 verify_cleanup，completed_at 不写，scope_end 撤销
+      const rolled = taskItemOf(wt)
+      expect(rolled.phase).toBe("review")
+      expect(rolled.currentStep).toBe("verify_cleanup")
+      expect(rolled.metadata["completed_at"]).toBeUndefined()
+      expect(rolled.metadata["scope_end_oid"]).toBeUndefined()
+      // worktree 与 change 分支保留，未执行任何合并（无半成品）
+      expect(existsSync(wtPathOf(wt))).toBe(true)
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      // dev 在 worktree 内合入基准分支最新代码并重新完成收尾验证 → done
+      await repassCleanup(wt)
+      expect(taskItemOf(wt).phase).toBe("done")
+
+      // 验收后重放：反向（base→change）true、正向（change→base）false → 合并成功 → 清理
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      // update-ref CAS 推进（change 模型）：源分支为 change/{changeId}
+      const mergeSha = fakeGit.commitShas[fakeGit.commitShas.length - 1]
+      expect(fakeGit.branchOids.get("main")).toBe(mergeSha)
+      expect(fakeGit.refUpdates).toEqual([
+        { ref: "refs/heads/main", newOid: mergeSha, oldOid: "abc123def456" },
+      ])
+      expect(fakeGit.mergeCommitBranches).toContain(`change/${CID}`)
+      // worktree 与 change 分支已销毁
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+    } finally { teardown(root) }
+  })
+})
 
 describe("收尾清理：git remove 失败的补救链", () => {
 
@@ -79,7 +177,7 @@ describe("收尾清理：git remove 失败的补救链", () => {
       fakeGit.failWorktreeRemove = true
       const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
 
-      // 收尾成功且带兜底补救说明，无残留警告
+      // 收口成功且带兜底补救说明，无残留警告
       expect(out).toContain("任务组已完成并合并到")
       expect(out).toContain("兜底删除")
       expect(out).not.toContain("清理残留")
@@ -96,7 +194,7 @@ describe("收尾清理：git remove 失败的补救链", () => {
   })
 })
 
-describe("收尾清理：目录完全残留时不阻断收尾", () => {
+describe("收口清理：目录完全残留时不阻断收口", () => {
 
   test("父目录只读使 fs 兜底删除也失败 → 残留警告区块 + cleanup_residual 落盘 + 不执行 branch -D", async () => {
     // chmod 权限语义仅 POSIX 有效
@@ -112,7 +210,7 @@ describe("收尾清理：目录完全残留时不阻断收尾", () => {
       chmodSync(groupDir, 0o555)
 
       const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
-      // 收尾不被阻断：合并成功消息 + 残留警告区块 + 人工处理命令
+      // 收口不被阻断：合并成功消息 + 残留警告区块 + 人工处理命令
       expect(out).toContain("任务组已完成并合并到")
       expect(out).toContain("worktree 清理残留")
       expect(out).toContain(`\`${wtPathOf(wt)}\``)
@@ -139,11 +237,13 @@ describe("收尾清理：目录完全残留时不阻断收尾", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
-      // 清空分支引用：模拟仅剩 worktree 路径的收尾场景
-      writeStateFile(wt, (item) => { item.metadata["branch_name"] = null })
+      // 清空分支引用：模拟仅剩 worktree 路径的收口场景
+      writeStateFile(wt, (state) => {
+        state.workItems.find((w: any) => w.id === "task:1").metadata["branch_name"] = null
+      })
 
       const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
-      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("任务组已完成")
       expect(out).toContain("兜底删除")
       expect(out).not.toContain("清理残留")
       // 分支删除不应出现（branch_name 为 null）
@@ -154,7 +254,7 @@ describe("收尾清理：目录完全残留时不阻断收尾", () => {
   })
 })
 
-describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目录）", () => {
+describe("收口裸合并：worktreeless 底层命令（不触碰任何工作目录）", () => {
 
   test("合并成功：目标分支 tip 推进到双父合并提交，全程无 checkout 命令", async () => {
     const { root, wt, fakeGit } = fresh()
@@ -164,7 +264,7 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 原路径
       fakeGit.currentBranch = "develop"
       fakeGit.branchOids.set("main", "target0000000000000000000000000000000001")
-      fakeGit.branchOids.set(`task-group/${CID}/1`, "source000000000000000000000000000000001")
+      fakeGit.branchOids.set(`change/${CID}`, "source000000000000000000000000000000001")
 
       const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
 
@@ -181,13 +281,13 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
         "target0000000000000000000000000000000001",
         "source000000000000000000000000000000001",
       ])
-      expect(fakeGit.mergeCommitBranches).toContain(`task-group/${CID}/1`)
+      expect(fakeGit.mergeCommitBranches).toContain(`change/${CID}`)
       // 全程无 checkout（旧实现会先在主仓库 checkout 目标分支）
       expect(fakeGit.callSites.some((s) => s.args[0] === "checkout")).toBe(false)
     } finally { teardown(root) }
   })
 
-  test("冲突零副作用：目标分支 tip 不动、无合并提交与 ref 推进，blocked 文案给人工合并指引", async () => {
+  test("冲突零副作用：回退 verify_cleanup、目标分支 tip 不动、无合并提交与 ref 推进，重放后完成收口", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -200,26 +300,28 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
 
       expect(blocked).toContain("blocked")
-      expect(blocked).toContain("merge_conflict")
+      expect(blocked).toContain("冲突")
       expect(blocked).toContain("未产生任何变更")
-      expect(blocked).toContain(`git checkout main && git merge task-group/${CID}/1`)
+      expect(blocked).toContain("重新查询 opx_status 获取分派指引")
       // 目标分支引用分毫未动：无合并提交、无 ref 推进
       expect(fakeGit.branchOids.get("main")).toBe("target0000000000000000000000000000000001")
       expect(fakeGit.commitShas.length).toBe(0)
       expect(fakeGit.refUpdates.length).toBe(0)
       expect(fakeGit.callSites.some((s) => s.args[0] === "checkout")).toBe(false)
-      // 冲突轮不写 completed_at，worktree 与分支保留
+      // 冲突轮回退到 verify_cleanup，不写 completed_at，worktree 与分支保留
       expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
       expect(fakeGit.worktrees.has(wtPathOf(wt))).toBe(true)
 
-      // dev 解决冲突并人工合并后重调：直接继续收尾
+      // dev 重新完成收尾验证（解决冲突并回归通过）后重调：完成收口
+      await repassCleanup(wt)
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
     } finally { teardown(root) }
   })
 
-  test("重试幂等：源分支已并入目标（is-ancestor 命中）→ 跳过合并提交，直接继续收尾清理", async () => {
+  test("重试幂等：change 分支已并入基准（is-ancestor 命中）→ 跳过合并提交，直接继续收口清理", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -233,7 +335,7 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
       expect(fakeGit.commitShas.length).toBe(0)
       expect(fakeGit.refUpdates.length).toBe(0)
       expect(fakeGit.callLog.some((l) => l.includes("merge-tree"))).toBe(false)
-      // 收尾清理照常执行
+      // 收口清理照常执行
       expect(fakeGit.worktrees.has(wtPathOf(wt))).toBe(false)
       expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
@@ -241,9 +343,8 @@ describe("收尾裸合并：worktreeless 底层命令（不触碰任何工作目
   })
 })
 
-describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出状态分流）", () => {
+describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出状态分流；单元层不受 change 模型影响）", () => {
 
-  /** 无 git 变更动作命令（merge-tree/update-ref/commit-tree/merge 均不得出现）。 */
   /** 断言零变更命令：merge-tree 为内存只读试算不算变更；真实变更动作（merge/update-ref/commit-tree/restore/add）不得出现。 */
   function assertNoMutatingCommand(fakeGit: FakeGitRunner): void {
     for (const s of fakeGit.callSites) {
@@ -419,7 +520,7 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
     } finally { teardown(root) }
   })
 
-  test("流程级：合并写入重合 blocked → 用户 commit 后重试成功（completed_at 补写、worktree 随成功收尾清理）", async () => {
+  test("流程级：合并写入重合 blocked（主仓库前置拦截，不回退）→ 用户 commit 后重试成功", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -430,11 +531,12 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
       const out1 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out1).toContain("blocked")
       expect(out1).toContain("src/App.java")
-      // 零副作用：completed_at 未写、worktree 保留
+      // 零副作用：completed_at 未写、worktree 保留、状态未回退（主仓库前置拦截不改变任务组状态）
       expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(taskItemOf(wt).currentStep).toBeNull()
       expect(existsSync(wtPathOf(wt))).toBe(true)
 
-      // 用户 commit 掉重合文件后重试 → 成功收尾
+      // 用户 commit 掉重合文件后重试 → 成功收口
       fakeGit.statusPorcelainOutput.delete(wt)
       const out2 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out2).toContain("任务组已完成并合并到")

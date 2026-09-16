@@ -57,8 +57,8 @@ describe("2.2 implement 提交工作区干净强检查", () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      // 2.2 强检查针对 worktree（item.metadata.worktree_path = <repo>/.worktree/<cid>/task-group-1）
-      fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "task-group-1"))
+      // 2.2 强检查针对 worktree（item.metadata.worktree_path = <repo>/.worktree/<cid>/ws）
+      fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "ws"))
       const err = await agent_submit
         .execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx(DEV, wt))
         .catch((e: Error) => e)

@@ -52,13 +52,13 @@ function readStateSync(wt: string): any {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Behavior 1: set_worktree 分支安全守卫
+//  Behavior 1: set_worktree 分支安全守卫（change 模型 create-or-reuse）
 // ════════════════════════════════════════════════════════════════
 
 describe("W1. set_worktree 分支安全守卫", () => {
 
-  // W1.1 merge 失败 + 分支有本地提交 → 复用不删分支，baseRef 重算
-  test("已有 worktree 分叉 + revListCount>0 → 复用不删分支", async () => {
+  // W1.1 分支与 worktree 已在且干净 → 复用（不删分支、不触发合并）
+  test("已有 worktree（分支与目录在、干净）→ 复用不删分支", async () => {
     const root = `/tmp/wts-w1a-${Date.now()}`
     const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
     try {
@@ -69,8 +69,7 @@ describe("W1. set_worktree 分支安全守卫", () => {
       expect(first).toContain("已创建 worktree")
 
       const existingPath = taskItemOf(wt).metadata["worktree_path"]
-      fakeGit.forceMergeFailure = true
-      fakeGit.revListCount = 5
+      fakeGit.forceMergeFailure = true // 复用路径不再触发任何 merge，此开关不影响结果
 
       const second = await set_worktree.execute({ change_id: CID }, o)
       expect(second).toContain("复用已有 worktree")
@@ -79,13 +78,15 @@ describe("W1. set_worktree 分支安全守卫", () => {
 
       const item = taskItemOf(wt)
       expect(item.metadata["worktree_path"]).toBe(existingPath)
-      expect(item.metadata["branch_name"]).toBe(`task-group/${CID}/1`)
-      expect(item.metadata["base_ref"]).toBe(fakeGit.baseRef)
+      expect(item.metadata["branch_name"]).toBe(`change/${CID}`)
+      // base_ref 存 scope 端点（change 分支 tip = fake 缺省 oid），重调不重记
+      expect(item.metadata["base_ref"]).toBe(fakeGit.defaultBranchOid)
+      expect(item.metadata["scope_start_oid"]).toBe(fakeGit.defaultBranchOid)
     } finally { teardown(root) }
   })
 
-  // W1.2 merge 失败 + 分支无本地提交 → 删除重建
-  test("已有 worktree 分叉 + revListCount=0 → 删除重建", async () => {
+  // W1.2 worktree 目录被磁盘删除（管理记录残留）→ prune 后自愈重建
+  test("worktree 目录被删（管理记录残留）→ prune 后重建，不走误判复用", async () => {
     const root = `/tmp/wts-w1b-${Date.now()}`
     const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
     try {
@@ -96,17 +97,20 @@ describe("W1. set_worktree 分支安全守卫", () => {
       expect(first).toContain("已创建 worktree")
 
       const existingPath = taskItemOf(wt).metadata["worktree_path"]
-      fakeGit.forceMergeFailure = true
-      fakeGit.revListCount = 0
+      expect(existsSync(existingPath)).toBe(true)
+      rmSync(existingPath, { recursive: true, force: true })
+      expect(existsSync(existingPath)).toBe(false)
 
       const second = await set_worktree.execute({ change_id: CID }, o)
       expect(second).toContain("已创建 worktree")
 
-      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
-
-      const item = taskItemOf(wt)
-      expect(item.metadata["worktree_path"]).toBe(existingPath)
-      expect(item.metadata["base_ref"]).toBe(fakeGit.baseRef)
+      // 幽灵管理记录被 prune，worktree 重建且分支引用不丢
+      expect(fakeGit.callLog.some((l) => l.includes("worktree prune"))).toBe(true)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(false)
+      expect(existsSync(existingPath)).toBe(true)
+      expect(fakeGit.worktrees.has(existingPath)).toBe(true)
+      expect(taskItemOf(wt).metadata["branch_name"]).toBe(`change/${CID}`)
+      expect(taskItemOf(wt).metadata["worktree_path"]).toBe(existingPath)
     } finally { teardown(root) }
   })
 })

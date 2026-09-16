@@ -79,7 +79,7 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       expect(item0.currentStep).toBe("implement")
 
       // ② implement 提交工作区不干净强检查：拒绝、提示先 commit、零状态变更
-      const wtPath = join(wt, ".worktree", CID, "task-group-1")
+      const wtPath = join(wt, ".worktree", CID, "ws")
       fakeGit.dirtyPaths.add(wtPath)
       const err = await agent_submit
         .execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx(DEV, wt))
@@ -165,7 +165,7 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
-      expect(fakeGit.mergeCommitBranches).toContain(`task-group/${CID}/1`)
+      expect(fakeGit.mergeCommitBranches).toContain(`change/${CID}`)
       expect(fakeGit.worktrees.has(wtPath)).toBe(false)
 
       // ⑪ 收尾统一勾选复选框：worktree 已随清理从磁盘删除，勾选事实以 git 提交留痕验证
@@ -219,19 +219,24 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
       expect(done.phase).toBe("done")
       expect(done.children.find((c: any) => c.externalId === "i1").phase).toBe("cancelled")
 
-      // ⑥ 收尾遇合并冲突 → blocked（保留 worktree/分支、不写 completed_at）
+      // ⑥ 收尾遇合并冲突 → blocked 并回退 verify_cleanup（保留 worktree/分支、不写 completed_at）
       fakeGit.mergeTreeConflictOnNext = true
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(blocked).toContain("blocked")
-      expect(blocked).toContain("merge_conflict")
+      expect(blocked).toContain("冲突")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
-      const wtPath = join(wt, ".worktree", CID, "task-group-1")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      const wtPath = join(wt, ".worktree", CID, "ws")
       expect(fakeGit.worktrees.has(wtPath)).toBe(true)
 
       // ⑧ 收尾统一勾选复选框：冲突轮收尾已勾选，重调 complete 前内容可读；清理后 worktree 目录从磁盘删除
       expect(wtTasksMd(wtPath)).toContain("- [x] 1.1 Task one")
       expect(wtTasksMd(wtPath)).toContain("- [x] 1.2 Task two")
-      // ⑦ dev 在 worktree 内解决冲突后（重调 complete）直接收尾——裸合并、无回归、无环境清理
+      // ⑦ dev 重新完成收尾验证（解决冲突并回归通过）→ done → 重调 complete 完成收口
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_cleanup", verdict: "passed" },
+        makeCtx(DEV, wt),
+      )
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()

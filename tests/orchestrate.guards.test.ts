@@ -164,7 +164,7 @@ describe("G1.2. set_worktree 自修复", () => {
     } finally { teardown(root) }
   })
 
-  test("已有 worktree 可 fast-forward → merge + 复用", async () => {
+  test("重复 set_worktree（worktree 干净）→ 复用已有 worktree", async () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
@@ -176,29 +176,15 @@ describe("G1.2. set_worktree 自修复", () => {
     } finally { teardown(root) }
   })
 
-  test("已有 worktree 分叉 + clean → 清理重建", async () => {
-    const { wt, root, fakeGit } = fresh()
-    try {
-      const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
-      let result = await set_worktree.execute({ change_id: CID }, o)
-      expect(result).toContain("已创建 worktree")
-      fakeGit.mergeConflictOnNext = true
-      result = await set_worktree.execute({ change_id: CID }, o)
-      expect(result).toContain("已创建 worktree")
-    } finally { teardown(root) }
-  })
-
-  test("已有 worktree 分叉 + dirty → 抛错", async () => {
+  test("重复 set_worktree（worktree 含代码脏文件）→ 抛错提示人工处理", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
       await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
-      fakeGit.mergeConflictOnNext = true
-      fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "task-group-1"))
-      await expectError(set_worktree.execute({ change_id: CID }, o), /分叉且有未提交变更/)
+      fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "ws"))
+      await expectError(set_worktree.execute({ change_id: CID }, o), /代码文件变更/)
     } finally { teardown(root) }
   })
 })

@@ -3,8 +3,8 @@ import { rmdir } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, type DetectChangesResult } from "../git.ts"
-import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree } from "../state.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, type DetectChangesResult } from "../git.ts"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
 import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
@@ -12,7 +12,7 @@ import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
 import { loadWorkflowFile, resolveWorkflowPath, type LoadedWorkflow } from "../workflow/loader.ts"
-import { createInitialWorkItem, isBlockingSeverity, isTaskGroupSettled, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, REVIEW_FIX_POLICY_KEY } from "../workflow/engine.ts"
+import { createInitialWorkItem, isBlockingSeverity, isTaskGroupSettled, isFinalTaskGroup, isTerminalPhase, recommendForItem, resetInternalRetryCount, adjudicateStep, clearStepTags, REVIEW_FIX_POLICY_KEY } from "../workflow/engine.ts"
 import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
@@ -134,10 +134,11 @@ function firstUnpassedReviewStep(item: WorkItem, workflow: LoadedWorkflow): stri
  *   task children 保留既有进度（无则 done——review 恢复时子任务应视为已验证，否则 G21 remaining 会让 implement 无法提交）
  * simple 分支（mode === "simple"，3.2）：无 analyze / verify_* step，task_analysis / dev_impl 均落
  *   in_progress/implement（task_analysis 重置 task children 全 todo，dev_impl 保留既有进度）；review 落
- *   review/quality_review——implement 置 passed、quality_review 的 failed tag 删除回 pending（passed 保留）、
- *   task children 缺省 done；reset_steps 按模式生效（simple 仅接受 quality_review，含该值时清空
- *   quality_review 全部 tags——passed 也清，强制重审正是该参数的目的，清空后引擎重派该 step 审查者）；
- *   review_layer 在 simple 下无对应子层（仅 quality_review 单层），接受但不生效，init 返回体输出警告。
+ *   review 第一个未全 passed 的审查 step（quality_review，或全 passed 时 verify_cleanup）——implement 置
+ *   passed、quality_review 的 failed tag 删除回 pending（passed 保留）、task children 缺省 done；reset_steps
+ *   按模式生效（simple 仅接受 quality_review，含该值时清空 quality_review 全部 tags——passed 也清，
+ *   强制重审正是该参数的目的，清空后引擎重派该 step 审查者）；review_layer 在 simple 下无对应子层
+ *   （仅 quality_review 单层），接受但不生效，init 返回体输出警告。
  */
 function applyRecoveryState(
   item: WorkItem,
@@ -218,7 +219,20 @@ function applyRecoveryState(
       clearStepTags(item, "quality_review")
     }
     // review_layer 在 simple 下无对应子层，接受但不生效（init 返回体对该组合输出警告）
-    item.currentStep = "quality_review"
+    // currentStep 前移到第一个未全 passed 的审查 step（与 full 口径一致；simple 的 review 阶段含
+    // quality_review 与 verify_cleanup 两个 step——verify_cleanup 仅作漂移/冲突回退落点，正常流转不经过）
+    const workflow = loadWorkflowFile(resolveWorkflowPath(state))
+    item.currentStep = firstUnpassedReviewStep(item, workflow)
+    // 全 passed 收口 done：存在未终态 task child 则停在 quality_review（recommendForItem 会返回
+    // blocked 而非 terminal，安全）
+    if (item.currentStep === null) {
+      const unfinishedTasks = item.children.filter((child) => child.type === "task" && !isTerminalPhase(child.phase))
+      if (unfinishedTasks.length === 0) {
+        item.phase = "done"
+      } else {
+        item.currentStep = "quality_review"
+      }
+    }
     syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
     return
   }
@@ -835,23 +849,121 @@ async function bindReviewWorktreeRefs(item: WorkItem, worktreePath: string, bran
   delete item.metadata["base_ref"]
 }
 
+/**
+ * change 会话 worktree 引用绑定（任务组范围标记）：
+ * - worktree_path/branch_name 写入（常驻 worktree 与 change 分支，各任务组写相同值）；
+ * - scope_start_oid：仅 item 首次绑定时记录当时 change 分支 HEAD（分支 tip）——重调/recovery 重入不重记
+ *   （否则本任务组早前提交会被剔除出审查范围）；已记 oid 不在当前分支历史（如分支重建）才允许重记；
+ * - base_ref 存显式 scope 端点（scope_start..HEAD），作为变更范围查询与本轮 diff 锚点
+ *   （替代旧 merge-base(HEAD, baseBranch) 的 change 级口径）；oid 失效由 detectChanges 既有降级兜底。
+ */
 async function bindWorktreeRefs(
   item: WorkItem,
   worktreePath: string,
   branch: string,
-  baseBranch: string,
-  opts: { requireBaseRef?: boolean } = {},
 ): Promise<void> {
   item.metadata["worktree_path"] = worktreePath
   item.metadata["branch_name"] = branch
-  const baseRef = await getMergeBase(worktreePath, baseBranch)
-  if (!baseRef) {
-    if (opts.requireBaseRef) {
-      throw new Error(`worktree 创建成功但无法获取与 ${baseBranch} 的 merge-base：${worktreePath}`)
-    }
-    return
+  const existing = item.metadata["scope_start_oid"]
+  if (typeof existing !== "string" || !(await isAncestor(worktreePath, existing, branch))) {
+    const head = (await runGit(worktreePath, ["rev-parse", branch])).trim()
+    if (!head) throw new Error(`worktree 绑定成功但无法获取 ${branch} 的 HEAD：${worktreePath}`)
+    item.metadata["scope_start_oid"] = head
   }
-  item.metadata["base_ref"] = baseRef
+  item.metadata["base_ref"] = item.metadata["scope_start_oid"]
+}
+
+/** change 会话分支确定性派生：change/{changeId}（changeId 经会话 token 归一，非法字符归一为 -）。 */
+function deriveChangeBranch(changeId: string): string {
+  return `change/${normalizeSessionToken(changeId)}`
+}
+
+/**
+ * create-or-reuse：分支不存在 → 从基准分支创建（不检出，git 解析基准分支 tip）；存在 → 复用。
+ * 触点两处：set_worktree 与 complete（合并目标解析前）——在途旧模型会话升级时从当前基准 tip 创建，
+ * 天然含已合入代码。返回是否为新创建。
+ */
+async function ensureChangeBranch(repoRoot: string, branch: string, baseBranch: string): Promise<boolean> {
+  if (await isLocalBranch(repoRoot, branch)) return false
+  const created = await runGitChecked(repoRoot, ["branch", branch, baseBranch])
+  if (!created.success) throw new Error(`创建分支 "${branch}"（fork 自 ${baseBranch}）失败：${created.stderr}`)
+  return true
+}
+
+/**
+ * change 会话常驻 worktree 就位（create-or-reuse）：
+ * - 分支由 ensureChangeBranch 保证存在（首个任务组从基准 tip 创建，后续任务组复用）；
+ * - 按 git 管理记录找检出了该分支的 worktree，找到即复用（分支匹配由按 branch 检索保证）；
+ *   未找到用规范路径（.worktree/{changeId}/ws 或显式 worktree_path）：
+ *   ①目录不存在（或仅剩幽灵管理记录）→ `git worktree prune` 后全新创建 checkout change 分支
+ *   （修复旧逻辑目录已删时 rev-list 返回空 → parseInt NaN 误入复用分支的洞）；
+ *   ②目录存在但无本分支管理记录 → 交由 `git worktree add` 自身语义处理（空目录可建；非空非 worktree
+ *   目录由 git 拒绝，透传错误提示人工处理）；
+ *   ③目录存在且检出本分支 → 脏分类：仅 openspec/ 路径脏 → 自动 commit 兜底（与主仓库侧对称）；
+ *   含代码文件脏 → 拒绝并提示人工处理；
+ * - 就位后 bindWorktreeRefs 绑定引用并记录任务组 scope 端点。
+ */
+async function ensureChangeWorktree(
+  repoRoot: string,
+  state: OrchestrateState,
+  item: WorkItem,
+  branch: string,
+  defaultPath: string,
+): Promise<{ path: string; reused: boolean }> {
+  await ensureChangeBranch(repoRoot, branch, state.baseBranch)
+
+  const wtList = await runGit(repoRoot, ["worktree", "list"])
+  const existingLine = wtList.split("\n").find((l) => {
+    const m = l.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
+    return m && m[2].trim() === branch
+  })
+  const registeredPath = existingLine ? existingLine.match(/^(\S+)/)?.[1] : undefined
+  const targetPath = registeredPath ?? defaultPath
+
+  if (!(await pathExists(targetPath))) {
+    // 目录不存在：管理记录残留（幽灵 worktree）时先 prune，再全新创建 checkout change 分支
+    await runGitChecked(repoRoot, ["worktree", "prune"])
+    await runGit(repoRoot, ["worktree", "add", targetPath, branch])
+    await bindWorktreeRefs(item, targetPath, branch)
+    return { path: targetPath, reused: false }
+  }
+
+  if (!registeredPath) {
+    // 目录存在但不是检出本分支的 git 管理记录：交由 git worktree add 判定（空目录放行、非空目录拒绝）
+    const addRes = await runGitChecked(repoRoot, ["worktree", "add", targetPath, branch])
+    if (!addRes.success) {
+      throw new Error(
+        `无法在 "${targetPath}" 就位 worktree：目录已存在且不是检出分支 "${branch}" 的 git worktree（git: ${addRes.stderr}）。\n` +
+        `请人工确认该目录内容并处理（删除或迁移）后重试。`
+      )
+    }
+    await bindWorktreeRefs(item, targetPath, branch)
+    return { path: targetPath, reused: false }
+  }
+
+  // 目录存在且检出本分支 → 复用候选：脏分类（openspec/ 脏自动 commit 兜底；代码文件脏拒绝）
+  const statusOut = await runGit(targetPath, ["status", "--porcelain"])
+  const dirtyPaths = statusOut.split("\n").map((l) => l.trim()).filter(Boolean)
+    .map((l) => {
+      const f = l.replace(/^\S+\s+/, "")
+      return (f.includes(" -> ") ? f.split(" -> ").pop()! : f).replace(/^"+|"+$/g, "")
+    })
+    .filter(Boolean)
+  const codeDirty = dirtyPaths.filter((p) => !p.startsWith("openspec/"))
+  if (codeDirty.length > 0) {
+    throw new Error(
+      `已有 worktree "${targetPath}" 存在未提交的代码文件变更（${codeDirty.join("、")}），无法自动处理。\n` +
+      `请先在该 worktree 内 commit 或 stash 后重试。`
+    )
+  }
+  if (dirtyPaths.length > 0) {
+    const addResult = await runGitChecked(targetPath, ["add", "--", ...dirtyPaths])
+    if (!addResult.success) throw new Error(`worktree openspec 目录 git add 失败：${addResult.stderr}`)
+    const commitResult = await runGitChecked(targetPath, ["commit", "-m", "docs(openspec): auto-commit before worktree reuse"])
+    if (!commitResult.success) throw new Error(`worktree openspec 目录 git commit 失败：${commitResult.stderr}`)
+  }
+  await bindWorktreeRefs(item, targetPath, branch)
+  return { path: targetPath, reused: true }
 }
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
@@ -862,7 +974,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   if (!item) throw new Error(`工作项 "task:${state.taskGroupId}" 缺失，请重新调用 opx_orch_init。`)
 
   const repoRoot = ctx.worktree
-  // branch_name 可为空（缺省自动生成分支名），仅显式传入时用 git check-ref-format 严格校验。
+  const isReview = state.kind === "review"
+  // branch_name 可为空（缺省按会话形态派生），仅显式传入时用 git check-ref-format 严格校验。
   // 用 --branch 形态（而非 refs/heads/<name>）：前者拒绝前导 `-` 等 git branch 创建亦拒绝的非法分支名，
   // 后者仅检查 refname 合法性，会放行前导 dash 的 plain ref。
   const rawBranch = params.branch_name ?? ""
@@ -872,17 +985,23 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
       throw new Error(`分支名 "${rawBranch}" 不合法，请修正后重试。`)
     }
   }
-  // 独立审查会话：分支命名 review/<sessionId>、worktree 布局 .worktree/<sessionId>/review
-  // （discoverDiskWorktrees 按 review/ 前缀识别为可恢复磁盘痕迹）
-  const isReview = state.kind === "review"
-  const branch = rawBranch || (isReview ? `review/${state.changeId}` : `task-group/${state.changeId}/${state.taskGroupId}`)
+  // 独立审查会话（旧模型完整保留）：分支命名 review/<sessionId>、worktree 布局 .worktree/<sessionId>/review
+  // （discoverDiskWorktrees 按 review/ 前缀识别为可恢复磁盘痕迹）；
+  // change 会话：分支确定性派生 change/{changeId}、常驻 worktree .worktree/{changeId}/ws，全部任务组串行复用
+  const branch = rawBranch || (isReview ? `review/${state.changeId}` : deriveChangeBranch(state.changeId))
+  if (!isReview) {
+    const check = await runGitChecked(repoRoot, ["check-ref-format", "--branch", branch])
+    if (!check.success) {
+      throw new Error(`派生分支名 "${branch}" 不合法（change_id="${state.changeId}"），请修正 change_id 或显式传入 branch_name。`)
+    }
+  }
   let wtPath: string
   if (params.worktree_path) {
     wtPath = assertPathWithin(repoRoot, params.worktree_path, "worktree_path")
   } else {
     wtPath = isReview
       ? path.join(repoRoot, ".worktree", state.changeId, "review")
-      : path.join(repoRoot, ".worktree", state.changeId, `task-group-${state.taskGroupId}`)
+      : path.join(repoRoot, ".worktree", state.changeId, "ws")
   }
 
   const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
@@ -893,63 +1012,63 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     if (!commitResult.success) throw new Error(`change 目录 git commit 失败：${commitResult.stderr}`)
   }
 
-  const wtList = await runGit(repoRoot, ["worktree", "list"])
-  const existingLine = wtList.split("\n").find((l) => {
-    const m = l.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
-    return m && m[2].trim() === branch
-  })
-  const existingPath = existingLine ? existingLine.match(/^(\S+)/)?.[1] : undefined
-
   let reused = false
-  if (existingPath) {
-    const baseHead = await runGit(repoRoot, ["rev-parse", state.baseBranch])
-    const mergeResult = await runGitChecked(existingPath, ["merge", "--ff-only", baseHead])
-    if (mergeResult.success) {
-      if (isReview) await bindReviewWorktreeRefs(item, existingPath, branch, state)
-      else await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
-      reused = true
-    } else {
-      const clean = await isWorktreeClean(existingPath)
-      if (!clean) {
-        throw new Error(
-          `已有 worktree "${existingPath}" 与 ${state.baseBranch} 分叉且有未提交变更，无法自动 fast-forward。\n` +
-          `请手动处理后重试。`
-        )
-      }
-      const localCommitCount = parseInt(
-        await runGit(existingPath, ["rev-list", "--count", `${state.baseBranch}..HEAD`]),
-        10
-      )
-      if (localCommitCount > 0 || Number.isNaN(localCommitCount)) {
-        if (isReview) await bindReviewWorktreeRefs(item, existingPath, branch, state)
-        else await bindWorktreeRefs(item, existingPath, branch, state.baseBranch)
+  if (isReview) {
+    const wtList = await runGit(repoRoot, ["worktree", "list"])
+    const existingLine = wtList.split("\n").find((l) => {
+      const m = l.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
+      return m && m[2].trim() === branch
+    })
+    const existingPath = existingLine ? existingLine.match(/^(\S+)/)?.[1] : undefined
+
+    if (existingPath) {
+      const baseHead = await runGit(repoRoot, ["rev-parse", state.baseBranch])
+      const mergeResult = await runGitChecked(existingPath, ["merge", "--ff-only", baseHead])
+      if (mergeResult.success) {
+        await bindReviewWorktreeRefs(item, existingPath, branch, state)
         reused = true
       } else {
-        // 复用失败的清理走共享清理函数：目录侧（git remove + fs 兜底 + prune）与分支删除统一语义
-        const cleanup = await removeTaskGroupWorktree(repoRoot, existingPath, { branchName: branch })
-        if (!cleanup.dirResolved || cleanup.branchDeleted === false) {
-          const problems: string[] = []
-          if (!cleanup.dirResolved) problems.push(`无法清理已有 worktree "${existingPath}"`)
-          if (cleanup.branchDeleted === false) problems.push(`无法清理已有分支 "${branch}"`)
-          throw new Error(`${problems.join("；")}：${cleanup.errors.join("；") || "原因未知"}\n请手动处理后重试。`)
+        const clean = await isWorktreeClean(existingPath)
+        if (!clean) {
+          throw new Error(
+            `已有 worktree "${existingPath}" 与 ${state.baseBranch} 分叉且有未提交变更，无法自动 fast-forward。\n` +
+            `请手动处理后重试。`
+          )
+        }
+        const localCommitCount = parseInt(
+          await runGit(existingPath, ["rev-list", "--count", `${state.baseBranch}..HEAD`]),
+          10
+        )
+        if (localCommitCount > 0 || Number.isNaN(localCommitCount)) {
+          await bindReviewWorktreeRefs(item, existingPath, branch, state)
+          reused = true
+        } else {
+          // 复用失败的清理走共享清理函数：目录侧（git remove + fs 兜底 + prune）与分支删除统一语义
+          const cleanup = await removeTaskGroupWorktree(repoRoot, existingPath, { branchName: branch })
+          if (!cleanup.dirResolved || cleanup.branchDeleted === false) {
+            const problems: string[] = []
+            if (!cleanup.dirResolved) problems.push(`无法清理已有 worktree "${existingPath}"`)
+            if (cleanup.branchDeleted === false) problems.push(`无法清理已有分支 "${branch}"`)
+            throw new Error(`${problems.join("；")}：${cleanup.errors.join("；") || "原因未知"}\n请手动处理后重试。`)
+          }
         }
       }
     }
-  }
 
-  if (!reused) {
-    // 建分支 fork 源：pr 形态为 head_ref、full 形态为当前分支（两者均为 state.baseBranch）
-    const forkBranch = state.baseBranch
-    await runGit(repoRoot, ["worktree", "add", "-b", branch, wtPath, forkBranch])
-    if (isReview) {
+    if (!reused) {
+      // 建分支 fork 源：pr 形态为 head_ref、full 形态为当前分支（两者均为 state.baseBranch）
+      const forkBranch = state.baseBranch
+      await runGit(repoRoot, ["worktree", "add", "-b", branch, wtPath, forkBranch])
       await bindReviewWorktreeRefs(item, wtPath, branch, state)
-      // pr 形态审查锚点（merge-base）必须可得，缺失即建引用失败（对齐 change 路径的 requireBaseRef）
+      // pr 形态审查锚点（merge-base）必须可得，缺失即建引用失败
       if (state.reviewScope?.scopeType === "pr" && !item.metadata["base_ref"]) {
         throw new Error(`worktree 创建成功但无法获取 ${state.reviewScope.baseRef} 与 ${state.baseBranch} 的 merge-base：${wtPath}`)
       }
-    } else {
-      await bindWorktreeRefs(item, wtPath, branch, forkBranch, { requireBaseRef: true })
     }
+  } else {
+    const ensured = await ensureChangeWorktree(repoRoot, state, item, branch, wtPath)
+    wtPath = ensured.path
+    reused = ensured.reused
   }
 
   await writeState(ctx.worktree, state)
@@ -1074,8 +1193,58 @@ function renderReviewIssueSummary(item: WorkItem): string {
   return lines.join("\n")
 }
 
+/**
+ * 最后任务组收口被基准分支漂移/文本冲突拦截时的回退：
+ * 该任务组回退到收尾验证（verify_cleanup）等待重新收口——phase 回退 + clearStepTags + 按 recovery
+ * 先例清除残留推进阻塞原因/检查点标记并重置内部重试计数（防回退后检查点误触发死锁），
+ * 同时删除本轮回写的 scope_end_oid（重新收口时重记）。worktree 与 change 分支保留，未执行合并（无半成品）。
+ * 落点要求工作流声明 id=verify_cleanup 的 step：解析不到 → 不回退（返回 false），沿用人工处理 blocked
+ * 文案（防工具先上、配置未同步窗口）。
+ */
+function rollbackToCleanupStep(item: WorkItem, workflow: LoadedWorkflow): boolean {
+  if (!workflow.stepMap.has("verify_cleanup")) return false
+  delete item.metadata["_advance_block_reason"]
+  delete item.metadata["_checkpoint"]
+  resetInternalRetryCount(item)
+  clearStepTags(item, "verify_cleanup")
+  delete item.metadata["scope_end_oid"]
+  item.phase = "review"
+  item.currentStep = "verify_cleanup"
+  return true
+}
+
+/** 最后任务组收口 blocked 返回体（事实文案，结尾统一指引重新查询 opx_status；不含任何「请分派 X」流转指令）。 */
+function renderFinalizeBlocked(
+  reasons: string[],
+  handlings: string[],
+  opts: { branchName: string; mergeTarget: string; rolledBack: boolean; checkboxWarning?: string },
+): string {
+  const lines = [
+    `- **status**: blocked`,
+    ...reasons.map((r) => `- **原因**: ${r}`),
+    `- **说明**: worktree 与变更分支 \`${opts.branchName}\` 已保留；未执行合并，无半成品状态。属多 change 并行推进的预期行为。` +
+      (opts.rolledBack ? "本任务组状态已回退到收尾验证（verify_cleanup）。" : ""),
+    ...handlings.map((h) => `- **处理**: ${h}`),
+    "",
+    "重新查询 opx_status 获取分派指引。",
+  ]
+  if (opts.checkboxWarning) lines.push(opts.checkboxWarning)
+  return lines.join("\n")
+}
+
 export async function completeTaskGroupExecute(params: { change_id: string }, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_complete_task_group")
+  // 全程文件锁（与 opx_agent_submit 同粒度）：complete 是 read-modify-write 全程，防并发完成丢状态
+  const lockPath = await getLockPath(ctx.worktree, params.change_id)
+  await acquireLock(lockPath)
+  try {
+    return await completeTaskGroupLocked(params, ctx)
+  } finally {
+    releaseLock(lockPath)
+  }
+}
+
+async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolContext): Promise<string> {
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
@@ -1100,7 +1269,8 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   // 独立审查会话双维度放宽（其余门禁不动）：
   // - fix=none（只审）：issue 报告即交付物，openIssues 门禁放宽（issue 停留 todo 态为合法收口形态）；
   // - 审并修（fix，两种颗粒度）：门禁保留（阻塞 issue 未终态拒绝收尾）。
-  const isReviewNone = state.kind === "review" && state.reviewScope?.fix === "none"
+  const isReview = state.kind === "review"
+  const isReviewNone = isReview && state.reviewScope?.fix === "none"
   const openIssues = item.children.filter((c) => isBlockingSeverity(c.severity) && !isTerminalPhase(c.phase))
   if (!isReviewNone && openIssues.length > 0) {
     throw new Error(`存在 ${openIssues.length} 个 Low 及以上的未解决 issue 未处理，请先修复或申请豁免。`)
@@ -1129,9 +1299,118 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
       checkboxWarning = `- **tasks.md 复选框勾选失败**: ${e instanceof Error ? e.message : String(e)}（不影响收尾）`
     }
   }
+  // scope_end 端点（change 会话）：勾选本身产生新提交，端点在勾选之后记录为当时 change 分支 HEAD（分支 tip）
+  if (!isReview && worktreePath && branchName) {
+    const endOid = (await runGit(worktreePath, ["rev-parse", branchName])).trim()
+    if (endOid) item.metadata["scope_end_oid"] = endOid
+  }
 
-  // 合并按修复策略：fix 模式合回 merge_target（pr=head_ref、full=当前分支，即 baseBranch）；
-  // fix=none 不合并（issue 报告即交付物），直接销毁 worktree 与分支。
+  if (isReview) {
+    return finalizeReviewSession(state, item, params, ctx, { worktreePath, branchName, isReviewNone, checkboxWarning })
+  }
+
+  // ─── change 会话：任务组完成按「是否最后一个收口任务组」分流 ───
+  if (!isFinalTaskGroup(state, item)) {
+    // 非最后任务组：门禁 → 勾选 → scope_end → completed_at；无合并、无销毁
+    item.metadata["completed_at"] = new Date().toISOString()
+    await writeState(ctx.worktree, state)
+    const doneMessage =
+      "任务组已完成。本任务组变更保留在 change 分支上，待全部任务组完成后统一收口合并（本次不合并、不销毁 worktree）。"
+    return checkboxWarning ? `${doneMessage}\n${checkboxWarning}` : doneMessage
+  }
+
+  // 最后任务组 → change 级收口：合并 change 分支回基准分支（一次性），成功后销毁 worktree 并删分支
+  const mergeTarget = state.baseBranch
+  if (branchName) {
+    // create-or-reuse（合并目标解析前）：在途旧模型会话升级时从当前基准 tip 创建，天然含已合入代码
+    await ensureChangeBranch(ctx.worktree, branchName, mergeTarget)
+
+    // 前置漂移检查（独立封装）：基准 tip 须为 change 分支祖先；不满足 → 回退收尾验证并 blocked
+    if (!(await isAncestor(ctx.worktree, mergeTarget, branchName))) {
+      const workflow = loadWorkflowFile(resolveWorkflowPath(state))
+      const rolledBack = rollbackToCleanupStep(item, workflow)
+      if (rolledBack) await writeState(ctx.worktree, state)
+      return renderFinalizeBlocked(
+        [
+          `基准分支 \`${mergeTarget}\` 已推进（与变更分支 \`${branchName}\` 存在漂移）：基准分支最新提交未包含在变更分支历史中，直接合并会遗漏基准分支新内容。`,
+        ],
+        [
+          `在 worktree 内执行 \`git merge ${mergeTarget}\` 合入基准分支最新代码并解决冲突，完成回归验证后重新提交收尾验证（opx_agent_submit，step_id="verify_cleanup"），通过后再调用 opx_orch_complete_task_group 重新收口。`,
+        ],
+        { branchName, mergeTarget, rolledBack, checkboxWarning },
+      )
+    }
+
+    const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
+    if (mergeResult.blockedMessage) {
+      // 主仓库侧前置拦截（检出冲突/脏文件重合/部分暂存）：未执行任何合并动作，状态不变，人工处理后重调
+      return [`- **status**: blocked`, mergeResult.blockedMessage].join("\n")
+    }
+    if (!mergeResult.success) {
+      // 文本冲突 → 与漂移同路径回退（原冲突指引文案替换为回退口径）
+      const workflow = loadWorkflowFile(resolveWorkflowPath(state))
+      const rolledBack = rollbackToCleanupStep(item, workflow)
+      if (rolledBack) await writeState(ctx.worktree, state)
+      return renderFinalizeBlocked(
+        [
+          `变更分支 \`${branchName}\` 合并到 \`${mergeTarget}\` 时发生冲突，未产生任何变更（分支引用未动，无半成品合并）。`,
+        ],
+        [
+          `在 worktree 内执行 \`git merge ${mergeTarget}\` 合入基准分支最新代码解决冲突并提交，完成回归验证后重新提交收尾验证（opx_agent_submit，step_id="verify_cleanup"），通过后再调用 opx_orch_complete_task_group 重新收口。`,
+        ],
+        { branchName, mergeTarget, rolledBack, checkboxWarning },
+      )
+    }
+  }
+
+  // 合并成功（或无分支引用）：收口清理（销毁 worktree + 删分支）。
+  // 残留不阻断收口：completed_at 照写，残留信息写入 metadata.cleanup_residual 并在返回体给出人工处理命令。
+  let cleanupNote = ""
+  let cleanupResidualWarning = ""
+  if (worktreePath) {
+    const cleanup = await removeTaskGroupWorktree(ctx.worktree, worktreePath, { branchName })
+    if (cleanup.dirResolved) {
+      await sweepEmptyWorktreeParents(ctx.worktree, worktreePath, params.change_id)
+      const successNotes: string[] = []
+      if (cleanup.dirResolvedByFallback) {
+        successNotes.push("- **cleanup**: git worktree remove 未直接移除目录，已按文件系统兜底删除并 prune 管理记录。")
+      }
+      if (cleanup.errors.length > 0) {
+        successNotes.push(`- **cleanup 部分告警**: ${cleanup.errors.join("；")}`)
+      }
+      cleanupNote = successNotes.join("\n")
+    } else {
+      item.metadata["cleanup_residual"] = { worktree_path: worktreePath, errors: cleanup.errors }
+      cleanupResidualWarning = [
+        "",
+        "## ⚠️ worktree 清理残留（不影响收口）",
+        `- **残留路径**: \`${worktreePath}\``,
+        "- **原因**:",
+        ...cleanup.errors.map((e) => `  - ${e}`),
+        `- **处理**: 请人工执行 \`rm -rf '${worktreePath}' && git worktree prune\` 清理残留目录与 git 管理记录。`,
+        branchName ? `- **分支**: 分支 "${branchName}" 未删除。` : "",
+      ].filter(Boolean).join("\n")
+    }
+  }
+  item.metadata["completed_at"] = new Date().toISOString()
+  await writeState(ctx.worktree, state)
+  const notes = [cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
+  const doneMessage = branchName
+    ? `任务组已完成并合并到 "${mergeTarget}"。`
+    : "任务组已完成（无变更分支引用，跳过合并）。"
+  return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}` : doneMessage
+}
+
+/** 独立审查会话（kind=review）收尾：合并行为维持 baseBranch 口径（fix 模式合回 merge_target、
+ *  fix=none 不合并不合并直接销毁），change 分支模型不介入。 */
+async function finalizeReviewSession(
+  state: OrchestrateState,
+  item: WorkItem,
+  params: { change_id: string },
+  ctx: ToolContext,
+  refs: { worktreePath: string | null; branchName: string | null; isReviewNone: boolean; checkboxWarning: string },
+): Promise<string> {
+  const { worktreePath, branchName, isReviewNone, checkboxWarning } = refs
   const mergeTarget = state.baseBranch
   if (branchName && !isReviewNone) {
     const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
@@ -1179,16 +1458,12 @@ export async function completeTaskGroupExecute(params: { change_id: string }, ct
   item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
   const notes = [cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
-  if (state.kind === "review") {
-    // 独立审查会话收尾返回审查结果摘要（issue 计数按严重级别/维度归并，只审模式的交付物形态）
-    const summary = renderReviewIssueSummary(item)
-    const doneMessage = isReviewNone
-      ? `独立审查会话已完成（只审模式，未合并，worktree 与分支已销毁）。`
-      : `独立审查会话已完成并合并到 "${mergeTarget}"。`
-    return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}\n${summary}` : `${doneMessage}\n${summary}`
-  }
-  const doneMessage = `任务组已完成并合并到 "${mergeTarget}"。`
-  return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}` : doneMessage
+  // 独立审查会话收尾返回审查结果摘要（issue 计数按严重级别/维度归并，只审模式的交付物形态）
+  const summary = renderReviewIssueSummary(item)
+  const doneMessage = isReviewNone
+    ? `独立审查会话已完成（只审模式，未合并，worktree 与分支已销毁）。`
+    : `独立审查会话已完成并合并到 "${mergeTarget}"。`
+  return notes.length > 0 ? `${doneMessage}\n${notes.join("\n")}\n${summary}` : `${doneMessage}\n${summary}`
 }
 
 export async function setUnattendedExecute(params: UnattendedParams, ctx: ToolContext): Promise<string> {

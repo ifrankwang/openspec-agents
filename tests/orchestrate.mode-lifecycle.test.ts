@@ -172,7 +172,8 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
       const item = taskItemOf(wt)
       expect(item.tags["implement:openspec-developer"]).toBe("passed")
       expect(item.tags["quality_review:openspec-reviewer"]).toBe("passed")
-      expect(item.currentStep).toBe("quality_review")
+      // currentStep 前移到第一个未全 passed 的审查 step：quality_review 已 passed → verify_cleanup
+      expect(item.currentStep).toBe("verify_cleanup")
     } finally { teardown(root) }
   })
 
@@ -289,7 +290,7 @@ describe("收尾门禁保留（completeTaskGroupExecute）", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
-      fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "task-group-1"))
+      fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "ws"))
       const err = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt)).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/未 commit 内容/)
@@ -362,15 +363,15 @@ describe("收尾门禁保留（completeTaskGroupExecute）", () => {
       const item = taskItemOf(wt)
       expect(item.metadata["completed_at"]).toBeDefined()
       // FakeGit 记录合并提交引用的源分支（commit-tree 消息）
-      expect(fakeGit.mergeCommitBranches).toContain(`task-group/${CID}/1`)
+      expect(fakeGit.mergeCommitBranches).toContain(`change/${CID}`)
       // worktree 与分支已清理
-      expect(fakeGit.worktrees.has(join(wt, ".worktree", CID, "task-group-1"))).toBe(false)
+      expect(fakeGit.worktrees.has(join(wt, ".worktree", CID, "ws"))).toBe(false)
     } finally { teardown(root) }
   })
 })
 
-describe("收尾裸合并：合并冲突由 dev 解决后直接收尾", () => {
-  test("合并冲突返回 blocked（保留 worktree/分支）→ dev 解决冲突（重调 complete）→ 收尾完成", async () => {
+describe("收尾裸合并：合并冲突回退收尾验证后重新收口", () => {
+  test("合并冲突返回 blocked 并回退 verify_cleanup（保留 worktree/分支）→ dev 重新收尾验证 → 重调 complete 完成收口", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -378,12 +379,19 @@ describe("收尾裸合并：合并冲突由 dev 解决后直接收尾", () => {
       fakeGit.mergeTreeConflictOnNext = true
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(blocked).toContain("blocked")
-      expect(blocked).toContain("merge_conflict")
-      expect(blocked).toContain("未产生任何变更")
-      // 冲突路径不写 completed_at、保留 worktree 与分支（供 dev 解决冲突）
+      expect(blocked).toContain("冲突")
+      expect(blocked).toContain("重新查询 opx_status 获取分派指引")
+      // 冲突路径不写 completed_at、保留 worktree 与分支，状态回退到 verify_cleanup 等待重新收口
       expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
-      expect(fakeGit.worktrees.has(join(wt, ".worktree", CID, "task-group-1"))).toBe(true)
-      // dev 在 worktree 内解决冲突并提交后，编排者重调 complete 完成收尾（裸合并、无额外验证）
+      expect(taskItemOf(wt).phase).toBe("review")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      expect(fakeGit.worktrees.has(join(wt, ".worktree", CID, "ws"))).toBe(true)
+      // dev 重新完成收尾验证（回归通过）→ done → 编排者重调 complete 完成收口
+      await agent_submit.execute(
+        { change_id: CID, step_id: "verify_cleanup", verdict: "passed" },
+        makeCtx(DEV, wt),
+      )
+      expect(taskItemOf(wt).phase).toBe("done")
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()

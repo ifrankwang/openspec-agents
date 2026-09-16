@@ -120,7 +120,7 @@ export function renderWorktreeSection(
         lines.push("- **审查范围**: 全量代码库审查（无区间界定，工具检查与审查覆盖整个代码库）")
       }
     } else if (tg.baseRef) {
-      lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本 change 全部已提交变更文件`)
+      lines.push(`- **变更范围**: 用 \`git -C ${tg.worktreePath} diff --name-only ${tg.baseRef}..HEAD\` 查询本任务组的已提交变更文件`)
     }
     lines.push("- **⚠️ 约束**: 所有读写和 git 操作均在此目录下进行；严禁直接修改主仓库/主分支路径下的文件（如 `<repo>/openspec/...`）")
     lines.push("- **路径解析**: 推荐阅读文档均为相对 worktree 路径的引用，一律以 worktree 路径为基准解析，禁止从主仓库根目录解析")

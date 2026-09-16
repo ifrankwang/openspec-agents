@@ -16,7 +16,7 @@ import { FakeGitRunner, setupWithFakeGit, teardown } from "./helpers"
 import { driveToVerifyTool, readItem } from "./helpers-workflow"
 
 const CID = "test-tool-checkpoint"
-const BASE_REF = "base000000000000000000000000000000000001"
+const BASE_REF = "abc123def456" // fakeGit.defaultBranchOid：change 会话 base_ref=scope 端点（change 分支 tip）
 
 afterAll(() => { __setGitRunner(null) })
 

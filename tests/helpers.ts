@@ -48,8 +48,14 @@ export class FakeGitRunner implements GitRunner {
   failCommit = false
   /** 强制 runChecked 侧 worktree remove 失败（收尾清理补救链测试用）。 */
   failWorktreeRemove = false
-  /** merge-base --is-ancestor 结果：true = 源分支已并入目标（收尾重试幂等场景）。 */
+  /** merge-base --is-ancestor 结果：未按 (source,target) 参数对命中时的全局兜底值。 */
   sourceIsAncestor = false
+  /** merge-base --is-ancestor 结果按 (source, target) 参数对配置：key 为 `${source} ${target}`（已去 refs/heads/ 前缀）。
+   *  支持收口重试序列（漂移检查 base→change 与合并幂等检查 change→base 分别配置）；
+   *  未命中时按 branchParents fork 链推导（worktree add -b / git branch 建分支时登记），仍无结论回退 sourceIsAncestor。 */
+  isAncestorPairs = new Map<string, boolean>()
+  /** 分支 fork 源登记（branch -> fork 源 ref）：建分支动作（worktree add -b / git branch）时写入，供 is-ancestor 推导。 */
+  branchParents = new Map<string, string>()
   /** merge-tree 冲突注入（一次性）：true 时下一次 merge-tree 返回退出码 1。 */
   mergeTreeConflictOnNext = false
   /** 分支 tip oid（rev-parse <branch> 与 update-ref CAS 旧值校验共用）；未配置时取 defaultBranchOid。 */
@@ -91,10 +97,14 @@ export class FakeGitRunner implements GitRunner {
       }
       if (rest[0] === "add") {
         const branchIdx = rest.indexOf("-b")
-        const branch = branchIdx >= 0 ? rest[branchIdx + 1] : ""
-        const wtPath = branchIdx >= 0 ? rest[branchIdx + 2] : ""
+        // 两种形态：`add -b <branch> <path> <fork>`（建分支并检出）与 `add <path> <branch>`（检出既有分支）
+        const branch = branchIdx >= 0 ? rest[branchIdx + 1] : rest[2] ?? ""
+        const wtPath = branchIdx >= 0 ? rest[branchIdx + 2] : rest[1] ?? ""
+        const fork = branchIdx >= 0 ? rest[branchIdx + 3] ?? null : null
         if (branch && wtPath) {
           this.worktrees.set(wtPath, { branch, path: wtPath })
+          this.localBranches.add(branch)
+          if (fork) this.branchParents.set(branch, fork.replace(/^refs\/heads\//, ""))
           mkdirSync(wtPath, { recursive: true })
           const srcOpenspec = join(worktree, "openspec")
           const destOpenspec = join(wtPath, "openspec")
@@ -247,7 +257,25 @@ export class FakeGitRunner implements GitRunner {
 
     // 收尾裸合并三件套（mergeBranchToTarget）：is-ancestor 幂等检查 / merge-tree 内存试算 / update-ref CAS 推进
     if (cmd === "merge-base" && args[1] === "--is-ancestor") {
-      return this.sourceIsAncestor
+      const source = (args[2] ?? "").replace(/^refs\/heads\//, "")
+      const target = (args[3] ?? "").replace(/^refs\/heads\//, "")
+      const pair = this.isAncestorPairs.get(`${source} ${target}`)
+      let isAncestor: boolean
+      if (pair !== undefined) {
+        isAncestor = pair
+      } else if (source === target) {
+        isAncestor = true
+      } else {
+        // fork 链推导：从 target 沿建分支登记的 parent 上溯，命中 source 即祖先
+        let p = target
+        isAncestor = false
+        for (let i = 0; i < 32 && this.branchParents.has(p); i++) {
+          p = this.branchParents.get(p)!
+          if (p === source) { isAncestor = true; break }
+        }
+        if (!isAncestor) isAncestor = this.sourceIsAncestor
+      }
+      return isAncestor
         ? { success: true, stdout: "", stderr: "", exitCode: 0 }
         : { success: false, stdout: "", stderr: "", exitCode: 1 }
     }
@@ -271,6 +299,10 @@ export class FakeGitRunner implements GitRunner {
       }
       this.branchOids.set(branch, newOid)
       this.refUpdates.push({ ref, newOid, oldOid })
+      // 合并成功登记祖先关系（源分支此后已并入目标）：commit-tree 消息携带源分支名
+      const lastMerge = this.commitTreeCalls[this.commitTreeCalls.length - 1]
+      const merged = lastMerge?.message.match(/^Merge branch '(.+)'$/)
+      if (merged) this.isAncestorPairs.set(`${merged[1]} ${branch}`, true)
       return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
 
@@ -282,7 +314,12 @@ export class FakeGitRunner implements GitRunner {
         this.mergeConflictOnNext = false
         return { success: false, stdout: "", stderr: "merge conflict", exitCode: 1 }
       }
-      this.mergedBranches.push(args[args.length - 1])
+      const source = args[args.length - 1]
+      this.mergedBranches.push(source)
+      // 真实合并成功登记祖先关系（源分支此后已并入目标分支=当前检出分支）
+      if (source && !source.startsWith("-")) {
+        this.isAncestorPairs.set(`${source} ${this.currentBranch}`, true)
+      }
       return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
 
@@ -304,6 +341,17 @@ export class FakeGitRunner implements GitRunner {
       return { success: true, stdout: "", stderr: "", exitCode: 0 }
     }
     if (cmd === "checkout" || cmd === "restore") return { success: true, stdout: "", stderr: "", exitCode: 0 }
+
+    // 建分支（不检出）：`branch <name> <start-point>`——登记本地分支与 fork 源（is-ancestor 推导用）
+    if (cmd === "branch" && args[1] !== "-D") {
+      const name = args[1] ?? ""
+      const start = (args[2] ?? "").replace(/^refs\/heads\//, "")
+      if (name) {
+        this.localBranches.add(name)
+        if (start) this.branchParents.set(name, start)
+      }
+      return { success: true, stdout: "", stderr: "", exitCode: 0 }
+    }
 
     if (cmd === "worktree" && args[1] === "remove") {
       if (this.failWorktreeRemove) return { success: false, stdout: "", stderr: "fatal: worktree remove 失败", exitCode: 1 }

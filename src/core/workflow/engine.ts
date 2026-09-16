@@ -44,6 +44,14 @@ export function isTaskGroupSettled(item: WorkItem): boolean {
   return noTags && childrenSettled
 }
 
+/** 判断 item 是否为其 change 的最后一个收口任务组：其余全部任务组均「终态或从未激活」。
+ *  complete 的 change 级收口判定与终态视图文案分流共用此判定（单一事实源）。 */
+export function isFinalTaskGroup(state: { workItems: WorkItem[] }, item: WorkItem): boolean {
+  return state.workItems
+    .filter((w) => w.id.startsWith("task:") && w.id !== item.id)
+    .every(isTaskGroupSettled)
+}
+
 export function isBlockingSeverity(severity: string | undefined): boolean {
   return severity !== undefined && (BLOCKING_SEVERITIES as readonly string[]).includes(severity)
 }

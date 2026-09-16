@@ -176,17 +176,23 @@ describe("B. git 分支名校验", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      const r = await set_worktree.execute({ change_id: CID, branch_name: "feature/valid-name" }, ctx.orch)
+      // change 模型下显式分支名 + 独立路径（缺省 ws 路径已被上一轮 set_worktree 占用）
+      const customPath = join(wt, ".worktree", CID, "custom-branch-wt")
+      const r = await set_worktree.execute(
+        { change_id: CID, branch_name: "feature/valid-name", worktree_path: customPath },
+        ctx.orch
+      )
       expect(r).toContain("feature/valid-name")
+      expect(r).toContain("已创建 worktree")
     } finally { teardown(root) }
   })
 
-  test("set_worktree 不传 branch_name → 缺省自动生成", async () => {
+  test("set_worktree 不传 branch_name → 缺省按 change 模型派生", async () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
       const r = await set_worktree.execute({ change_id: CID }, ctx.orch)
-      expect(r).toContain(`task-group/${CID}/1`)
+      expect(r).toContain(`change/${CID}`)
     } finally { teardown(root) }
   })
 })

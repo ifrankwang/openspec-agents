@@ -31,7 +31,8 @@ export type OrchestrateStatus = "not_started" | "in_progress" | "completed"
 export type DimensionVerdict = "pending" | "passed" | "failed"
 export type QualityLayerProgress = Record<ReviewDimension, DimensionVerdict>
 
-/** 流程模式：full（默认，analyze → implement → 三重审查+收尾验证）或 simple（implement → quality_review → done）。 */
+/** 流程模式：full（默认，analyze → implement → 三重审查+收尾验证）或 simple（implement → quality_review → done；
+ *  verify_cleanup 仅作收口漂移/冲突回退落点，正常流转不经过）。 */
 export type WorkflowMode = "full" | "simple"
 
 /** 独立审查会话的审查范围类型：pr=按 base..head 分支区间审查，full=全量代码库审查。 */

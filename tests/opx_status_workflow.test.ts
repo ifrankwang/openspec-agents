@@ -1153,7 +1153,7 @@ describe("simple 模式 quality_review：开发者自检申报区块渲染（验
 
 describe("simple 模式 quality_review：本次变更证据区块（检查点增量口径，验证分流证据锚点）", () => {
   const REVIEWER = "openspec-reviewer"
-  const BASE_REF = "base000000000000000000000000000000000001"
+  const BASE_REF = "abc123def456" // fakeGit.defaultBranchOid：change 会话 base_ref=scope 端点（change 分支 tip）
 
   /** simple 模式推进到 quality_review；extra 透传 implement 提交参数。 */
   async function driveToQualityReviewSimple(wt: string, extra: Record<string, unknown> = {}): Promise<void> {
