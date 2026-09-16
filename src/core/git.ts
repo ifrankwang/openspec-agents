@@ -169,6 +169,16 @@ export async function isAncestor(worktree: string, a: string, b: string): Promis
   throw new Error(`无法判断 "${a}" 是否为 "${b}" 的祖先：${r.stderr}`)
 }
 
+/** 查询基准侧漂移文件清单：`git diff --name-only --no-renames <sourceBranch>...<targetBranch>`
+ *  三点区间 = merge-base(source, target) 到 target 的内容差异（基准侧自分支切出点以来的净变化，非 commit 口径）。
+ *  参数方向固定：source 传变更分支，target 传基准分支（切出点在 source 一侧）。
+ *  返回 null 表示 git 查询失败，调用方须按非文档保守回退。 */
+export async function listBranchDriftFiles(worktree: string, sourceBranch: string, targetBranch: string): Promise<string[] | null> {
+  const r = await runGitChecked(worktree, ["diff", "--name-only", "--no-renames", `${sourceBranch}...${targetBranch}`])
+  if (!r.success) return null
+  return parseDiffNameOnly(r.stdout)
+}
+
 /** 校验本地分支存在（refs/heads/<name> 严格本地命名空间，不含远端跟踪 ref）。 */
 export async function isLocalBranch(worktree: string, branch: string): Promise<boolean> {
   const r = await runGitChecked(worktree, ["rev-parse", "--verify", `refs/heads/${branch}`])

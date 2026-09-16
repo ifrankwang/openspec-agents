@@ -3,7 +3,7 @@ import { rmdir } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
@@ -1193,6 +1193,14 @@ function renderReviewIssueSummary(item: WorkItem): string {
   return lines.join("\n")
 }
 
+/** 漂移内容纯文档判定：null（查询失败）按非文档保守回退；空清单 = 内容无净变化（如基准上改了又回滚）视为纯文档；
+ *  全部文件后缀属文档格式才放行。.txt 刻意排除（requirements.txt 等依赖清单具代码语义）。 */
+const DOCUMENTATION_EXTENSIONS = [".md", ".mdx", ".markdown", ".rst", ".adoc"]
+function isDocumentationOnly(files: string[] | null): boolean {
+  if (files === null) return false
+  return files.every((f) => DOCUMENTATION_EXTENSIONS.some((ext) => f.endsWith(ext)))
+}
+
 /**
  * 最后任务组收口被基准分支漂移/文本冲突拦截时的回退：
  * 该任务组回退到收尾验证（verify_cleanup）等待重新收口——phase 回退 + clearStepTags + 按 recovery
@@ -1321,24 +1329,38 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
 
   // 最后任务组 → change 级收口：合并 change 分支回基准分支（一次性），成功后销毁 worktree 并删分支
   const mergeTarget = state.baseBranch
+  // 纯文档漂移直通时的事实说明：仅在本次收口实际发生直通时非空；合并 blocked/conflict 分支不带该说明
+  let docDriftNote = ""
   if (branchName) {
     // create-or-reuse（合并目标解析前）：在途旧模型会话升级时从当前基准 tip 创建，天然含已合入代码
     await ensureChangeBranch(ctx.worktree, branchName, mergeTarget)
 
-    // 前置漂移检查（独立封装）：基准 tip 须为 change 分支祖先；不满足 → 回退收尾验证并 blocked
+    // 前置漂移检查（独立封装）：基准 tip 须为 change 分支祖先；不满足时先比对基准侧净变化内容——
+    // 纯文档漂移（含空清单 = 无净变化）不回退、直接合并收口；含任一非文档文件或清单查询失败 → 回退收尾验证并 blocked
     if (!(await isAncestor(ctx.worktree, mergeTarget, branchName))) {
-      const workflow = loadWorkflowFile(resolveWorkflowPath(state))
-      const rolledBack = rollbackToCleanupStep(item, workflow)
-      if (rolledBack) await writeState(ctx.worktree, state)
-      return renderFinalizeBlocked(
-        [
-          `基准分支 \`${mergeTarget}\` 已推进（与变更分支 \`${branchName}\` 存在漂移）：基准分支最新提交未包含在变更分支历史中，直接合并会遗漏基准分支新内容。`,
-        ],
-        [
-          `在 worktree 内执行 \`git merge ${mergeTarget}\` 合入基准分支最新代码并解决冲突，完成回归验证后重新提交收尾验证（opx_agent_submit，step_id="verify_cleanup"），通过后再调用 opx_orch_complete_task_group 重新收口。`,
-        ],
-        { branchName, mergeTarget, rolledBack, checkboxWarning },
-      )
+      const driftFiles = await listBranchDriftFiles(ctx.worktree, branchName, mergeTarget)
+      if (!isDocumentationOnly(driftFiles)) {
+        const workflow = loadWorkflowFile(resolveWorkflowPath(state))
+        const rolledBack = rollbackToCleanupStep(item, workflow)
+        if (rolledBack) await writeState(ctx.worktree, state)
+        return renderFinalizeBlocked(
+          [
+            `基准分支 \`${mergeTarget}\` 已推进（与变更分支 \`${branchName}\` 存在漂移）：基准分支最新提交未包含在变更分支历史中，直接合并会遗漏基准分支新内容。`,
+          ],
+          [
+            `在 worktree 内执行 \`git merge ${mergeTarget}\` 合入基准分支最新代码并解决冲突，完成回归验证后重新提交收尾验证（opx_agent_submit，step_id="verify_cleanup"），通过后再调用 opx_orch_complete_task_group 重新收口。`,
+          ],
+          { branchName, mergeTarget, rolledBack, checkboxWarning },
+        )
+      }
+      const files = driftFiles ?? []
+      const driftList = files.length > 10
+        ? `${files.slice(0, 10).join(", ")} 等 ${files.length} 个`
+        : files.join(", ")
+      docDriftNote =
+        `- **基准漂移（纯文档）**: 基准分支 \`${mergeTarget}\` 相对变更分支切出点净变化 ${files.length} 个文件` +
+        (files.length > 0 ? `（${driftList}）` : "") +
+        "，均为文档，不影响代码语义，未回退收尾验证直接合并。"
     }
 
     const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
@@ -1394,7 +1416,7 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
   }
   item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
-  const notes = [cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
+  const notes = [docDriftNote, cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
   const doneMessage = branchName
     ? `任务组已完成并合并到 "${mergeTarget}"。`
     : "任务组已完成（无变更分支引用，跳过合并）。"

@@ -22,6 +22,9 @@ export class FakeGitRunner implements GitRunner {
   diffOut = ""
   /** 收尾合并「合并将写入文件清单」输出（diff --name-only --no-renames <ref> <treeOid> 形态）。 */
   mergeWrittenOut = ""
+  /** 收口纯文档漂移直通判定用三点区间漂移清单（diff --name-only --no-renames <src>...<tgt> 形态）。
+   *  默认空 = 基准侧无净变化 = 纯文档直通；需要回退语义的用例须显式注入非文档文件。 */
+  driftDiffOut = ""
   /** 暂存-工作区差异输出（diff --name-only -- <paths> 形态；非空 = 部分暂存）。 */
   unstagedDeltaOut = ""
   treeShas: string[] = []
@@ -223,6 +226,13 @@ export class FakeGitRunner implements GitRunner {
       if (args.includes("--name-only") && rangeArg) {
         const out = this.diffNameOnlyByRange.get(rangeArg) ?? this.diffNameOnlyDefault
         return { success: true, stdout: out, stderr: "", exitCode: 0 }
+      }
+      // 收口漂移清单（listBranchDriftFiles）：--name-only + 恰一个含 `...` 的三点区间位置参数。
+      // 与既有形态互不误撞：`..HEAD` 形态用 endsWith("..HEAD") 匹配、run 侧 mergeWrittenOut 形态显式
+      // 排除含 `..` 的参数，三点区间（target 为分支名，不会以 "..HEAD" 结尾）均不会命中二者，防回归。
+      const driftArgs = args.filter((a) => a.includes("..."))
+      if (args.includes("--name-only") && driftArgs.length === 1) {
+        return { success: true, stdout: this.driftDiffOut, stderr: "", exitCode: 0 }
       }
       return { success: true, stdout: this.diffOut, stderr: "", exitCode: 0 }
     }

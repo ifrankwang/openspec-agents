@@ -2,8 +2,10 @@
  * 任务组收尾/收口测试（change 分支模型）：
  * - 非最后任务组：门禁 → 勾选 → scope_end → completed_at；无合并、无销毁（变更保留在 change 分支）
  * - 最后任务组两段式收口：
- *   1) 前置漂移检查：基准分支已推进（base 非 change 分支祖先）→ blocked + 回退 verify_cleanup
- *      （completed_at 不写、worktree/分支保留、无合并命令），重新收尾验证通过后重放 → 合并成功 → 清理
+ *   1) 前置漂移检查：基准分支已推进（base 非 change 分支祖先）→ 先按基准侧净变化内容分流——
+ *      纯文档漂移（含空清单）不回退、直接合并收口并附事实说明；含任一非文档文件或清单查询失败
+ *      （failDiff）→ blocked + 回退 verify_cleanup（completed_at 不写、worktree/分支保留、无合并命令），
+ *      重新收尾验证通过后重放 → 合并成功 → 清理；纯文档漂移遇合并冲突仍走冲突回退路径
  *   2) 漂移通过 → mergeBranchToTarget：update-ref CAS 推进断言改 change 模型（change/{changeId} 源分支）
  *   3) 合并成功 → 销毁 worktree + 删分支 → completed_at
  * - 补救链物理成功：git worktree remove 失败时经文件系统兜底删除 + prune，分支正常删除，无残留警告
@@ -118,6 +120,8 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
       fakeGit.currentBranch = "develop"
       // 漂移注入：基准 tip 不再是 change 分支祖先（多 change 并行推进了基准分支）
       fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      // 非文档漂移清单：空清单默认按纯文档直通，回退语义须显式注入非文档文件
+      fakeGit.driftDiffOut = "src/app.ts"
 
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
 
@@ -158,6 +162,122 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
       // worktree 与 change 分支已销毁
       expect(existsSync(wtPathOf(wt))).toBe(false)
       expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("纯文档漂移直通：不回退收尾验证直接合并收口，返回体附事实说明", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      // 主仓库检出非目标分支 → worktreeless 合并原路径
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "README.md\ndocs/guide.mdx"
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      // 直接成功：事实说明携带文件清单，无 verify_cleanup 回退痕迹（scope_end_oid 未被回退清除）
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("基准漂移（纯文档）")
+      expect(out).toContain("README.md, docs/guide.mdx")
+      expect(out).not.toContain("verify_cleanup")
+      const item = taskItemOf(wt)
+      expect(item.metadata["completed_at"]).toBeDefined()
+      expect(item.currentStep).not.toBe("verify_cleanup")
+      expect(item.metadata["scope_end_oid"]).toBeDefined()
+      // 合并真实发生：update-ref CAS 推进 + change 模型合并提交
+      const mergeSha = fakeGit.commitShas[fakeGit.commitShas.length - 1]
+      expect(fakeGit.branchOids.get("main")).toBe(mergeSha)
+      expect(fakeGit.refUpdates).toEqual([
+        { ref: "refs/heads/main", newOid: mergeSha, oldOid: "abc123def456" },
+      ])
+      expect(fakeGit.mergeCommitBranches).toContain(`change/${CID}`)
+      // worktree 与 change 分支已销毁
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("纯文档漂移 + 合并冲突：仍按冲突路径回退 verify_cleanup，blocked 不带直通说明，重放后收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "README.md\ndocs/guide.mdx"
+      fakeGit.mergeTreeConflictOnNext = true
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("冲突")
+      expect(blocked).not.toContain("基准漂移（纯文档）")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      await repassCleanup(wt)
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(ok).not.toContain("基准漂移（纯文档）")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("漂移清单混入任一非文档文件 → 维持回退（名单就窄语义守护），重放后收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "README.md\nsrc/util.ts"
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("漂移")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      await repassCleanup(wt)
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("漂移清单查询失败（failDiff）→ 按非文档保守回退 verify_cleanup，重放后收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.failDiff = true
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("漂移")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      // failDiff 只影响 diff 查询：重放时漂移检查走 is-ancestor 放行、合并链路无 diff，收口照常
+      await repassCleanup(wt)
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
     } finally { teardown(root) }
   })
 })
