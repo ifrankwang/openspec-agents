@@ -42,7 +42,7 @@ phases:
           - "执行边界缺省整个 worktree（独立审查无分析环节，不生成边界白名单）；issue 的 file 字段指向的文件即修复边界，修复这些文件（含回归引入问题）不算越界；可按 issue 的 suggestion 直接执行修复；reviewer 的 boundary_expansion 已并入边界"
           - "对修复未过次数≥2 的 issue 须先完成 5-Why 根因分析再动手，不得跳过分析直接改代码"
           - "修复完成后先 git commit 再提交；提交前按已加载的质量门类 skill 完成本地构建验证，并按维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次修复文件逐项自检，自检结论与工具检查结果一并汇总进 self_check_results"
-          - "自证/验证需启动服务或基础设施时，一律按已加载技术栈 skill 的隔离启动规范以隔离方式启动，隔离标识与建议端口以视图 Worktree 区块为准；验证完成后停止本次启动的实例，不留残留；禁止为腾出端口或资源而停止、复用或干扰非本会话启动的进程"
+          - "自证/验证需启动服务或基础设施时，一律按已加载技术栈 skill 的隔离启动规范以隔离方式启动，隔离标识与建议端口以视图 Worktree 区块为准；验证完成后停止本次启动的实例，不留残留，残留判定遵循已加载清理规范的归属判别，无法确认归属本变更的进程一律不清；禁止为腾出端口或资源而停止、复用或干扰非本会话启动的进程"
           - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由，并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复"
           - "提交 opx_agent_submit：必传 verdict；修复完成的 issue 经 fixed_issue_ids 上报、不可修 issue 经 exempt_issue_ids 申请豁免"
         constraints:
