@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { generateIsolationNamespace } from "../src/core/namespace"
 import { init, set_worktree, complete_task_group } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, settleOtherGroups } from "./helpers"
 import {
   setupToAnalyze, driveToQuality, submitQualityPassed, submitCleanupPassed, readItem, taskListOf,
 } from "./helpers-workflow"
@@ -132,6 +132,8 @@ describe("新流端到端 happy path", () => {
       expect(done.currentStep).toBeNull()
       expect(taskListOf(done).every((t: any) => t.status === "verified")).toBe(true)
 
+      // 构造「当前组是最后组」：其余组置终态 → complete 走收口合并路径
+      settleOtherGroups(wt, CID, "1")
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
       fakeGit.currentBranch = "develop"
       const r = await complete_task_group.execute({ change_id: CID }, ctx.orch)

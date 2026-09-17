@@ -27,7 +27,7 @@ import { __setGitRunner } from "../src/core/git"
 import { __setMustDoIndex } from "../src/core/tools/gate"
 import type { SkillTagIndex } from "../src/skills/resolve"
 import { init, set_worktree, status, agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
 
 const CID = "simple-e2e"
 const DEV = "openspec-developer"
@@ -160,6 +160,8 @@ describe("simple 模式端到端：完整链路（失败自循环 + 谁提谁裁
       expect(done.children.find((c: any) => c.externalId === "i1").phase).toBe("done")
 
       // ⑩ 收尾裸合并：直接合并分支并清理（无 verify_cleanup 环节）
+      // 构造「当前组是最后组」：其余组置终态 → complete 走收口合并路径
+      settleOtherGroups(wt, CID, "1")
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
       fakeGit.currentBranch = "develop"
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
@@ -219,6 +221,8 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
       expect(done.phase).toBe("done")
       expect(done.children.find((c: any) => c.externalId === "i1").phase).toBe("cancelled")
 
+      // 构造「当前组是最后组」：其余组置终态（回退/重放不丢失，收口合并路径）
+      settleOtherGroups(wt, CID, "1")
       // ⑥ 收尾遇合并冲突 → blocked 并回退 verify_cleanup（保留 worktree/分支、不写 completed_at）
       fakeGit.mergeTreeConflictOnNext = true
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))

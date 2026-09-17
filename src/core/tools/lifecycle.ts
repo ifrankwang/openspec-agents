@@ -1322,8 +1322,9 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
     // 非最后任务组：门禁 → 勾选 → scope_end → completed_at；无合并、无销毁
     item.metadata["completed_at"] = new Date().toISOString()
     await writeState(ctx.worktree, state)
+    // 取消限制事实说明与终态视图非最后组文案同措辞（cancelTaskGroupNote）
     const doneMessage =
-      "任务组已完成。本任务组变更保留在 change 分支上，待全部任务组完成后统一收口合并（本次不合并、不销毁 worktree）。"
+      `任务组已完成。本任务组变更保留在 change 分支上，待全部任务组完成后统一收口合并（本次不合并、不销毁 worktree）。若某任务组已确认不再执行，当前版本不支持取消任务组，须人工编辑编排 state 文件（openspec/states/${state.changeId}.json）将该任务组的 phase 改为 "cancelled"，收口合并才会触发。`
     return checkboxWarning ? `${doneMessage}\n${checkboxWarning}` : doneMessage
   }
 

@@ -440,6 +440,25 @@ export function readState(worktree: string, changeId: string): Record<string, un
   return JSON.parse(readFileSync(p, "utf-8")) as Record<string, unknown>
 }
 
+/**
+ * 将除 excludeGroupId 外的全部任务组置为终态（phase=done + completed_at）：
+ * 构造「当前组是最后一个收口任务组」前置，供断言收口合并路径的用例在 complete 前调用
+ * （避免逐用例复制粘贴改 state）。已终态的组保持原样（幂等）。
+ */
+export function settleOtherGroups(worktree: string, changeId: string, excludeGroupId: string): void {
+  const p = join(worktree, "openspec", "states", `${changeId}.json`)
+  const state = JSON.parse(readFileSync(p, "utf-8"))
+  for (const item of state.workItems) {
+    if (item.id !== `task:${excludeGroupId}`) {
+      item.phase = "done"
+      if (item.metadata?.["completed_at"] === undefined) {
+        item.metadata["completed_at"] = new Date().toISOString()
+      }
+    }
+  }
+  writeFileSync(p, JSON.stringify(state, null, 2))
+}
+
 // ─── Test Fixture Setup ───
 
 export function setupWithFakeGit(tmpRoot: string, changeId: string): { worktree: string; fakeGit: FakeGitRunner } {

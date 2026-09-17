@@ -6,7 +6,7 @@ import type { ExemptionRecord } from "../exemptions.ts"
 import type { LoadedWorkflow } from "./loader.ts"
 import type { EngineRecommendation } from "./engine.ts"
 import type { DetectChangesResult } from "../git.ts"
-import { getStepVerdict, isTerminalPhase, isBlockingSeverity, isTaskGroupSettled, isFinalTaskGroup, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
+import { getStepVerdict, isTerminalPhase, isBlockingSeverity, isFinalTaskGroup, phaseStepMismatch, REVIEW_STEP_TO_LAYER, blockingStepChildren } from "./engine.ts"
 import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../constants.ts"
 import { resolveChildIssueFields } from "./reset.ts"
 import { taskListOf, issueChildrenOf } from "../task-children.ts"
@@ -204,9 +204,9 @@ function renderTerminalPhase(item: WorkItem, state?: OrchestrateState, caller?: 
       "",
       finalGroup
         ? "本任务组为最后一个收口任务组，change 收口已完成：变更分支已合并回基准分支，编排已完成并收尾。"
-        : "本任务组已完成，变更保留在 change 分支上，待全部任务组完成后统一收口合并。",
+        : `本任务组已完成，变更保留在 change 分支上，待全部任务组完成后统一收口合并。${cancelTaskGroupNote(state)}`,
       "",
-      ...renderDeploymentNotesSection(state, caller),
+      ...renderDeploymentNotesSection(state, item, caller),
     ].join("\n")
   }
   return [
@@ -217,18 +217,25 @@ function renderTerminalPhase(item: WorkItem, state?: OrchestrateState, caller?: 
       ? "调用 `opx_orch_complete_task_group` 完成 change 收口（把变更分支合并回基准分支并清理）。"
       : "调用 `opx_orch_complete_task_group` 完成任务组收尾（变更保留在 change 分支，统一收口时合并）。",
     "",
-    ...renderDeploymentNotesSection(state, caller),
+    ...renderDeploymentNotesSection(state, item, caller),
   ].join("\n")
+}
+
+/** 非最后组收口文案的取消限制事实说明（与 complete 非最后组返回体同措辞）：当前版本无取消任务组
+ *  的工具入口，弃做组须人工置 cancelled 后收口合并才会触发。无 state（理论不可达）返回空串。 */
+function cancelTaskGroupNote(state: OrchestrateState | undefined): string {
+  if (!state) return ""
+  return `若某任务组已确认不再执行，当前版本不支持取消任务组，须人工编辑编排 state 文件（openspec/states/${state.changeId}.json）将该任务组的 phase 改为 "cancelled"，收口合并才会触发。`
 }
 
 /** 终态视图的「部署注意事项」区块（仅编排视角、change 会话渲染）：指引编排者读主仓库规划文档提取
  *  部署要点，并聚合各任务组 self_check_results 申报的「部署注意点:」前缀行（实施补充点，编排者纯转述）。
- *  渲染前提：change 全部任务组均终态或从未激活（isTaskGroupSettled，含当前组——渲染到终态时当前组必已
- *  终态），存在未收口组时不渲染（两形态维持既有文案）。全部组无实施补充点时省略补充点段（不渲染空段）。 */
-function renderDeploymentNotesSection(state: OrchestrateState | undefined, caller: StatusViewCaller | undefined): string[] {
+ *  渲染前提：当前组为最后一个收口任务组（isFinalTaskGroup，其余组均终态且渲染到终态时当前组必已
+ *  终态），尚有未收口组时不渲染（两形态维持既有文案）。全部组无实施补充点时省略补充点段（不渲染空段）。 */
+function renderDeploymentNotesSection(state: OrchestrateState | undefined, item: WorkItem, caller: StatusViewCaller | undefined): string[] {
   if (!caller?.orchestrator || !state || state.kind === "review") return []
+  if (!isFinalTaskGroup(state, item)) return []
   const taskGroups = state.workItems.filter((w) => w.id.startsWith("task:"))
-  if (!taskGroups.every(isTaskGroupSettled)) return []
   const lines = [
     "## 部署注意事项汇报",
     "",

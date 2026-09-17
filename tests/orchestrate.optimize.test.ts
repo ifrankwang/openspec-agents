@@ -24,7 +24,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, settleOtherGroups } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, submitQualityPassed,
   taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS, rollbackQuality,
@@ -1216,6 +1216,8 @@ describe("B1/B3. giveup 自动推进与 blockers 处理", () => {
       // B3：giveup 把未 resolved blockers 置 resolved（随放弃处理），与收尾门禁对齐
       expect(metaOf(item, "blockers")[0].status).toBe("resolved")
       // 末位 giveup 后 phase=done → 可直接收尾（此前 giveup 后停留原地无法收尾的死锁）
+      // 构造「当前组是最后组」：其余组置终态 → complete 走收口合并路径
+      settleOtherGroups(wt, CID, "1")
       const cr = await complete_task_group.execute({ change_id: CID }, ctx.orch)
       expect(cr).toContain("任务组已完成并合并到")
       expect(readItem(wt, CID).metadata["completed_at"]).toBeDefined()

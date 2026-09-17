@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, complete_task_group, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
 import { loadWorkflowFile, SIMPLE_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { phaseStepMismatch } from "../src/core/workflow/engine"
 
@@ -336,6 +336,8 @@ describe("收尾门禁保留（completeTaskGroupExecute）", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 构造「当前组是最后组」：其余组置终态（收口合并路径）
+      settleOtherGroups(wt, CID, "1")
       rewriteItem(wt, (item) => {
         item.metadata["blockers"] = [{ id: "b1", status: "awaiting_user", category: "外部依赖", description: "d" }]
       })
@@ -356,6 +358,8 @@ describe("收尾门禁保留（completeTaskGroupExecute）", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 构造「当前组是最后组」：其余组置终态（收口合并路径）
+      settleOtherGroups(wt, CID, "1")
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
       fakeGit.currentBranch = "develop"
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
@@ -376,6 +380,8 @@ describe("收尾裸合并：合并冲突回退收尾验证后重新收口", () =
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 构造「当前组是最后组」：其余组置终态（回退/重放不丢失，收口合并路径）
+      settleOtherGroups(wt, CID, "1")
       fakeGit.mergeTreeConflictOnNext = true
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(blocked).toContain("blocked")

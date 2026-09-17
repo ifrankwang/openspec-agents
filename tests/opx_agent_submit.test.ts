@@ -15,7 +15,7 @@ import { init, agent_submit, set_worktree, complete_task_group } from "../src/ad
 import { loadWorkflow, stepAgentIds } from "../src/core/workflow"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace } from "./helpers"
+import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "agent-submit"
@@ -522,6 +522,8 @@ describe("opx_agent_submit 通用 step 提交", () => {
       // children 全部终态（无遗留未解决 issue）
       expect(item.children.every((c: WorkItem) => c.phase === "done" || c.phase === "cancelled")).toBe(true)
 
+      // 构造「当前组是最后组」：其余组置终态 → complete 走收口合并路径
+      settleOtherGroups(wt, CID, "1")
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
       fakeGit.currentBranch = "develop"
       const r = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))

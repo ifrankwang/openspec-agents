@@ -32,9 +32,10 @@ export function isTerminalPhase(phase: WorkItemPhase): boolean {
   return phase === "done" || phase === "cancelled"
 }
 
-/** 任务组「终态或从未激活」（mode 切换窗口与终态视图共享的单一判定）：
- *  done 或 completed_at 已设置即终态；否则须无执行痕迹（tags 为空）且全部 task children
- *  处于 todo 或终态。 */
+/** 任务组「终态或从未激活」（mode 切换窗口专用判定）：done 或 completed_at 已设置即终态；
+ *  否则须无执行痕迹（tags 为空）且全部 task children 处于 todo 或终态。
+ *  「从未激活」计入收口仅对窗口场景正确（未开工组无进度，切走不丢东西）；收口合并判定
+ *  不得复用此口径（见 isFinalTaskGroup）。 */
 export function isTaskGroupSettled(item: WorkItem): boolean {
   if (item.phase === "done" || item.metadata["completed_at"] !== undefined) return true
   const noTags = Object.keys(item.tags).length === 0
@@ -44,12 +45,14 @@ export function isTaskGroupSettled(item: WorkItem): boolean {
   return noTags && childrenSettled
 }
 
-/** 判断 item 是否为其 change 的最后一个收口任务组：其余全部任务组均「终态或从未激活」。
- *  complete 的 change 级收口判定与终态视图文案分流共用此判定（单一事实源）。 */
+/** 判断 item 是否为其 change 的最后一个收口任务组：其余全部任务组均终态（done 或
+ *  completed_at 已设置）。「从未激活」不计入收口——串行编排下未开工组无任何进度痕迹，
+ *  若计入会令首个完成组被误判为最后组而提前合并销毁。complete 的 change 级收口判定与
+ *  终态视图文案分流/部署注意区块门禁共用此判定（单一事实源）。 */
 export function isFinalTaskGroup(state: { workItems: WorkItem[] }, item: WorkItem): boolean {
   return state.workItems
     .filter((w) => w.id.startsWith("task:") && w.id !== item.id)
-    .every(isTaskGroupSettled)
+    .every((w) => isTerminalPhase(w.phase) || w.metadata["completed_at"] !== undefined)
 }
 
 export function isBlockingSeverity(severity: string | undefined): boolean {

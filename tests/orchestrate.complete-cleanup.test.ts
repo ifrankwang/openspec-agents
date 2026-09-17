@@ -23,7 +23,7 @@ import { join } from "node:path"
 import { __setGitRunner, mergeBranchToTarget } from "../src/core/git"
 import { agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import {
-  makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState,
+  makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState, settleOtherGroups,
   type FakeGitRunner,
 } from "./helpers"
 
@@ -76,6 +76,12 @@ async function repassCleanup(wt: string): Promise<void> {
   )
 }
 
+/** simple 模式推到 done 并把其余任务组置终态：构造「组 1 是最后一个收口任务组」前置（收口合并路径用例共用）。 */
+async function driveToFinalDone(wt: string): Promise<void> {
+  await driveToDone(wt)
+  settleOtherGroups(wt, CID, "1")
+}
+
 describe("非最后任务组：完成不合并、不销毁", () => {
 
   test("存在未收口的其它任务组 → completed_at 写入但无合并命令，worktree 与 change 分支保留", async () => {
@@ -83,12 +89,7 @@ describe("非最后任务组：完成不合并、不销毁", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
-      // 构造组 2 已激活（tags 非空 + 子任务非 todo）→ 组 1 不是最后一个收口任务组
-      writeStateFile(wt, (state) => {
-        const g2 = state.workItems.find((w: any) => w.id === "task:2")
-        g2.tags["implement:openspec-developer"] = "pending"
-        g2.children[0].phase = "in_progress"
-      })
+      // 组 2/组 3 未终态 → 组 1 不是最后一个收口任务组（无需篡改 state）
 
       const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
 
@@ -115,7 +116,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 合并原路径
       fakeGit.currentBranch = "develop"
       // 漂移注入：基准 tip 不再是 change 分支祖先（多 change 并行推进了基准分支）
@@ -169,7 +170,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       // 主仓库检出非目标分支 → worktreeless 合并原路径
       fakeGit.currentBranch = "develop"
       fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
@@ -203,7 +204,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       fakeGit.currentBranch = "develop"
       fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
       fakeGit.driftDiffOut = "README.md\ndocs/guide.mdx"
@@ -232,7 +233,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       fakeGit.currentBranch = "develop"
       fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
       fakeGit.driftDiffOut = "README.md\nsrc/util.ts"
@@ -258,7 +259,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       fakeGit.currentBranch = "develop"
       fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
       fakeGit.failDiff = true
@@ -288,7 +289,7 @@ describe("收尾清理：git remove 失败的补救链", () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       const path = wtPathOf(wt)
       // FakeGit 的 worktree add 已建目录；再补一个真实文件构成非空桩目录
       expect(existsSync(path)).toBe(true)
@@ -324,7 +325,7 @@ describe("收口清理：目录完全残留时不阻断收口", () => {
     const groupDir = join(wt, ".worktree", CID)
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       expect(existsSync(wtPathOf(wt))).toBe(true)
       // 锁死叶子目录的父目录，使 fs 兜底删除在最后一步 rmdir 时失败
       chmodSync(groupDir, 0o555)
@@ -356,7 +357,7 @@ describe("收口清理：目录完全残留时不阻断收口", () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       // 清空分支引用：模拟仅剩 worktree 路径的收口场景
       writeStateFile(wt, (state) => {
         state.workItems.find((w: any) => w.id === "task:1").metadata["branch_name"] = null
@@ -380,7 +381,7 @@ describe("收口裸合并：worktreeless 底层命令（不触碰任何工作目
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       // 主仓库检出非目标分支 → 目标分支无人检出，走 worktreeless 原路径
       fakeGit.currentBranch = "develop"
       fakeGit.branchOids.set("main", "target0000000000000000000000000000000001")
@@ -411,7 +412,7 @@ describe("收口裸合并：worktreeless 底层命令（不触碰任何工作目
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       // 主仓库检出非目标分支 → 目标分支无人检出，merge-tree 试算冲突零副作用
       fakeGit.currentBranch = "develop"
       fakeGit.branchOids.set("main", "target0000000000000000000000000000000001")
@@ -445,7 +446,7 @@ describe("收口裸合并：worktreeless 底层命令（不触碰任何工作目
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
       fakeGit.sourceIsAncestor = true
 
       const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
@@ -644,7 +645,7 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      await driveToDone(wt)
+      await driveToFinalDone(wt)
 
       fakeGit.statusPorcelainOutput.set(wt, "M  src/App.java")
       fakeGit.mergeWrittenOut = "src/App.java"

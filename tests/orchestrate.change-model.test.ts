@@ -16,7 +16,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, status, complete_task_group, agent_submit } from "../src/adapters/opencode/tools"
 import {
-  makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState,
+  makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState, settleOtherGroups,
   type FakeGitRunner,
 } from "./helpers"
 
@@ -40,14 +40,14 @@ function taskItemOf(wt: string, groupId = "1"): any {
   return readState(wt, CID)!.workItems.find((w: any) => w.id === `task:${groupId}`)
 }
 
-/** simple 模式推到 done。 */
-async function driveToDone(wt: string): Promise<void> {
+/** simple 模式推到 done（ids 为当前组 task children 的组内短编号）。 */
+async function driveToDone(wt: string, ids: string[] = ["1", "2", "3"]): Promise<void> {
   await agent_submit.execute(
-    { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+    { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ids },
     makeCtx(DEV, wt),
   )
   await agent_submit.execute(
-    { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2", "3"] },
+    { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ids },
     makeCtx(REVIEWER, wt),
   )
 }
@@ -100,14 +100,7 @@ describe("scope 端点记录", () => {
       fakeGit.branchOids.set(`change/${CID}`, "scope-g1")
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
-      // 组 2 已激活 → 组 1 非最后组：完成不合并、不销毁
-      const statePath = join(wt, "openspec", "states", `${CID}.json`)
-      const raw = JSON.parse(readFileSync(statePath, "utf-8"))
-      const g2 = raw.workItems.find((w: any) => w.id === "task:2")
-      g2.tags["implement:openspec-developer"] = "pending"
-      g2.children[0].phase = "in_progress"
-      const { writeFileSync } = await import("node:fs")
-      writeFileSync(statePath, JSON.stringify(raw, null, 2))
+      // 组 2/组 3 未终态 → 组 1 非最后组：完成不合并、不销毁
       await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(taskItemOf(wt, "1").metadata["scope_start_oid"]).toBe("scope-g1")
 
@@ -184,19 +177,49 @@ describe("复用校验与升级路径", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
-      const statePath = join(wt, "openspec", "states", `${CID}.json`)
-      const raw = JSON.parse(readFileSync(statePath, "utf-8"))
-      const g2 = raw.workItems.find((w: any) => w.id === "task:2")
-      g2.tags["implement:openspec-developer"] = "pending"
-      g2.children[0].phase = "in_progress"
-      const { writeFileSync } = await import("node:fs")
-      writeFileSync(statePath, JSON.stringify(raw, null, 2))
+      // 组 2/组 3 未终态 → 组 1 非最后组
       await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
 
       const out = await status.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out).toContain("本任务组已完成，变更保留在 change 分支上")
       expect(out).not.toContain("编排已完成并收尾")
       expect(out).not.toContain("已合并回基准分支")
+      // 非最后组不渲染「部署注意事项」区块（部署要点面向合并后的收口场景）
+      expect(out).not.toContain("部署注意事项")
+    } finally { teardown(root) }
+  })
+
+  test("自然串行收口：前两组完成均不合并销毁，末组完成才一次性合并并清理", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      // 组 1（3 个子任务）推到 done → complete：其余组未终态 → 不合并、不销毁
+      await initSimpleWorktree(wt, CID)
+      await driveToDone(wt)
+      const out1 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(out1).toContain("待全部任务组完成后统一收口合并")
+      expect(existsSync(wtPathOf(wt))).toBe(true)
+      expect(fakeGit.localBranches.has(`change/${CID}`)).toBe(true)
+      expect(fakeGit.refUpdates.length).toBe(0)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(false)
+
+      // 真实 init 切组 2（2 个子任务）→ worktree 复用 → 推到 done → complete：组 3 未终态仍不合并
+      await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, makeOrchCtx(wt))
+      await set_worktree.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(taskItemOf(wt, "2").metadata["worktree_path"]).toBe(wtPathOf(wt))
+      await driveToDone(wt, ["1", "2"])
+      const out2 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(out2).toContain("待全部任务组完成后统一收口合并")
+      expect(existsSync(wtPathOf(wt))).toBe(true)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      // 切组 3（1 个子任务）→ 推到 done → complete：最后组一次性收口合并
+      await init.execute({ change_id: CID, task_group_id: "3", mode: "simple" }, makeOrchCtx(wt))
+      await set_worktree.execute({ change_id: CID }, makeOrchCtx(wt))
+      await driveToDone(wt, ["1"])
+      const out3 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(out3).toContain("任务组已完成并合并到")
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
     } finally { teardown(root) }
   })
 })
@@ -208,6 +231,8 @@ describe("并发 complete：文件锁串行化", () => {
     try {
       await initSimpleWorktree(wt, CID)
       await driveToDone(wt)
+      // 构造「当前组是最后组」：其余组置终态 → complete 走收口合并路径
+      settleOtherGroups(wt, CID, "1")
       fakeGit.currentBranch = "develop" // worktreeless 合并路径，update-ref 断言可见
 
       const results = await Promise.allSettled([
