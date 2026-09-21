@@ -172,11 +172,34 @@ export async function isAncestor(worktree: string, a: string, b: string): Promis
 /** 查询基准侧漂移文件清单：`git diff --name-only --no-renames <sourceBranch>...<targetBranch>`
  *  三点区间 = merge-base(source, target) 到 target 的内容差异（基准侧自分支切出点以来的净变化，非 commit 口径）。
  *  参数方向固定：source 传变更分支，target 传基准分支（切出点在 source 一侧）。
- *  返回 null 表示 git 查询失败，调用方须按非文档保守回退。 */
+ *  返回 null 表示 git 查询失败，调用方须按非无害保守回退。 */
 export async function listBranchDriftFiles(worktree: string, sourceBranch: string, targetBranch: string): Promise<string[] | null> {
   const r = await runGitChecked(worktree, ["diff", "--name-only", "--no-renames", `${sourceBranch}...${targetBranch}`])
   if (!r.success) return null
   return parseDiffNameOnly(r.stdout)
+}
+
+/**
+ * 判定单文件在三点区间（merge-base(source, target) → target）内的变更内容是否仅含 `"version"` 字段行：
+ * package.json 的版本号推进属发布元数据，无代码语义，收口漂移直通按无害漂移放行。
+ * 逐行解析 `git diff --no-renames <source>...<target> -- <filePath>` 的变更行（`+`/`-` 开头，跳过
+ * `+++`/`---` 文件头行）：每一行都须匹配 `"version"` 字段行才算 version-only；存在任一其他变更行
+ * （依赖、脚本等，具代码语义）→ false；无任何变更行（空 diff，内容无净变化）→ true。
+ * 返回 null 表示 git 查询失败，调用方须按非无害保守回退。
+ */
+export async function isVersionOnlyDrift(
+  worktree: string,
+  sourceBranch: string,
+  targetBranch: string,
+  filePath: string
+): Promise<boolean | null> {
+  const r = await runGitChecked(worktree, ["diff", "--no-renames", `${sourceBranch}...${targetBranch}`, "--", filePath])
+  if (!r.success) return null
+  for (const line of r.stdout.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue
+    if ((line.startsWith("+") || line.startsWith("-")) && !/^[+-]\s*"version"\s*:/.test(line)) return false
+  }
+  return true
 }
 
 /** 校验本地分支存在（refs/heads/<name> 严格本地命名空间，不含远端跟踪 ref）。 */

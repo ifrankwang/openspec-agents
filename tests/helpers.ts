@@ -22,9 +22,15 @@ export class FakeGitRunner implements GitRunner {
   diffOut = ""
   /** 收尾合并「合并将写入文件清单」输出（diff --name-only --no-renames <ref> <treeOid> 形态）。 */
   mergeWrittenOut = ""
-  /** 收口纯文档漂移直通判定用三点区间漂移清单（diff --name-only --no-renames <src>...<tgt> 形态）。
-   *  默认空 = 基准侧无净变化 = 纯文档直通；需要回退语义的用例须显式注入非文档文件。 */
+  /** 收口无害漂移直通判定用三点区间漂移清单（diff --name-only --no-renames <src>...<tgt> 形态）。
+   *  默认空 = 基准侧无净变化 = 无害直通；需要回退语义的用例须显式注入非无害文件。 */
   driftDiffOut = ""
+  /** 收口 version-only 内容判定输出（diff --no-renames <src>...<tgt> -- <file> 形态）：按文件路径配置；
+   *  仅含 "version" 行变化 → 无害直通，含其他变更行 → 回退。未按路径命中时回退 versionOnlyDiffDefault。 */
+  versionOnlyDiffByFile = new Map<string, string>()
+  versionOnlyDiffDefault = ""
+  /** 强制 version-only 内容判定查询失败（内容查询保守回退测试用；不影响漂移清单查询）。 */
+  failVersionOnlyDiff = false
   /** 暂存-工作区差异输出（diff --name-only -- <paths> 形态；非空 = 部分暂存）。 */
   unstagedDeltaOut = ""
   treeShas: string[] = []
@@ -233,6 +239,14 @@ export class FakeGitRunner implements GitRunner {
       const driftArgs = args.filter((a) => a.includes("..."))
       if (args.includes("--name-only") && driftArgs.length === 1) {
         return { success: true, stdout: this.driftDiffOut, stderr: "", exitCode: 0 }
+      }
+      // 收口 version-only 内容判定（isVersionOnlyDrift）：无 --name-only + 恰一个三点区间 + `--` 尾参
+      // 单文件路径。与漂移清单形态以 --name-only 互斥区分，不误撞。
+      if (!args.includes("--name-only") && driftArgs.length === 1 && args.includes("--")) {
+        if (this.failVersionOnlyDiff) return { success: false, stdout: "", stderr: "fatal: diff 失败", exitCode: 1 }
+        const file = args[args.indexOf("--") + 1] ?? ""
+        const out = this.versionOnlyDiffByFile.get(file) ?? this.versionOnlyDiffDefault
+        return { success: true, stdout: out, stderr: "", exitCode: 0 }
       }
       return { success: true, stdout: this.diffOut, stderr: "", exitCode: 0 }
     }

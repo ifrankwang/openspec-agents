@@ -3,9 +3,10 @@
  * - 非最后任务组：门禁 → 勾选 → scope_end → completed_at；无合并、无销毁（变更保留在 change 分支）
  * - 最后任务组两段式收口：
  *   1) 前置漂移检查：基准分支已推进（base 非 change 分支祖先）→ 先按基准侧净变化内容分流——
- *      纯文档漂移（含空清单）不回退、直接合并收口并附事实说明；含任一非文档文件或清单查询失败
- *      （failDiff）→ blocked + 回退 verify_cleanup（completed_at 不写、worktree/分支保留、无合并命令），
- *      重新收尾验证通过后重放 → 合并成功 → 清理；纯文档漂移遇合并冲突仍走冲突回退路径
+ *      无害漂移（文档后缀 / openspec 规划路径 / 仅版本号变更的 package.json，含空清单）不回退、
+ *      直接合并收口并附事实说明；含任一其他文件或清单/内容查询失败（failDiff / failVersionOnlyDiff）
+ *      → blocked + 回退 verify_cleanup（completed_at 不写、worktree/分支保留、无合并命令），
+ *      重新收尾验证通过后重放 → 合并成功 → 清理；无害漂移遇合并冲突仍走冲突回退路径
  *   2) 漂移通过 → mergeBranchToTarget：update-ref CAS 推进断言改 change 模型（change/{changeId} 源分支）
  *   3) 合并成功 → 销毁 worktree + 删分支 → completed_at
  * - 补救链物理成功：git worktree remove 失败时经文件系统兜底删除 + prune，分支正常删除，无残留警告
@@ -121,7 +122,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
       fakeGit.currentBranch = "develop"
       // 漂移注入：基准 tip 不再是 change 分支祖先（多 change 并行推进了基准分支）
       fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
-      // 非文档漂移清单：空清单默认按纯文档直通，回退语义须显式注入非文档文件
+      // 非无害漂移清单：空清单默认按无害漂移直通，回退语义须显式注入非无害文件
       fakeGit.driftDiffOut = "src/app.ts"
 
       const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
@@ -166,7 +167,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     } finally { teardown(root) }
   })
 
-  test("纯文档漂移直通：不回退收尾验证直接合并收口，返回体附事实说明", async () => {
+  test("文档后缀漂移直通：不回退收尾验证直接合并收口，返回体附事实说明", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -180,7 +181,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
 
       // 直接成功：事实说明携带文件清单，无 verify_cleanup 回退痕迹（scope_end_oid 未被回退清除）
       expect(out).toContain("任务组已完成并合并到")
-      expect(out).toContain("基准漂移（纯文档）")
+      expect(out).toContain("基准漂移（无代码语义）")
       expect(out).toContain("README.md, docs/guide.mdx")
       expect(out).not.toContain("verify_cleanup")
       const item = taskItemOf(wt)
@@ -200,7 +201,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     } finally { teardown(root) }
   })
 
-  test("纯文档漂移 + 合并冲突：仍按冲突路径回退 verify_cleanup，blocked 不带直通说明，重放后收口", async () => {
+  test("文档后缀漂移 + 合并冲突：仍按冲突路径回退 verify_cleanup，blocked 不带直通说明，重放后收口", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -214,7 +215,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
 
       expect(blocked).toContain("blocked")
       expect(blocked).toContain("冲突")
-      expect(blocked).not.toContain("基准漂移（纯文档）")
+      expect(blocked).not.toContain("基准漂移（无代码语义）")
       expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
       expect(fakeGit.commitShas.length).toBe(0)
@@ -224,12 +225,12 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
       fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
-      expect(ok).not.toContain("基准漂移（纯文档）")
+      expect(ok).not.toContain("基准漂移（无代码语义）")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
     } finally { teardown(root) }
   })
 
-  test("漂移清单混入任一非文档文件 → 维持回退（名单就窄语义守护），重放后收口", async () => {
+  test("漂移清单混入任一非无害文件 → 维持回退（名单就窄语义守护），重放后收口", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -255,7 +256,7 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
     } finally { teardown(root) }
   })
 
-  test("漂移清单查询失败（failDiff）→ 按非文档保守回退 verify_cleanup，重放后收口", async () => {
+  test("漂移清单查询失败（failDiff）→ 按非无害保守回退 verify_cleanup，重放后收口", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
@@ -279,6 +280,151 @@ describe("最后任务组两段式收口：漂移 blocked → 回退 → 重新�
       const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(ok).toContain("任务组已完成并合并到")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("openspec 规划路径漂移直通：含非 md 后缀（.openspec.yaml）同样放行，直接合并收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToFinalDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      // openspec/ 前缀按规划文档空间放行（不看后缀）：.openspec.yaml 非文档后缀也不触发回退
+      fakeGit.driftDiffOut = "openspec/changes/other/proposal.md\nopenspec/project/.openspec.yaml"
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("基准漂移（无代码语义）")
+      expect(out).toContain("openspec/changes/other/proposal.md, openspec/project/.openspec.yaml")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      expect(taskItemOf(wt).currentStep).not.toBe("verify_cleanup")
+      // 合并真实发生：update-ref CAS 推进 + worktree/分支销毁
+      const mergeSha = fakeGit.commitShas[fakeGit.commitShas.length - 1]
+      expect(fakeGit.branchOids.get("main")).toBe(mergeSha)
+      expect(fakeGit.refUpdates).toEqual([
+        { ref: "refs/heads/main", newOid: mergeSha, oldOid: "abc123def456" },
+      ])
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("package.json 漂移且三点区间内容仅 version 行变化 → version-only 放行直通合并", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToFinalDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "package.json"
+      // 内容仅含 "version" 字段行变化（含文件头/hunk 头行，均须跳过不误判）
+      fakeGit.versionOnlyDiffByFile.set(
+        "package.json",
+        ["--- a/package.json", "+++ b/package.json", "@@ -1,5 +1,5 @@", '-  "version": "0.1.0",', '+  "version": "0.2.0",'].join("\n"),
+      )
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("基准漂移（无代码语义）")
+      expect(out).toContain("package.json")
+      // 内容查询以 `--` 尾参单文件形态精确打到该文件
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:diff --no-renames") && l.endsWith("-- package.json"))).toBe(true)
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      const mergeSha = fakeGit.commitShas[fakeGit.commitShas.length - 1]
+      expect(fakeGit.branchOids.get("main")).toBe(mergeSha)
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+    } finally { teardown(root) }
+  })
+
+  test("package.json 漂移但内容含依赖行变化 → 按非无害回退 blocked，重放后收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToFinalDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "package.json"
+      // version 行之外的变更行（依赖）具代码语义 → 非无害
+      fakeGit.versionOnlyDiffByFile.set(
+        "package.json",
+        ["--- a/package.json", "+++ b/package.json", "@@ -1,7 +1,7 @@", '-  "version": "0.1.0",', '+  "version": "0.2.0",', '+    "some-dep": "^1.0.0"'].join("\n"),
+      )
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("漂移")
+      expect(blocked).not.toContain("基准漂移（无代码语义）")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      await repassCleanup(wt)
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("package.json version-only 内容查询失败 → 按非无害保守回退 blocked，重放后收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToFinalDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "package.json"
+      fakeGit.failVersionOnlyDiff = true
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("漂移")
+      expect(blocked).not.toContain("基准漂移（无代码语义）")
+      expect(taskItemOf(wt).currentStep).toBe("verify_cleanup")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeUndefined()
+      expect(fakeGit.commitShas.length).toBe(0)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      await repassCleanup(wt)
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, true)
+      fakeGit.failVersionOnlyDiff = false
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+    } finally { teardown(root) }
+  })
+
+  test("混合漂移：文档 + openspec 规划路径 + version-only package.json → 直通合并收口", async () => {
+    const { root, wt, fakeGit } = fresh()
+    try {
+      await initSimpleWorktree(wt, CID)
+      await driveToFinalDone(wt)
+      fakeGit.currentBranch = "develop"
+      fakeGit.isAncestorPairs.set(`main change/${CID}`, false)
+      fakeGit.driftDiffOut = "README.md\nopenspec/changes/foo/design.md\nsub/package.json"
+      fakeGit.versionOnlyDiffByFile.set(
+        "sub/package.json",
+        ['-  "version": "0.1.0",', '+  "version": "0.2.0",'].join("\n"),
+      )
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("基准漂移（无代码语义）")
+      expect(out).toContain("README.md, openspec/changes/foo/design.md, sub/package.json")
+      // 嵌套路径的 package.json 以 /package.json 结尾命中内容判定
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:diff --no-renames") && l.endsWith("-- sub/package.json"))).toBe(true)
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      const mergeSha = fakeGit.commitShas[fakeGit.commitShas.length - 1]
+      expect(fakeGit.branchOids.get("main")).toBe(mergeSha)
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
     } finally { teardown(root) }
   })
 })

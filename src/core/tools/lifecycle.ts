@@ -3,7 +3,7 @@ import { rmdir } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
@@ -1193,12 +1193,37 @@ function renderReviewIssueSummary(item: WorkItem): string {
   return lines.join("\n")
 }
 
-/** 漂移内容纯文档判定：null（查询失败）按非文档保守回退；空清单 = 内容无净变化（如基准上改了又回滚）视为纯文档；
- *  全部文件后缀属文档格式才放行。.txt 刻意排除（requirements.txt 等依赖清单具代码语义）。 */
+/** 漂移无害判定之文档后缀白名单：.txt 刻意排除（requirements.txt 等依赖清单具代码语义）。 */
 const DOCUMENTATION_EXTENSIONS = [".md", ".mdx", ".markdown", ".rst", ".adoc"]
-function isDocumentationOnly(files: string[] | null): boolean {
+/** 漂移无害判定之路径前缀白名单：openspec/ 为编排规划文档空间（提案/设计/任务/spec 等），不承载运行时代码。 */
+const DRIFT_NEUTRAL_PATH_PREFIXES = ["openspec/"]
+/**
+ * 漂移内容无害判定，满足其一即无害：文档后缀 / openspec 规划路径前缀 / package.json 且三点区间内容
+ * 仅含 `"version"` 字段行变化（版本号语义，无代码语义）。
+ * null（清单查询失败）按非无害保守回退；空清单 = 内容无净变化（如基准上改了又回滚）视为无害；
+ * version-only 内容查询失败（null）同样按非无害保守回退。
+ */
+async function isHarmlessDrift(
+  worktree: string,
+  sourceBranch: string,
+  targetBranch: string,
+  files: string[] | null
+): Promise<boolean> {
   if (files === null) return false
-  return files.every((f) => DOCUMENTATION_EXTENSIONS.some((ext) => f.endsWith(ext)))
+  const versionCandidates: string[] = []
+  for (const f of files) {
+    if (DOCUMENTATION_EXTENSIONS.some((ext) => f.endsWith(ext))) continue
+    if (DRIFT_NEUTRAL_PATH_PREFIXES.some((p) => f.startsWith(p))) continue
+    if (f === "package.json" || f.endsWith("/package.json")) {
+      versionCandidates.push(f)
+      continue
+    }
+    return false
+  }
+  for (const f of versionCandidates) {
+    if ((await isVersionOnlyDrift(worktree, sourceBranch, targetBranch, f)) !== true) return false
+  }
+  return true
 }
 
 /**
@@ -1330,17 +1355,18 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
 
   // 最后任务组 → change 级收口：合并 change 分支回基准分支（一次性），成功后销毁 worktree 并删分支
   const mergeTarget = state.baseBranch
-  // 纯文档漂移直通时的事实说明：仅在本次收口实际发生直通时非空；合并 blocked/conflict 分支不带该说明
+  // 无害漂移直通时的事实说明：仅在本次收口实际发生直通时非空；合并 blocked/conflict 分支不带该说明
   let docDriftNote = ""
   if (branchName) {
     // create-or-reuse（合并目标解析前）：在途旧模型会话升级时从当前基准 tip 创建，天然含已合入代码
     await ensureChangeBranch(ctx.worktree, branchName, mergeTarget)
 
     // 前置漂移检查（独立封装）：基准 tip 须为 change 分支祖先；不满足时先比对基准侧净变化内容——
-    // 纯文档漂移（含空清单 = 无净变化）不回退、直接合并收口；含任一非文档文件或清单查询失败 → 回退收尾验证并 blocked
+    // 无害漂移（文档 / openspec 规划路径 / 仅版本号变更的 package.json，含空清单 = 无净变化）不回退、
+    // 直接合并收口；含任一其他文件或清单/内容查询失败 → 回退收尾验证并 blocked
     if (!(await isAncestor(ctx.worktree, mergeTarget, branchName))) {
       const driftFiles = await listBranchDriftFiles(ctx.worktree, branchName, mergeTarget)
-      if (!isDocumentationOnly(driftFiles)) {
+      if (!(await isHarmlessDrift(ctx.worktree, branchName, mergeTarget, driftFiles))) {
         const workflow = loadWorkflowFile(resolveWorkflowPath(state))
         const rolledBack = rollbackToCleanupStep(item, workflow)
         if (rolledBack) await writeState(ctx.worktree, state)
@@ -1359,9 +1385,9 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
         ? `${files.slice(0, 10).join(", ")} 等 ${files.length} 个`
         : files.join(", ")
       docDriftNote =
-        `- **基准漂移（纯文档）**: 基准分支 \`${mergeTarget}\` 相对变更分支切出点净变化 ${files.length} 个文件` +
+        `- **基准漂移（无代码语义）**: 基准分支 \`${mergeTarget}\` 相对变更分支切出点净变化 ${files.length} 个文件` +
         (files.length > 0 ? `（${driftList}）` : "") +
-        "，均为文档，不影响代码语义，未回退收尾验证直接合并。"
+        "，均为文档、openspec 规划路径或仅版本号变更，不影响代码语义，未回退收尾验证直接合并。"
     }
 
     const mergeResult = await mergeBranchToTarget(ctx.worktree, branchName, mergeTarget)
