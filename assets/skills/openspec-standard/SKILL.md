@@ -1,12 +1,12 @@
 ---
 name: openspec-standard
-description: OpenSpec 提案标准初始化与升级——把标准版提案规则（openspec/config.yaml + spec-driven-standard schema 全套）安装到当前项目，统一后续提 change 的质量门槛（关联场景清点、契约变更详列、动笔前访谈与用户确认）。当用户要求初始化、升级或标准化 openspec 提案标准/提案规范时使用。
+description: OpenSpec 提案标准初始化与升级——把标准版提案规则（openspec/config.yaml + spec-driven-standard schema 全套）安装到当前项目，统一后续提 change 的质量门槛（关联场景清点、契约变更详列、人话实施逻辑、结构化方案摘要、动笔前访谈与用户确认）。当用户要求初始化、升级或标准化 openspec 提案标准/提案规范时使用。
 capabilities: ["openspec-standard"]
 ---
 
 ## 职责
 
-把本 skill 目录 `templates/` 下的标准文件安装到当前项目的 `openspec/` 目录，使该项目此后用 openspec 提 change 时自动遵循统一标准：关联场景清点（共享处理逻辑的变更须与其全部消费入口同一 change 统一适配）、契约变更详列、动笔前访谈门与用户确认门、任务组实质变更主体等。幂等：重跑即把标准升级到插件当前版本，项目自定义内容按下方合并策略保留。
+把本 skill 目录 `templates/` 下的标准文件安装到当前项目的 `openspec/` 目录，使该项目此后用 openspec 提 change 时自动遵循统一标准：关联场景清点（共享处理逻辑的变更须与其全部消费入口同一 change 统一适配，同一数据多条落库路径的校验一致性为访谈必问分支）、契约变更详列、实施逻辑人话分步（proposal 单列实施逻辑小节，禁代码级名词）、结构化方案摘要（访谈穷尽后才给出、以普通消息确认）、动笔前访谈门与用户确认门、任务组实质变更主体等。幂等：重跑即把标准升级到插件当前版本，项目自定义内容按下方合并策略保留。
 
 ## 前置检查
 
