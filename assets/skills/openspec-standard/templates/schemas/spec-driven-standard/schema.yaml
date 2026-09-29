@@ -165,7 +165,14 @@ artifacts:
         number each element below and give it real substance — a
         two-or-three-sentence blob is an invalid summary, expand it before
         presenting. The elements:
-        1. what the change does, in one sentence;
+        1. what the change does, in one sentence, THEN the change
+           contents itemized one item per line in plain business
+           language: each item is a natural-language sentence of the
+           form 「导出功能新增「状态」字段」, expanded as far as it helps
+           the user judge the change (e.g. where the new field comes
+           from, what it gives the user) rather than a bare label. No
+           code-level identifiers — same language rule as element 4
+           below;
         2. whether it touches contracts (API parameters or DDL);
         3. the chosen approach and its key trade-offs versus the
            alternatives;
@@ -204,8 +211,9 @@ artifacts:
         alternatives considered, and the confirmed plan summary with
         the user's explicit confirmation — the summary structured per the
         six elements of the plan confirmation gate (including the
-        plain-language implementation outline and the related-surface
-        verdicts), presented as a plain message only after the interview
+        itemized plain-language change list, the plain-language
+        implementation outline and the related-surface verdicts),
+        presented as a plain message only after the interview
         was exhausted. This is the HARD-GATE output.
       - **Initial Capabilities**: preliminary guess of which specs will be touched
         (kebab-case). Finalized in proposal.md.
