@@ -55,11 +55,25 @@ dsh plugin --profile web add @ifrankwang/openspec-agents
 
 ### OpenCode
 
+要求 OpenCode 2.x（1.x 的插件接口不兼容，本插件只支持 2.x）。
+
 ```bash
 npm install -D @ifrankwang/openspec-agents
 ```
 
-然后在 OpenCode 配置中加载 `@ifrankwang/openspec-agents` 插件，重启 OpenCode。
+然后在 OpenCode 配置的 `plugins` 中登记 `@ifrankwang/openspec-agents`，重启 OpenCode：
+
+```jsonc
+// opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["@ifrankwang/openspec-agents"]
+}
+```
+
+首次加载时，插件会在项目 `.opencode/agents/` 下生成三个子代理定义文件
+（`openspec-main` / `openspec-developer` / `openspec-reviewer`）。这些文件带
+`generated-by` 标记：插件升级后随版本刷新，你手工改过的同名文件不会被覆盖。
 
 ## 让 AI 帮你接入（一句话）
 
