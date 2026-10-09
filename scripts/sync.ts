@@ -3,7 +3,7 @@
  * 供 `bun run sync` 使用，非用户安装途径。
  *
  * 支持：
- * - opencode：直接同步源码到 npm 插件缓存（node_modules/@ifrankwang/openspec-agents）
+ * - opencode：直接同步源码到 npm 插件缓存（~/.cache/opencode/npm/<scope>/<name>@<tag>/<ts>/node_modules/@ifrankwang/openspec-agents）
  * - claude-code / codex / zcode：构建官方插件包后同步到对应插件缓存
  * - deepseek-harness：构建 DSH bundle 包后同步到 ~/.dsh/profiles/<name>/node_modules
  *

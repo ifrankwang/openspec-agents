@@ -75,6 +75,9 @@ npm install -D @ifrankwang/openspec-agents
 （`openspec-main` / `openspec-developer` / `openspec-reviewer`）。这些文件带
 `generated-by` 标记：插件升级后随版本刷新，你手工改过的同名文件不会被覆盖。
 
+配置项须写作 `plugins`（复数）。旧版的 `plugin`（单数）在 OpenCode 2 中不被识别，
+写了等于没写。
+
 ## 让 AI 帮你接入（一句话）
 
 安装后（甚至还没安装时），直接把这句提示词发给你的 AI 编码工具：

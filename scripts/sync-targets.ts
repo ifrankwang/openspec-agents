@@ -15,12 +15,12 @@ export interface SyncTarget {
 
 export const SYNC_TARGETS: SyncTarget[] = [
   {
+    // OpenCode 2.x：插件缓存根为 ~/.cache/opencode/npm，V2 加载器只读此处。
+    // 缓存布局 <root>/<scope>/<name>@<tag>/<时间戳>/node_modules/<scope>/<name>，
+    // findOpenCodeTargets 按「目录名=包名 且 含 package.json」匹配，深度 6 恰好命中。
     harness: "opencode",
     kind: "source-cache",
-    cacheRoots: [
-      "~/.cache/opencode/packages",
-      "~/Library/Caches/opencode/packages",
-    ],
+    cacheRoots: ["~/.cache/opencode/npm"],
   },
   {
     harness: "claude-code",
