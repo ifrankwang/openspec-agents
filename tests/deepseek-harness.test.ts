@@ -4,14 +4,37 @@
  * 原生工具插件 bundle 与 skills。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { rmSync, existsSync, readFileSync } from "node:fs"
+import { rmSync, existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 
 const TMP_ROOT = "/tmp/deepseek-harness-test"
 
 afterAll(() => {
   rmSync(TMP_ROOT, { recursive: true, force: true })
 })
+
+/** patch 是 YAML：注释行里的示例文字不是引用，抽取前先剔除（否则注释中的省略号会被当成路径）。 */
+function stripYamlComments(yamlText: string): string {
+  return yamlText
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n")
+}
+
+/**
+ * 抽取文本中「本包内相对路径」的引用。cordis patch 以两种形态引用本包：
+ * `./node_modules/<包名>/<rel>`（文件系统路径，如 skill 根）与 `<包名>/<rel>`（cordis 裸包名 + 子路径
+ * import，如原生工具插件入口）。两种形态统一归一为包内相对路径，供交叉校验逐一断言产物中真实存在。
+ */
+function collectPackagePathRefs(text: string, packageName: string): string[] {
+  const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const refs = new Set<string>()
+  for (const pattern of [`\\./node_modules/${escaped}/([^'"\\s\\]]+)`, `${escaped}/([^'"\\s\\]]+)`]) {
+    for (const match of text.matchAll(new RegExp(pattern, "g"))) refs.add(match[1]!)
+  }
+  return [...refs]
+}
 
 describe("deepseek-harness 适配器", () => {
   test("生成 DSH bundle 插件包（package.json/cordis.patch.yml/skills/原生工具插件 bundle）", async () => {
@@ -69,10 +92,12 @@ describe("deepseek-harness 适配器", () => {
       expect(result.agents).not.toContain("openspec-main")
       expect(existsSync(join(pluginDir, "agents", "openspec-reviewer.md"))).toBe(true)
 
-      // skills：orchestrator 与 reference/ 附属文件递归复制
+      // skills：orchestrator 与 reference/ 附属文件递归复制到 patch 引用的 skill 根 assets/skills
+      // （包根 skills/ 与 patch 引用不一致，历史缺陷即产物写在包根，这里同时锁住唯一落位）
       expect(result.skills).toContain("orchestrator")
-      expect(existsSync(join(pluginDir, "skills", "orchestrator", "SKILL.md"))).toBe(true)
-      expect(existsSync(join(pluginDir, "skills", "java-quality-gate", "reference", "pmd-rules.md"))).toBe(true)
+      expect(existsSync(join(pluginDir, "assets", "skills", "orchestrator", "SKILL.md"))).toBe(true)
+      expect(existsSync(join(pluginDir, "assets", "skills", "java-quality-gate", "reference", "pmd-rules.md"))).toBe(true)
+      expect(existsSync(join(pluginDir, "skills"))).toBe(false)
 
       // assets/workflows：task.yaml 随包分发且与源码一致
       const bundledWorkflow = readFileSync(join(pluginDir, "assets", "workflows", "task.yaml"), "utf-8")
@@ -89,6 +114,65 @@ describe("deepseek-harness 适配器", () => {
       // 插件以 cordis 插件形态导出（name + apply），而非可直接执行的 CLI
       expect(bundleSource).toContain("openspec-opx-tools")
       expect(bundleSource).toContain("opx_orch_init")
+    } finally {
+      rmSync(pluginDir, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * 交叉校验（本次缺陷的回归锁）：patch 与清单引用的每一个本包内路径，构建产物都必须落在同一位置。
+   * 历史缺陷正是两侧各说各话——patch 引用 assets/skills，产物却写在包根 skills/；旧测试只分别断言
+   * 「patch 文本含 assets/skills」与「包根存在 skills/…」，从未断言二者指的是同一个位置，
+   * 于是一方写错也全绿，直到用户重启 DSH 后 skill 全部加载不上才暴露。
+   */
+  test("cross-check：patch/清单引用的本包内路径在构建产物中真实存在", async () => {
+    const { buildDeepSeekHarnessPlugin, DSH_PLUGIN_NAME, DSH_NATIVE_TOOLS_EXPORTS_KEY } = await import(
+      "../src/adapters/deepseek-harness/index"
+    )
+    const pluginDir = join(TMP_ROOT, "dsh-path-crosscheck")
+    rmSync(pluginDir, { recursive: true, force: true })
+    try {
+      buildDeepSeekHarnessPlugin(pluginDir)
+      const rootDir = join(import.meta.dir, "..")
+
+      // A. patch 中引用本包内路径的地方（自动抽取，新增引用一并纳入校验）
+      const patchRefs = collectPackagePathRefs(
+        stripYamlComments(readFileSync(join(pluginDir, "cordis.patch.yml"), "utf-8")),
+        DSH_PLUGIN_NAME,
+      )
+      // 抽取结果须非空且覆盖两处已知引用，防止抽取逻辑退化成「零引用全绿」
+      expect(patchRefs).toEqual(expect.arrayContaining(["assets/skills", ".dsh-plugin/opx-tools.mjs"]))
+      for (const rel of patchRefs) {
+        expect(existsSync(join(pluginDir, rel)), `patch 引用了 ${rel}，但构建产物中没有该路径`).toBe(true)
+      }
+
+      // B. 清单（package.json）中引用本包内路径的地方：DSH 按 dsh.bundle.patch 找 patch 文件，
+      // cordis 按 exports 子路径解析原生工具插件入口
+      const pkg = JSON.parse(readFileSync(join(pluginDir, "package.json"), "utf-8"))
+      for (const rel of [pkg.dsh?.bundle?.patch, pkg.exports?.[DSH_NATIVE_TOOLS_EXPORTS_KEY]] as string[]) {
+        expect(existsSync(join(pluginDir, rel)), `清单引用了 ${rel}，但构建产物中没有该路径`).toBe(true)
+      }
+
+      // C. bundle 运行时从部署位置（<插件根>/.dsh-plugin/）逐级上溯探测读取的目录：
+      // 用真实部署位置调用探测函数，才能发现「产物落位与运行时预期不一致」；
+      // 同一份 patch 还服务 npm 根包形态，故这些相对路径也须被根包 files 白名单覆盖。
+      const bundleUrl = pathToFileURL(join(pluginDir, ".dsh-plugin", "opx-tools.mjs")).href
+      const { resolveTaskWorkflowPath } = await import("../src/core/workflow/loader")
+      const { resolveSkillScanRoot } = await import("../src/skills/scan")
+      expect(resolveTaskWorkflowPath(bundleUrl)).toBe(join(pluginDir, "assets", "workflows", "task.yaml"))
+      expect(resolveSkillScanRoot(bundleUrl)).toBe(join(pluginDir, "assets", "skills"))
+      // workflow 文件集合与源码一致（缺任一文件 loader 启动即抛错）
+      expect(readdirSync(join(pluginDir, "assets", "workflows")).sort()).toEqual(
+        readdirSync(join(rootDir, "assets", "workflows")).sort(),
+      )
+
+      const rootFiles: string[] = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf-8")).files
+      for (const rel of patchRefs) {
+        expect(
+          rootFiles.some((f) => rel === f || rel.startsWith(`${f}/`)),
+          `patch 引用的 ${rel} 未被根包 package.json 的 files 白名单覆盖，npm 形态的发布包里不会有它`,
+        ).toBe(true)
+      }
     } finally {
       rmSync(pluginDir, { recursive: true, force: true })
     }

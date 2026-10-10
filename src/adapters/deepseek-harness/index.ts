@@ -57,6 +57,14 @@ export const DSH_NATIVE_TOOLS_ROW_NAME = `${DSH_PLUGIN_NAME}${DSH_NATIVE_TOOLS_E
 /** cordis patch 中挂载原生工具插件的 insert 行 id。 */
 export const DSH_NATIVE_TOOLS_ROW_ID = "openspec-opx-tools"
 
+/**
+ * skill 根在插件包内的相对目录（分段写法：assets/skills）。
+ * patch 的 customSkillDirs 引用与构建落位共用本常量：两处各写一份字面量会各自漂移成
+ * 「patch 指 assets/skills、产物落位包根 skills/」，DSH 一个 skill 都加载不到——历史缺陷即此。
+ * 同一份 patch 同时服务 npm 根包与 dist 插件包两种安装形态，包根（仓库根）亦按 assets/skills 落位。
+ */
+export const DSH_SKILLS_DIR_SEGMENTS = ["assets", "skills"] as const
+
 /** 原生工具插件与 skill 根的基础 patch；子代理工具行由 buildDshPatchContent 动态追加。 */
 const DSH_BASE_PATCH_YAML = `# DeepSeek Harness (DSH) bundle patch: expose OpenSpec orchestration tools and skills.
 # The patch is applied as a bundle layer under dsh.profile.bundles.
@@ -78,7 +86,7 @@ const DSH_BASE_PATCH_YAML = `# DeepSeek Harness (DSH) bundle patch: expose OpenS
         providerName: openspec-filesystem
         includeDefaultRoots: false
         customSkillDirs:
-          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('./node_modules/${DSH_PLUGIN_NAME}/assets/skills', baseUrl))"
+          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('./node_modules/${DSH_PLUGIN_NAME}/${DSH_SKILLS_DIR_SEGMENTS.join("/")}', baseUrl))"
 `
 
 interface DshSubagentEntry {
@@ -177,14 +185,14 @@ export type DeepSeekHarnessPluginBuildResult = PluginPackageResult
 export function buildDeepSeekHarnessPlugin(outDir: string = DEEP_SEEK_HARNESS_PLUGIN_DIR): DeepSeekHarnessPluginBuildResult {
   rmSync(outDir, { recursive: true, force: true })
   mkdirSync(join(outDir, "agents"), { recursive: true })
-  mkdirSync(join(outDir, "skills"), { recursive: true })
   mkdirSync(join(outDir, "assets"), { recursive: true })
+  mkdirSync(join(outDir, ...DSH_SKILLS_DIR_SEGMENTS), { recursive: true })
   mkdirSync(join(outDir, ".dsh-plugin"), { recursive: true })
 
   const version = readPkgVersion()
   // DSH 通过上方 subagent 工具消费 agent 定义；agents/ 目录仍保留原始 markdown 供参考/审计。
   const agents = buildAgents(join(outDir, "agents"))
-  const skills = buildSkills(join(outDir, "skills"))
+  const skills = buildSkills(join(outDir, ...DSH_SKILLS_DIR_SEGMENTS))
   bundleDshNativeTools(outDir)
   copyWorkflows(outDir)
   copyLicense(outDir)
