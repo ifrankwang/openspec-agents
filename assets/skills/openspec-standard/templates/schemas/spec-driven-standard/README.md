@@ -74,11 +74,13 @@ openspec/schemas/<schema-name>/
 
 | 位置 | 承载内容 | 例子 |
 |---|---|---|
-| `schema.yaml` instruction | 生成方法论与文档格式要求（官方方法论为底） | 场景标题 4 个 #、SHALL/MUST、ADDED/MODIFIED/REMOVED、任务组格式、每组自带测试与质量门、关联场景清点维度、实施逻辑小节 |
-| `openspec/config.yaml` rules | **仅** schema 未覆盖的项目补充规则 | MODIFIED 终态契约表述、同语义一条需求、前置 change 标注格式、契约变更详列、访谈门与用户确认门、实施逻辑与方案摘要结构 |
+| `schema.yaml` instruction | 生成方法论与文档格式要求（官方方法论为底） | 场景标题 4 个 #、SHALL/MUST、ADDED/MODIFIED/REMOVED、任务组格式、每组自带测试与质量门、测试随实现同组、关联场景清点维度与单仓变更范围、实施逻辑小节 |
+| `openspec/config.yaml` rules | **仅** schema 未覆盖的项目补充规则 | MODIFIED 终态契约表述、同语义一条需求、前置 change 标注格式、契约变更详列、访谈门与用户确认门、实施逻辑与方案摘要结构、单仓变更范围与跨仓拆分边界、测试随实现同组 |
 | 项目 `AGENTS.md` | 项目特化约束 | 技术栈、分层架构、数据库约定、质量门工具、方法论 |
 
-同一规则只写一处：config.yaml rules 不重复 schema instruction 已有内容；
+同一规则只写一处：通用生成方法论以 schema instruction 为准，config.yaml
+rules 只写项目补充与阶段级强制项；确需两侧同时出现的强制项（如「禁止纯验证组」
+「测试随实现同组」「单仓变更范围」）保持措辞一致，禁止再复制到第三处；
 schema 不写项目专属内容。新增规则时先查上一层的 instruction 是否已覆盖。
 
 官方升级 `openspec update` 会覆盖 `.agents/skills/` 下的 skill，本 schema

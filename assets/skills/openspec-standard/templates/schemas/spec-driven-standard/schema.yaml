@@ -120,7 +120,16 @@ artifacts:
           section. Every surveyed surface becomes a decision-tree branch that
           MUST be resolved IN the interview: for each, ask the user whether it
           is adapted in this change or excluded with a reason, and record the
-          verdict. Consistency branches are mandatory: when the same data has
+          verdict. One repository only: the change covers the repository this
+          session works in. When the project keeps frontend and backend in
+          separate repositories, a surface that lives in the other repository
+          (e.g. the frontend repo while authoring a backend change) is excluded
+          by default - record it as out of scope with that reason, to be
+          adapted by a change in its own repository. Only when the user
+          explicitly asks for a cross-repository change does it get scoped in,
+          and then the split (which repository owns which part, and how each
+          side is implemented and verified) must be recorded.
+          Consistency branches are mandatory: when the same data has
           multiple persistence paths (e.g. import, save, and update all writing
           the same table), whether and how their validation and processing
           logic stay shared and consistent must be asked and decided by the
@@ -254,7 +263,12 @@ artifacts:
         changes, every consuming entry point must be adapted in THIS change;
         splitting into separate changes requires a boundary rationale section
         confirmed by the user. A bare "no related impact" without search
-        evidence counts as an incomplete proposal.
+        evidence counts as an incomplete proposal. The one-repository boundary
+        from the clarify survey applies here: a surface living in the other
+        repository of a split frontend/backend project is excluded with that
+        reason (it is adapted by a change in its own repository), unless the
+        user explicitly asked for a cross-repository change - in which case the
+        split (which repository owns which part) must be stated.
       - **Implementation Outline (实施逻辑)**: how the change plays out, step by
         step, in plain business language (人话) — where the data comes from,
         what validation and processing it goes through, where it lands, and
@@ -469,6 +483,21 @@ artifacts:
         every consuming entry point that the proposal's Related Surface section
         scopes into this change; an in-scope entry point without an adaptation
         task counts as an incomplete task list.
+      - **One repository only**: task groups cover this repository's changes.
+        An adaptation that belongs to the other repository of a split
+        frontend/backend project is excluded - out of scope, adapted by a change
+        in its own repository - unless the user explicitly asked for a
+        cross-repository change; in that case the task list must say which
+        repository owns which part.
+      - **Tests stay with the implementation they verify.** Unit tests,
+        integration tests, and API/interface test scripts - including updates
+        to their assertions - are ordinary tasks inside the task group of the
+        implementation that drives them, and they are finished with that group.
+        Never open a task group whose substance is tests or test-script/
+        assertion sync (e.g. a 「XX 契约断言同步」 group), and never pair test
+        sync with another group's leftover work to give it substance:
+        separating tests from the implementation they verify is the same
+        violation as a verification group.
       - **Each task group = one independent iteration.** Every group MUST contain:
         implementation + tests + a quality gate (the project's quality gate per
         openspec/config.yaml rules / AGENTS.md). No standalone QA group - quality
