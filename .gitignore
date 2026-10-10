@@ -3,6 +3,7 @@ node_modules
 bun.lock
 dist
 .mcp-server
+.dsh-plugin
 dsh/
 .worktree/
 .worktrees/

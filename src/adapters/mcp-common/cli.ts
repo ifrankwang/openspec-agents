@@ -4,7 +4,7 @@
  * - --port <n> HTTP transport 端口（默认 4525）
  * - --transport http|stdio（默认 http）
  * - --unattended 默认无人值守（claude code / codex / zcode 适配器分发时开启）
- * - --strip-opx-prefix 去掉 MCP 工具名的 opx_ 前缀（DSH 使用，得到 mcp__opx__status 这类短名）
+ * - --strip-opx-prefix 去掉 MCP 工具名的 opx_ 前缀（得到 status 这类短名，供 MCP client 桥接形态使用）
  *
  * 运行：node <entry> --transport stdio --worktree . --unattended
  */
