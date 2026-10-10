@@ -29,8 +29,10 @@ export function readPkgVersion(): string {
 /**
  * 构建 MCP server 自包含 bundle（node cli.ts 直跑依赖 node_modules，插件安装后无此环境，
  * 故 bundle 单文件至插件包内，node 直接执行）。打包依赖本机 bun CLI（spawnSync("bun")）。
+ *
+ * 返回 bundle 入口的绝对路径，供调用方记录/断言实际产出位置（各 harness 的 MCP 入口即此文件）。
  */
-export function bundleMcpServer(pluginDir: string): void {
+export function bundleMcpServer(pluginDir: string): string {
   const out = join(pluginDir, ".mcp-server", "cli.mjs")
   mkdirSync(join(pluginDir, ".mcp-server"), { recursive: true })
   // dashboard 页面资源随 bundle 同目录放置（page.ts 按此布局探测）
@@ -51,6 +53,38 @@ export function bundleMcpServer(pluginDir: string): void {
   )
   if (result.status !== 0) {
     throw new Error(`MCP server bundle 失败：${result.stderr ?? result.error?.message ?? "未知错误"}`)
+  }
+  return out
+}
+
+/**
+ * 构建 DSH 原生工具插件 bundle（node 直接被 cordis import，不依赖 node_modules）。
+ *
+ * 与 bundleMcpServer 的差异：DSH 官方包（@deepseek-ai/*）必须保持 external——它们由 DSH 安装目录
+ * 提供，插件在 profile 的 node_modules 下被 import 时由 DSH 进程自身解析；本项目内核与其余依赖
+ * 全部内联，使插件包无需附带任何 node_modules。
+ */
+export function bundleDshNativeTools(pluginDir: string): void {
+  const outDir = join(pluginDir, ".dsh-plugin")
+  mkdirSync(outDir, { recursive: true })
+  const result = spawnSync(
+    "bun",
+    [
+      "build",
+      resolve("src", "adapters", "deepseek-harness", "plugin.ts"),
+      "--outfile",
+      join(outDir, "opx-tools.mjs"),
+      "--target",
+      "node",
+      "--external",
+      "@deepseek-ai/*",
+      "--define",
+      `__OPX_PKG_VERSION__="${readPkgVersion()}"`,
+    ],
+    { encoding: "utf-8", stdio: ["ignore", "ignore", "pipe"] },
+  )
+  if (result.status !== 0) {
+    throw new Error(`DSH 原生工具插件 bundle 失败：${result.stderr ?? result.error?.message ?? "未知错误"}`)
   }
 }
 

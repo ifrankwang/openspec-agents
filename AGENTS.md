@@ -32,7 +32,7 @@ tsconfig.json 已在项目根，typecheck 经 tsc 按其配置严格检查 `src/
 | `src/adapters/opencode/` | OpenCode 适配层（插件壳、JSON Schema→链式 schema 转换、agent/skill 注入）。 |
 | `src/adapters/mcp-common/` | 通用 MCP Server（HTTP/stdio transport 承载 6 个 opx_* 工具与 dashboard/poller 副作用）。 |
 | `src/adapters/claude-code/` `src/adapters/zcode/` | 各 agent 官方插件包生成适配器（Claude Code / ZCode，共享 plugin-common 生成器，差异仅清单目录名）。 |
-| `src/adapters/deepseek-harness/` | DeepSeek Harness（DSH）bundle 适配器（cordis patch + MCP client + skill 根 + 子代理工具注入）。 |
+| `src/adapters/deepseek-harness/` | DeepSeek Harness（DSH）bundle 适配器（cordis patch + 原生工具插件 + skill 根 + 子代理工具注入）。 |
 | `src/adapters/plugin-common/` | 插件包共享生成器（plugin.json 清单、agents/skills 转换、MCP bundle）。 |
 | `src/adapters/codex/` | codex 适配器（官方插件包生成 + 手动 `.codex/` 配置注入兼容、默认无人值守）。 |
 | `src/skills/` | skill 扫描与解析。 |

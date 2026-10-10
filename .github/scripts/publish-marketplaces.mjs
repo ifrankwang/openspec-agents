@@ -13,8 +13,9 @@
  * - ifrankwang/zcode-plugins        (marketplace.json)
  *
  * DeepSeek Harness (DSH) 不依赖 marketplace repo：DSH 插件即 npm 包。
- * 根 package.json 已声明 dsh.bundle.patch，并由 prepack 生成 .mcp-server，
- * 因此现有 `npm publish` 已同时发布 DSH 适配。
+ * 根 package.json 已声明 dsh.bundle.patch，prepack 会生成根产物 .dsh-plugin/opx-tools.mjs
+ * （DSH 原生工具插件）与 .mcp-server/cli.mjs（OpenCode 的 MCP 入口），
+ * 因此现有 `npm publish` 已同时发布 DSH 与 OpenCode 适配。
  */
 import { execSync } from "node:child_process"
 import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs"

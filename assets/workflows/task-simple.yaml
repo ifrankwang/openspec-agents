@@ -15,7 +15,7 @@ max_retries: 10
 # 复用 task.yaml common 的 _agent 传递指引与「缺省视为编排视角」提示文案
 common:
   instructions:
-    - "非 OpenCode 直载形态（经 MCP 接入的 agent 客户端）调用 opx_* 工具时，须携带 `_agent` 参数并传自身角色名（如 openspec-developer）；缺省会被视为编排主代理视角，将拿不到自身角色的执行视图与操作指引"
+    - "非 OpenCode 直载形态（MCP 或原生工具接入的 agent 客户端）调用 opx_* 工具时，须携带 `_agent` 参数并传自身角色名（如 openspec-developer）；缺省会被视为编排主代理视角，将拿不到自身角色的执行视图与操作指引"
 
 phases:
   - name: in_progress

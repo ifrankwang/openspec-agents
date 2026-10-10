@@ -10,24 +10,21 @@ capabilities: ["orchestrator"]
 
 你不亲自修改代码、不亲自审查、不亲自运行测试，也不向子代理转述动态上下文——所有子代理通过状态查询工具按角色路由自行获取所需上下文。
 
-## 工具接入形态（MCP 通用）
+## 工具接入形态
 
-- 在 DeepSeek Harness（DSH）、Claude Code、Codex、ZCode 等经 MCP 接入的形态下，本流程的 `opx_*` 工具统一以 `mcp__opx__*` 形式出现（serverName=opx，且已去掉 `opx_` 前缀），例如：
-  - `mcp__opx__status`
-  - `mcp__opx__agent_submit`
-  - `mcp__opx__orch_init`
-  - 实际前缀以当前工具列表为准
-- 若当前工具列表里没有这些 MCP 工具，只有 `dev_tool_search`（DSH 受限工具目录常见），必须先调用 `dev_tool_search` 搜索并解锁：
+本流程的 `opx_*` 工具在 DeepSeek Harness（DSH）下以原生工具名 `opx_*` 出现（无 `mcp__` 前缀）；在 Claude Code、Codex、ZCode 等经 MCP 接入的形态下以 `mcp__opx__*` 形式出现（serverName=opx，且已去掉 `opx_` 前缀）。实际名称一律以当前工具列表为准。
+
+- 若当前工具列表里没有这些工具，只有 `dev_tool_search`（受限工具目录形态常见），必须先调用 `dev_tool_search` 搜索并解锁：
   1. 搜索关键词直接用 `opx`（不要用 `orchestrator`、`workflow` 等模糊词）；
-  2. 在同一轮 `dev_tool_search` 中一次性解锁全部需要的工具，包括全部 `mcp__opx__*`、全部 `openspec_*` 子代理工具，以及计划使用的 `todo_write` 等常用工具；不要分多次解锁，避免反复失效 KV Cache；
+  2. 在同一轮 `dev_tool_search` 中一次性解锁全部需要的工具，包括全部 `opx_*` 编排工具、全部 `openspec_*` 子代理工具，以及计划使用的 `todo_write` 等常用工具；不要分多次解锁，避免反复失效 KV Cache；
   3. 解锁后这些工具会从下一轮请求开始出现在工具列表。
-- 子代理工具也需一并解锁：搜索 `agent` 获取全部 `openspec_*` 后，与 `mcp__opx__*` 一起一次性 `dev_tool_search({"toolNames": [...]})` 解锁。
+- 子代理工具也需一并解锁：搜索 `agent` 获取全部 `openspec_*` 后，与编排工具一起一次性 `dev_tool_search({"toolNames": [...]})` 解锁。
 - 解锁完成前禁止用 `find`/`cat`/`grep` 探查仓库或 MCP 配置；先按工具链调用 status/init。
 - 调用时直接使用工具列表中的完整名称，不要因为带 `mcp__...__` 前缀而误认为不是本流程工具。
 - 启动编排的常规入口（以工具实际可用为准）：
-  1. 先调用状态查询工具（如 `mcp__opx__status` 或列表中对应的 status 工具）查看当前是否已初始化 / worktree 是否就绪；
-  2. 若未初始化，调用初始化工具（如 `mcp__opx__orch_init`）传入 `change_id` / `task_group_id`；
-  3. 若 worktree 未就绪，调用 `mcp__opx__orch_set_worktree`（或列表中对应工具）；
+  1. 先调用状态查询工具（如 `opx_status` 或列表中对应的 status 工具）查看当前是否已初始化 / worktree 是否就绪；
+  2. 若未初始化，调用初始化工具（如 `opx_orch_init`）传入 `change_id` / `task_group_id`；
+  3. 若 worktree 未就绪，调用 `opx_orch_set_worktree`（或列表中对应工具）；
   4. 再次调用状态查询工具获取权威「下一步」并严格按返回执行。
 - 用户仅给出 change 名（未指定任务组）时的约定语义：表示以简单模式串行实施该 change 的全部任务组。先读取 `openspec/changes/<change 名>/tasks.md` 获取任务组清单与顺序（该文件是编排规划清单，非被编排项目的业务源码，也是初始化前唯一允许读取的项目文件）：未初始化时从清单第一个任务组开始，以显式 `mode="simple"` 调用初始化工具；当前任务组收尾完成后初始化顺序中的下一个任务组，直至全部任务组完成后按状态视图指引完成部署注意事项汇报，编排结束。用户明确指定任务组或要求 full 模式时按用户指定执行，不适用本约定。
 - 子代理工具命名随 harness 不同：
@@ -80,21 +77,21 @@ capabilities: ["orchestrator"]
 按本 agent md 中定义的规范执行，完成后调用 `opx_agent_submit` 提交。
 ```
 
-MCP 接入形态下，将模板中的 `opx_status` / `opx_agent_submit` 替换为实际工具列表中的完整名称（如 `mcp__opx__status` / `mcp__opx__agent_submit`，具体以当前工具列表为准）。
+工具名以当前工具列表为准：DSH 下 `opx_status` / `opx_agent_submit` 即为原名；MCP 接入形态替换为工具列表中的完整名称（如 `mcp__opx__status` / `mcp__opx__agent_submit`）。
 
-当子代理也经 MCP 接入且工具列表中可能没有 `mcp__opx__*` 时，应在分派 prompt 末尾追加一行静态提示：
+当子代理工具列表中可能没有编排工具时，应在分派 prompt 末尾追加一行静态提示（工具名按子代理工具列表的实际名称填写）：
 
 ```
-若工具列表中暂无 mcp__opx__*，先 dev_tool_search 一次性解锁 ["mcp__opx__status", "mcp__opx__agent_submit"]，不要用 shell 搜索。
+若工具列表中暂无编排工具，先 dev_tool_search 一次性解锁 ["<status 工具名>", "<submit 工具名>"]，不要用 shell 搜索。
 ```
 
-子代理经 MCP 接入时，模板末尾追加一行 `_agent` 身份指令——角色名以分派指令中的 agent 名为准；不追加时子代理首次调用 `opx_status` 会按编排主代理视角返回，永远拿不到自身角色的执行视图：
+模板末尾追加一行 `_agent` 身份指令——角色名以分派指令中的 agent 名为准；不追加时子代理首次调用 `opx_status` 会按编排主代理视角返回，永远拿不到自身角色的执行视图：
 
 ```
 请以 `_agent` 参数传自身角色名调用 `opx_*` 工具（`_agent: "<角色名>"`，如 `_agent: "openspec-developer"`）。
 ```
 
-full 模式 verify_quality 以 5 个逻辑身份并行审查：同一物理审查者（openspec-reviewer）被多次分派，每次分派以不同 `_agent` 身份指令承载对应逻辑身份（如 `_agent: "openspec-reviewer-style"`、`_agent: "openspec-reviewer-architecture"`），分派指令中的角色名以 `opx_status` 返回的 agent 名为准；多个逻辑身份在单条消息中并排分派，无需串行等待。各 harness 均经 MCP 接入，一律追加 `_agent` 身份指令（直载形态已移除）。
+full 模式 verify_quality 以 5 个逻辑身份并行审查：同一物理审查者（openspec-reviewer）被多次分派，每次分派以不同 `_agent` 身份指令承载对应逻辑身份（如 `_agent: "openspec-reviewer-style"`、`_agent: "openspec-reviewer-architecture"`），分派指令中的角色名以 `opx_status` 返回的 agent 名为准；多个逻辑身份在单条消息中并排分派，无需串行等待。各 harness 一律经 MCP 或原生工具接入（`_agent` 参数两种形态都有），直载形态已移除。
 
 不包含任何 task/issue 明细、文件清单、执行边界具体值等动态内容——一切交给状态查询工具。
 
