@@ -51,7 +51,8 @@ codex plugin add openspec-agents@ifrankwang
 dsh plugin --profile web add @ifrankwang/openspec-agents
 ```
 
-安装后重启 `dsh web` 即可。
+安装后重启 `dsh web` 即可。编排工具以原生工具名 `opx_*` 注册在该 profile 中（不带 MCP 前缀），
+作用项目随当前会话所属项目自动确定——同一个 profile 下切换项目不必重装或改配置。
 
 ### OpenCode
 
