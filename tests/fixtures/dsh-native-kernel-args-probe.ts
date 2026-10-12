@@ -7,12 +7,17 @@
  * stdout 只输出一行 JSON 数组：[{ tool, args, agent, worktree }]。
  */
 import { mock } from "bun:test"
+import { deepFreeze } from "../helpers"
 
 interface ProbeCall {
   tool: string
   args: Record<string, unknown>
   agent: string
   worktree: string
+  /** 内核收到的入参本身是否只读（调用方那份是深冻结的，内核必须拿到可写副本） */
+  argsFrozen: boolean
+  /** 入参里首个嵌套对象的冻结状态（null=本次调用无嵌套对象）：浅拷贝下仍为 true，深拷贝才是 false */
+  firstNestedFrozen: boolean | null
 }
 
 const calls: ProbeCall[] = []
@@ -20,7 +25,15 @@ const calls: ProbeCall[] = []
 /** 内核替身：记录收到的参数与调用上下文。 */
 function record(tool: string) {
   return async (args: Record<string, unknown>, ctx: { agent: string; worktree: string }): Promise<string> => {
-    calls.push({ tool, args, agent: ctx.agent, worktree: ctx.worktree })
+    const nested = (args.exempt_adjudications as unknown[] | undefined)?.[0]
+    calls.push({
+      tool,
+      args,
+      agent: ctx.agent,
+      worktree: ctx.worktree,
+      argsFrozen: Object.isFrozen(args),
+      firstNestedFrozen: nested === undefined ? null : Object.isFrozen(nested),
+    })
     return `# ${tool}`
   }
 }
@@ -57,7 +70,13 @@ await executes.opx_orch_set_worktree!(
   makeExec("/p"),
 )
 await executes.opx_agent_submit!(
-  { change_id: "chg", verdict: "passed", [AGENT_ARG]: "openspec-reviewer-tool" },
+  // 入参按 DSH 语义整份深冻结：适配层必须交出可写副本，且嵌套对象也要可写
+  deepFreeze({
+    change_id: "chg",
+    verdict: "passed",
+    exempt_adjudications: [{ issue_id: "#7" }],
+    [AGENT_ARG]: "openspec-reviewer-tool",
+  }),
   makeExec("/p"),
 )
 await executes.opx_status!({ change_id: "chg", [AGENT_ARG]: "openspec-developer" }, makeExec("/p"))

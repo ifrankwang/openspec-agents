@@ -4,6 +4,22 @@ import type { ToolContext } from "../src/core/tools/types"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
 
+// ─── 深冻结入参 ───
+
+/**
+ * 递归冻结对象与数组元素并返回同一引用，模拟宿主（DSH）在调用插件工具前把入参整份冻结为只读。
+ * 不依赖 @deepseek-ai/dsh-util-values：本项目不安装该包。
+ */
+export function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      deepFreeze((value as Record<string, unknown>)[key])
+    }
+  }
+  return value
+}
+
 // ─── Fake Git ───
 
 export class FakeGitRunner implements GitRunner {

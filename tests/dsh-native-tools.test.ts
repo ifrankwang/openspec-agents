@@ -7,7 +7,7 @@
  * - cordis 插件加载契约（Config 为 Standard Schema、inject 声明 tools、apply 注册、命名导出形态）
  */
 import { describe, expect, mock, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -22,6 +22,8 @@ import {
 import { jsonSchemaToToolParameters } from "../src/adapters/deepseek-harness/schema-dsl"
 import { statusSchema, agentSubmitSchema, orchInitSchema } from "../src/core/tools/schemas"
 import { getStatePath } from "../src/core/state"
+import { setupWithFakeGit, teardown, readState, deepFreeze } from "./helpers"
+import { driveToQuality, rollbackQuality, taskItemOf, taskIdsOf } from "./helpers-workflow"
 
 /**
  * `@deepseek-ai/dsh-tools` 在测试环境不可解析（由 DSH 安装目录在运行时提供，本项目不安装），
@@ -244,6 +246,8 @@ describe("DSH 原生工具插件 · execute 包装", () => {
       args: Record<string, unknown>
       agent: string
       worktree: string
+      argsFrozen: boolean
+      firstNestedFrozen: boolean | null
     }[]
 
     expect(calls.map((c) => c.tool)).toEqual([
@@ -256,7 +260,13 @@ describe("DSH 原生工具插件 · execute 包装", () => {
     expect(calls[0]!.agent).toBe("openspec-developer")
     expect(calls[0]!.worktree).toBe("/Users/me/projA")
     expect(calls[1]!.args).toEqual({ change_id: "chg", worktree_path: "/w" })
-    expect(calls[2]!.args).toEqual({ change_id: "chg", verdict: "passed" })
+    // 调用方入参已按 DSH 语义整份深冻结，内核拿到的必须是可写副本——且嵌套对象同样可写，
+    // 只做浅拷贝时嵌套元素仍是只读的（DSH 里提交带裁定项的 step 会炸 read only property）
+    expect(calls[2]!.args).toEqual({
+      change_id: "chg", verdict: "passed", exempt_adjudications: [{ issue_id: "#7" }],
+    })
+    expect(calls[2]!.argsFrozen).toBe(false)
+    expect(calls[2]!.firstNestedFrozen).toBe(false)
     expect(calls[3]!.args).toEqual({ change_id: "chg" })
   })
 
@@ -281,6 +291,68 @@ describe("DSH 原生工具插件 · execute 包装", () => {
       rmSync(dirA, { recursive: true, force: true })
       rmSync(dirB, { recursive: true, force: true })
     }
+  })
+})
+
+/**
+ * DSH 在调用插件工具前会把入参整份深冻结（含嵌套对象与数组元素），然后原样交给 execute。
+ * 这组断言覆盖「适配层 → 内核」这条真实提交路径不因入参只读而失败：入参必须携带带 `#` 前缀的
+ * 嵌套裁定项，内核才对嵌套元素做归一化改写——只做浅拷贝时嵌套元素仍只读，此处即失败。
+ */
+describe("DSH 原生工具插件 · 冻结入参提交", () => {
+  test("深冻结入参经适配层提交仍然成功（内核在可写副本上完成嵌套归一化）", async () => {
+    const root = `/tmp/dsh-frozen-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, "dsh-frozen")
+    try {
+      // 前置状态：推进到 verify_quality，再由 style 维度报一个 Low issue（7）聚合回退 implement。
+      // 与 tests/orchestrate.normalize.test.ts 的同类前置构造一致——待裁定豁免只能在 review step 提交。
+      const { ctx } = await driveToQuality(wt, "dsh-frozen")
+      await rollbackQuality(ctx, "dsh-frozen", {
+        failedDim: "style",
+        newChildren: [{ id: "7", title: "可豁免 issue", description: "第三方库限制", severity: "Low", dimension: "style" }],
+      })
+
+      // developer 在 implement 提交修复并要求豁免（# 前缀引用）→ issue 7 进入待裁定态
+      const executes = buildNativeToolExecutes(false, wt)
+      const item0 = taskItemOf(readState(wt, "dsh-frozen")!)
+      await executes.opx_agent_submit!(
+        {
+          change_id: "dsh-frozen",
+          step_id: "implement",
+          verdict: "passed",
+          completed_task_ids: taskIdsOf(item0),
+          exempt_issue_ids: ["#7"],
+          [AGENT_ARG]: "openspec-developer",
+        },
+        makeExec({ cwd: wt }),
+      )
+
+      // 编排把任务移回 review/verify_quality，供报源 reviewer 裁定
+      const statePath = join(wt, "openspec", "states", "dsh-frozen.json")
+      const state = JSON.parse(readFileSync(statePath, "utf-8"))
+      const wi = state.workItems.find((w: { id: string }) => w.id === "task:1")
+      wi.phase = "review"
+      wi.currentStep = "verify_quality"
+      writeFileSync(statePath, JSON.stringify(state, null, 2))
+
+      // 入参整份深冻结：裁定项是嵌套对象，其 issue_id 带 `#` 前缀必须由内核归一化改写
+      const args = deepFreeze({
+        change_id: "dsh-frozen",
+        step_id: "verify_quality",
+        verdict: "passed",
+        exempt_adjudications: [{ issue_id: "#7", action: "dismissed" }],
+        [AGENT_ARG]: "openspec-reviewer-style",
+      })
+
+      await executes.opx_agent_submit!(args, makeExec({ cwd: wt }))
+
+      // 提交成功：豁免裁定生效，issue 7 置 cancelled
+      const after = taskItemOf(readState(wt, "dsh-frozen")!)
+      expect(after.children.find((c: { externalId?: string }) => c.externalId === "7").phase).toBe("cancelled")
+      // 调用方那份入参未被写坏（_agent 仍在、# 前缀原样保留，内核只改自己的副本）
+      expect(args[AGENT_ARG]).toBe("openspec-reviewer-style")
+      expect(args.exempt_adjudications[0]!.issue_id).toBe("#7")
+    } finally { teardown(root) }
   })
 })
 

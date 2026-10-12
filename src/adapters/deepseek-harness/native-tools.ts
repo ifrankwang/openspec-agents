@@ -132,7 +132,8 @@ export function buildNativeToolExecutes(
       exec.signal?.throwIfAborted?.()
       const ctx = resolveToolContext(exec, args, { processCwd })
       // 私有身份参数不进入内核参数（内核校验的是纯业务 schema）。
-      const cleanArgs: Record<string, unknown> = { ...args }
+      // DSH 会把入参整份深冻结后原样交给 execute，这里必须交出可写副本（浅拷贝只保护顶层，嵌套仍只读）。
+      const cleanArgs: Record<string, unknown> = structuredClone(args)
       delete cleanArgs[AGENT_ARG]
       if (unattended) await ensureDefaultUnattended(cleanArgs, ctx)
       const result = await execute(cleanArgs, ctx)

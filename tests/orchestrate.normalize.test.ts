@@ -9,7 +9,7 @@ import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
-import { setupWithFakeGit, teardown, readState } from "./helpers"
+import { setupWithFakeGit, teardown, readState, deepFreeze } from "./helpers"
 import {
   setupToAnalyze, driveToVerifyTool, driveToQuality,
   taskListOf, taskItemOf, taskIdsOf, rollbackQuality,
@@ -157,6 +157,68 @@ describe("N1. issue id # 前缀归一化", () => {
       expect(item.tags["verify_quality:openspec-reviewer-style"]).toBeUndefined()
       expect(item.tags["verify_quality:openspec-reviewer-architecture"]).toBe("passed")
       expect(item.currentStep).toBe("verify_tool")
+    } finally { teardown(root) }
+  })
+
+  test("DSH 深冻结入参下 # 前缀豁免/复核裁定仍能提交并落终态", async () => {
+    const root = `/tmp/norm-frozen-${Date.now()}`
+    const { worktree: wt } = setupWithFakeGit(root, CID)
+    try {
+      const ctx = await setupToAnalyze(wt, CID)
+      await driveToQuality(wt, CID)
+
+      // style 维度报两个 Low issue（7=可修、8=不可修）→ 聚合回退 implement
+      await rollbackQuality(ctx, CID, {
+        failedDim: "style",
+        newChildren: [
+          { id: "7", title: "可修 issue", description: "质量层问题", severity: "Low", dimension: "style" },
+          { id: "8", title: "不可修 issue", description: "第三方库限制", severity: "Low", dimension: "style" },
+        ],
+      })
+
+      // dev 深冻结入参提交：7 修复、8 申请豁免（# 前缀），嵌套数组元素同样是只读的
+      const item1 = taskItemOf(readState(wt, CID)!)
+      const fixArgs = deepFreeze({
+        change_id: CID, step_id: "implement", verdict: "passed",
+        completed_task_ids: taskIdsOf(item1), fixed_issue_ids: ["#7"], exempt_issue_ids: ["#8"],
+      })
+      await agent_submit.execute(fixArgs, ctx.dev)
+      let item = taskItemOf(readState(wt, CID)!)
+      expect(item.children.find((c: any) => c.externalId === "7").phase).toBe("review")
+      expect(item.children.find((c: any) => c.externalId === "8").phase).toBe("review")
+      // 内核不得写回调用方入参（归一化只在副本上发生）
+      expect(fixArgs.fixed_issue_ids).toEqual(["#7"])
+
+      // 模拟编排将任务移回 review/verify_quality 供 reporter 裁定
+      const p = join(wt, "openspec", "states", `${CID}.json`)
+      const state = JSON.parse(require("node:fs").readFileSync(p, "utf-8"))
+      const wi = state.workItems.find((w: any) => w.id === "task:1")
+      wi.phase = "review"
+      wi.currentStep = "verify_quality"
+      require("node:fs").writeFileSync(p, JSON.stringify(state, null, 2))
+
+      // style reporter 深冻结入参：豁免裁定 dismissed（#8）
+      const exemptArgs = deepFreeze({
+        change_id: CID, step_id: "verify_quality", verdict: "passed",
+        exempt_adjudications: [{ issue_id: "#8", action: "dismissed" }],
+      })
+      await agent_submit.execute(exemptArgs, ctx.dims["style"])
+      item = taskItemOf(readState(wt, CID)!)
+      expect(item.children.find((c: any) => c.externalId === "8").phase).toBe("cancelled")
+      expect(exemptArgs.exempt_adjudications[0]!.issue_id).toBe("#8")
+
+      // style reporter 深冻结入参：复核裁定 passed（#7）→ 终态
+      const recheckArgs = deepFreeze({
+        change_id: CID, step_id: "verify_quality", verdict: "passed",
+        recheck_adjudications: [{ issue_id: "#7", verdict: "passed" }],
+      })
+      await agent_submit.execute(recheckArgs, ctx.dims["style"])
+      item = taskItemOf(readState(wt, CID)!)
+      expect(item.children.find((c: any) => c.externalId === "7").phase).toBe("done")
+      const issues = taskGroupFromWorkItem(item).issues
+      expect(issues.find((i: any) => i.id === "7")?.status).toBe("verified")
+      expect(issues.find((i: any) => i.id === "8")?.status).toBe("exempted")
+      expect(recheckArgs.recheck_adjudications[0]!.issue_id).toBe("#7")
     } finally { teardown(root) }
   })
 })

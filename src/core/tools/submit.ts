@@ -619,15 +619,25 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       )
     }
 
-    // 参数归一化：issue id 去 # 前缀（fixed/exempt/adjudication/recheck 均接受带 # 的 tg.issue 序号引用）
-    if (params.fixed_issue_ids) params.fixed_issue_ids = params.fixed_issue_ids.map(normalizeIssueId)
-    if (params.exempt_issue_ids) params.exempt_issue_ids = params.exempt_issue_ids.map(normalizeIssueId)
-    if (params.exempt_adjudications) {
-      for (const adj of params.exempt_adjudications) adj.issue_id = normalizeIssueId(adj.issue_id)
+    // 参数归一化：issue id 去 # 前缀（fixed/exempt/adjudication/recheck 均接受带 # 的 tg.issue 序号引用）。
+    // 归一化结果必须回写到 params 绑定：其后的读取点全部依赖归一化后的值。宿主（DSH）可能把入参整份
+    // 冻结为只读，因此只能在可写副本上归一化，不能动传入对象（含嵌套元素）。
+    const normalized: AgentSubmitParams = { ...params }
+    if (normalized.fixed_issue_ids) normalized.fixed_issue_ids = normalized.fixed_issue_ids.map(normalizeIssueId)
+    if (normalized.exempt_issue_ids) normalized.exempt_issue_ids = normalized.exempt_issue_ids.map(normalizeIssueId)
+    if (normalized.exempt_adjudications) {
+      normalized.exempt_adjudications = normalized.exempt_adjudications.map((adj) => ({
+        ...adj,
+        issue_id: normalizeIssueId(adj.issue_id),
+      }))
     }
-    if (params.recheck_adjudications) {
-      for (const adj of params.recheck_adjudications) adj.issue_id = normalizeIssueId(adj.issue_id)
+    if (normalized.recheck_adjudications) {
+      normalized.recheck_adjudications = normalized.recheck_adjudications.map((adj) => ({
+        ...adj,
+        issue_id: normalizeIssueId(adj.issue_id),
+      }))
     }
+    params = normalized
 
     // 无效 fixed/exempt id 入口显式拒绝（不静默吞掉修复/豁免声明）：未命中的 id 抛错并列出可用 id 清单。
     // 以 resolveChildByIssueId 做权威判定，与 submitForStep 的 childById 及 collectFixedExemptLayers 消费端解析语义一致。
