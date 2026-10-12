@@ -12,7 +12,7 @@ import { writeAgents } from "./agents.ts"
  * - 随包 skill 走 skill 域 transform 逐项注册，path 指向包内 SKILL.md 以保留附属文件基准；
  * - 子代理以文件形式投放至项目 `.opencode/agents/`（V2 插件接口无新增 agent 的能力）。
  *
- * dashboard/collector/poller 副作用由 MCP server 进程承担（src/adapters/mcp-common/），
+ * collector/poller 副作用由 MCP server 进程承担（src/adapters/mcp-common/），
  * 插件壳不启动任何后台任务。
  *
  * 插件 ID 稳定为 openspec-agents：V2 以该 ID 标识插件、隔离其持久化存储，并用于配置中的
@@ -22,7 +22,7 @@ export const OPENCODE_PLUGIN_ID = "openspec-agents"
 
 /**
  * 构造 opx MCP server 配置。入口为包内 .mcp-server/cli.mjs（prepack 构建的自包含 bundle），
- * --worktree 指向当前加载本插件的项目根（ctx.location.directory），dashboard/collector 副作用
+ * --worktree 指向当前加载本插件的项目根（ctx.location.directory），collector 副作用
  * 与状态读写均以此为根。
  */
 function mcpServerConfig(projectRoot: string) {

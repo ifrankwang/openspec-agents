@@ -65,9 +65,6 @@ export {
   renderAgentSummaries, formatFilePath, renderTaskItem, formatSeverity,
 } from "./views.ts"
 
-// dashboard
-export { readDashboardState } from "./dashboard.ts"
-
 // constants
 export {
   STATE_DIR_NAME, STATE_SUBDIR_NAME,

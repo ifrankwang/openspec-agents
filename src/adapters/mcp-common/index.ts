@@ -1,6 +1,6 @@
 /**
  * MCP Server 启动入口：HTTP transport（node:http）承载 6 个 opx_* 工具，
- * 并承载 dashboard/collector/poller 副作用（原 OpenCode 插件壳职责迁移至此）。
+ * 并承载 collector/poller 副作用（原 OpenCode 插件壳职责迁移至此）。
  * 非 OpenCode agent（claude code / codex / zcode）经 MCP client 接入同一套编排状态机。
  */
 import { createServer, type Server } from "node:http"
@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { buildMcpServer } from "./server.ts"
-import { startDashboard } from "../opencode/dashboard.ts"
 import { OpenSpecCollector, AdoCollector, registerCollector, startPolling } from "../../core/workflow/index.ts"
 import { readContextFromWorktree } from "../../core/state.ts"
 
@@ -23,10 +22,9 @@ export interface McpServerOptions {
 export const DEFAULT_PORT = 4525
 const MAX_PORT_ATTEMPTS = 20
 
-/** 启动 dashboard/collector/poller 副作用（原插件壳职责，单一宿主 = MCP server 进程）。 */
+/** 启动 collector/poller 副作用（原插件壳职责，单一宿主 = MCP server 进程）。 */
 function startSideEffects(worktree: string): void {
   try {
-    void startDashboard(worktree)
     // 注册内置收集器（OpenSpec + ADO 占位）并启动定时拉取；worktree 为动态上下文在此注入。
     registerCollector(new OpenSpecCollector({ openspecDir: join(worktree, "openspec") }))
     registerCollector(new AdoCollector())
@@ -37,7 +35,7 @@ function startSideEffects(worktree: string): void {
       }
     })
   } catch {
-    // dashboard/调度启动失败不影响编排功能
+    // 调度启动失败不影响编排功能
   }
 }
 

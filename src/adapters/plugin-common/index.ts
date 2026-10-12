@@ -35,8 +35,6 @@ export function readPkgVersion(): string {
 export function bundleMcpServer(pluginDir: string): string {
   const out = join(pluginDir, ".mcp-server", "cli.mjs")
   mkdirSync(join(pluginDir, ".mcp-server"), { recursive: true })
-  // dashboard 页面资源随 bundle 同目录放置（page.ts 按此布局探测）
-  cpSync(resolve("assets", "dashboard"), join(pluginDir, ".mcp-server", "dashboard"), { recursive: true })
   const result = spawnSync(
     "bun",
     [

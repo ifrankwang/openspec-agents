@@ -89,10 +89,9 @@ describe("发布产物覆盖 · prepack 构建链路", () => {
     const out = join(TMP, "root-artifacts")
     buildRootArtifacts(out)
 
-    // OpenCode 侧：MCP server bundle + dashboard 资源（page.ts 按同目录布局探测）
+    // OpenCode 侧：MCP server bundle
     const mcpEntry = join(out, ".mcp-server", "cli.mjs")
     expect(existsSync(mcpEntry)).toBe(true)
-    expect(existsSync(join(out, ".mcp-server", "dashboard", "index.html"))).toBe(true)
     // DSH 侧：原生工具插件 bundle + patch
     expect(existsSync(join(out, ".dsh-plugin", "opx-tools.mjs"))).toBe(true)
     expect(existsSync(join(out, "dsh", "cordis.patch.yml"))).toBe(true)

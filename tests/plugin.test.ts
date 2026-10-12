@@ -159,7 +159,7 @@ describe("OpenCode V2 插件壳", () => {
     expect(readFileSync(file, "utf-8")).toBe(custom)
   })
 
-  test("插件壳不启动 poller（dashboard/collector 副作用归 MCP server 进程）", async () => {
+  test("插件壳不启动 poller（collector/poller 副作用归 MCP server 进程）", async () => {
     const spy = spyOn(poller, "startPolling")
     try {
       const { ctx } = createCtx(projectRoot)

@@ -3,10 +3,10 @@
  * MCP 配置分发、默认无人值守。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { mkdirSync, rmSync, existsSync, readFileSync, appendFileSync } from "node:fs"
+import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { spawn, spawnSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
@@ -271,50 +271,6 @@ describe("zcode 适配器", () => {
         expect(serverInfo?.version).toBe(result.version)
       } finally {
         await client.close()
-      }
-    } finally {
-      rmSync(pluginDir, { recursive: true, force: true })
-    }
-  })
-
-  test("bundle 形态 dashboard 页面资源来自 bundle 同目录（非源码回退）", async () => {
-    const { buildZcodePlugin } = await import("../src/adapters/zcode/index")
-    const pluginDir = join(TMP_ROOT, "zcode-plugin-dash")
-    rmSync(pluginDir, { recursive: true, force: true })
-    const worktree = join(TMP_ROOT, "zcode-dash-worktree")
-    mkdirSync(worktree, { recursive: true })
-    try {
-      buildZcodePlugin(pluginDir)
-      // 在 bundle 同目录页面注入标记：能拿到该标记即证明页面来自 bundle 而非源码回退
-      const marker = `<!--bundle-marker-${Date.now()}-->`
-      appendFileSync(join(pluginDir, ".mcp-server", "dashboard", "index.html"), marker)
-
-      const proc = spawn(
-        "node",
-        [join(pluginDir, ".mcp-server", "cli.mjs"), "--transport", "http", "--worktree", worktree],
-        { stdio: "ignore" },
-      )
-      try {
-        const deadline = Date.now() + 10000
-        let html: string | null = null
-        while (Date.now() < deadline && !html) {
-          for (let port = 4519; port < 4519 + 20; port++) {
-            try {
-              const res = await fetch(`http://127.0.0.1:${port}/`)
-              const text = await res.text()
-              if (res.ok && text.includes(marker)) {
-                html = text
-                break
-              }
-            } catch {
-              // 端口未就绪/非本进程服务，跳过
-            }
-          }
-          if (!html) await new Promise((r) => setTimeout(r, 200))
-        }
-        expect(html, "10s 内未在 4519-4538 端口命中 bundle 页面").not.toBeNull()
-      } finally {
-        proc.kill()
       }
     } finally {
       rmSync(pluginDir, { recursive: true, force: true })

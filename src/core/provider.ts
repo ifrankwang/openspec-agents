@@ -46,14 +46,12 @@ export interface RuntimeTool {
 /** 工具注册表：工具名 → 定义。 */
 export type ToolRegistry = Record<string, RuntimeTool>
 
-/** 运行时配置注入：agent/skill 注入指令与可选 dashboard 配置。 */
+/** 运行时配置注入：agent/skill 注入指令。 */
 export interface IRuntimeConfig {
   /** 分发的 agent 定义根目录（各适配器按自身注入格式消费）。 */
   agentsDir?: string
   /** 分发的 skill 根目录列表（各适配器按自身发现机制注册）。 */
   skillsDirs?: string[]
-  /** 可选编排进度看板。 */
-  dashboard?: { port?: number; hostname?: string }
 }
 
 /**
