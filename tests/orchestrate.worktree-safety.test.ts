@@ -33,7 +33,7 @@ function freshWt(root: string): string {
     `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2 [spec:s2]\n\n## 2. G2\n\n- [ ] 2.1 T3\n`,
     "utf-8"
   )
-  // 与 helpers.setupWorkspace 对齐：非质量门测试默认豁免必做清单门禁（gate 索引置空）
+  // 与 helpers.setupWorkspace 对齐：非必做清单用例默认豁免门禁（gate 索引置空）
   __setMustDoIndex(EMPTY_MUST_DO_INDEX)
   return wt
 }

@@ -511,8 +511,9 @@ function handleReviewParams(
   }
 
   // 必做清单覆盖度门禁：verdict=passed 且非补交豁免（仅裁定参数）时，validation_steps 须逐项覆盖
-  // 当前 agent 能力集解析出的质量门 skill 必做清单（must_do）。遗漏必做项且无有效降级证据 → 拒绝提交。
-  // 未声明 must_do 的 skill / 解析不到质量门 skill 的 step 自动跳过（不误伤 verify_task/verify_quality）。
+  // 当前 agent 能力集解析出的已加载 skill 必做清单（must_do）。遗漏必做项且无有效降级证据 → 拒绝提交。
+  // 门禁按各 skill 声明的 must_do 通用生效，不限质量门类；未声明 must_do 的 skill / 解析不到声明
+  // must_do 的 skill 的 step 自动跳过（不误伤无必做清单的 step）。
   // 覆盖口径：核验申报（completed=true + 描述注明核验方式与抽验样本，step 名首段 token 命中必做项）是
   // 高成本必做项的合法覆盖形态，仅限 workflow 指令白名单限定的高成本必做项（deep_scan）；低成本必做项
   // 必须实跑后申报（机制层只认 token 命中不区分形态，白名单口径在错误提示中明示）。
@@ -520,8 +521,8 @@ function handleReviewParams(
     const uncovered = uncoveredMustDo(opts.capabilityTags, params.validation_steps)
     if (uncovered.length > 0) {
       throw new Error(
-        `提交的验证步骤未覆盖质量门 skill 必做清单，缺少以下必做项：${uncovered.join("、")}。\n` +
-        `请按已加载质量门类 skill 的必做清单逐项执行并逐项申报结果（completed=true）；` +
+        `提交的验证步骤未覆盖已加载 skill 的必做清单，缺少以下必做项：${uncovered.join("、")}。\n` +
+        `请按已加载 skill 的必做清单逐项执行并逐项申报结果（completed=true）；` +
         `确实无法执行的必做项须以结构化 skip_reason 申报降级理由` +
         `（格式：${SKIP_REASON_FORMAT}）。` +
         `低成本必做项必须实跑后申报；核验申报仅限 workflow 指令白名单限定的高成本必做项。`
@@ -791,8 +792,9 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
     if (stepPhase === "review") {
-      // 必做清单覆盖度门禁取「当前提交 agent 的能力集」：verify_quality 多 agent 各自 capability 解析
-      // 不出质量门 skill（自动跳过），verify_tool 的 reviewer 按 quality-gate 能力集校验。
+      // 必做清单覆盖度门禁取「当前提交 agent 的能力集」：各 agent 只按自身 capability_tags 解析 skill。
+      // verify_quality 多 agent 各自解析不出声明 must_do 的 skill（自动跳过），verify_tool 按 quality-gate
+      // 能力集、verify_task 按 test-design 能力集分别校验各自的必做清单。
       const stepCfg = workflow.stepMap.get(params.step_id)!.step
       const agentCfg = stepCfg.agents.find((a) => a.id === ctx.agent)
       handleReviewParams(item, params, newChildren, params.step_id, {
@@ -957,10 +959,10 @@ async function applyCheckpointDecision(
   if (decision === "continue") {
     applyCheckpointContinue(item, step)
   } else {
-    // giveup 必做清单核对（堵 giveup 侧门）：当前 step 若含质量门 skill 必做清单（must_do），
+    // giveup 必做清单核对（堵 giveup 侧门）：当前 step 若解析出已加载 skill 必做清单（must_do），
     // 未覆盖项必须有结构化降级理由（checkpoint_skip_reasons），否则拒绝 giveup——
-    // 杜绝「放弃审查 → 自动推进 → 收尾合码」的无痕绕过通道。非质量门 step 或未声明 must_do
-    // 的 skill 环境下 uncovered 为空，giveup 行为不受影响（与「编排改动须评估全流程连锁影响」一致）。
+    // 杜绝「放弃审查 → 自动推进 → 收尾合码」的无痕绕过通道。未声明 must_do 的 skill 环境下
+    // uncovered 为空，giveup 行为不受影响（与「编排改动须评估全流程连锁影响」一致）。
     const stepCaps = Array.from(new Set(step.agents.flatMap((a) => a.capability_tags)))
     const prevSteps = (item.metadata["validation_steps"] as Array<{ step: string; completed: boolean }> | undefined)
     const uncovered = uncoveredMustDo(stepCaps, prevSteps)
@@ -972,7 +974,7 @@ async function applyCheckpointDecision(
       const missing = uncovered.filter((m) => !provided.has(m))
       if (missing.length > 0) {
         throw new Error(
-          `giveup 无法应用：当前 step 的质量门必做清单存在未覆盖项，须逐项提供结构化降级理由。\n` +
+          `giveup 无法应用：当前 step 的已加载 skill 必做清单存在未覆盖项，须逐项提供结构化降级理由。\n` +
           `缺少降级理由的必做项：${missing.join("、")}\n` +
           `请通过 checkpoint_skip_reasons 逐项提供（giveup 未覆盖项不可跳过申报）：\n` +
           `[${SKIP_REASON_FORMAT}]`

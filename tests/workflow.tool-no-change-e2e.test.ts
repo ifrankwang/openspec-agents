@@ -158,7 +158,7 @@ describe("verify_tool 仅复核分支（分支②）no_change 申报端到端", 
 })
 
 describe("checkpoint 视图 giveup 申报指引（复核回环修复问题 2）", () => {
-  test("质量门类 step（verify_tool）检查点视图含 checkpoint_skip_reasons 指引；空索引豁免时不渲染（不误伤非质量门 step）", async () => {
+  test("含必做清单的 step（verify_tool）检查点视图含 checkpoint_skip_reasons 指引；空索引豁免时不渲染（不误伤无必做清单的 step）", async () => {
     const root = `/tmp/tnc-cp-${Date.now()}`
     const wt = await freshAtToolNoChange(root)
     const statePath = join(wt, "openspec", "states", `${CID}.json`)
@@ -167,13 +167,13 @@ describe("checkpoint 视图 giveup 申报指引（复核回环修复问题 2）"
     writeFileSync(statePath, JSON.stringify(state, null, 2))
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     try {
-      // 真实 must_do 索引：质量门类 step 检查点视图渲染 giveup 的 checkpoint_skip_reasons 申报指引
+      // 真实 must_do 索引：含必做清单的 step 检查点视图渲染 giveup 的 checkpoint_skip_reasons 申报指引
       __setMustDoIndex(QUALITY_GATE_INDEX)
       const view = await status.execute({ change_id: CID }, toolR)
       expect(view).toContain("检查点")
       expect(view).toContain("checkpoint_skip_reasons")
       expect(view).toContain("giveup")
-      // 空索引豁免（解析不到质量门必做清单）：不渲染该指引，避免误伤非质量门 step 的检查点视图
+      // 空索引豁免（解析不到声明 must_do 的 skill）：不渲染该指引，避免误伤无必做清单的 step 的检查点视图
       __setMustDoIndex(EMPTY_MUST_DO_INDEX)
       const emptyView = await status.execute({ change_id: CID }, toolR)
       expect(emptyView).not.toContain("checkpoint_skip_reasons")

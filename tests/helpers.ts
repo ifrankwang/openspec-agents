@@ -417,7 +417,7 @@ export function setupWorkspace(tmpRoot: string, changeId: string): string {
   const dir = join(tmpRoot, "workspace")
   mkdirSync(join(dir, "openspec", "changes", changeId), { recursive: true })
 
-  // 存量测试兼容：默认注入空 skill 索引使质量门必做清单门禁（gate.ts）豁免（解析不到质量门 skill）。
+  // 存量测试兼容：默认注入空 skill 索引使 skill 必做清单门禁（gate.ts）豁免（解析不到声明 must_do 的 skill）。
   // 新增门禁用例在本文件或新测试中显式注入构造索引 / 真实索引（scanSkillTags()）验证门禁行为。
   __setMustDoIndex(EMPTY_MUST_DO_INDEX)
 

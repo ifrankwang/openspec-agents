@@ -592,7 +592,7 @@ describe("F. 独立复核返工回归", () => {
         makeCtx(REVIEWER, wt),
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/未覆盖质量门 skill 必做清单/)
+      expect(err.message).toMatch(/未覆盖已加载 skill 的必做清单/)
       expect(err.message).toContain("compile")
       // 拒绝零状态变更：tag 未写、task 仍 review、step 未推进
       const item = taskItemOf(wt)

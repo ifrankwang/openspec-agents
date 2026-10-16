@@ -30,7 +30,7 @@ function freshWt(root: string): string {
   const wt = join(root, id, "w")
   mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
   writeFileSync(join(wt, "openspec", "changes", CID, "tasks.md"), "## 1. G1\n\n- [ ] 1.1 T1\n- [ ] 1.2 T2\n", "utf-8")
-  // 与 helpers.setupWorkspace 对齐：非质量门测试默认豁免必做清单门禁（gate 索引置空）
+  // 与 helpers.setupWorkspace 对齐：非必做清单用例默认豁免门禁（gate 索引置空）
   __setMustDoIndex(EMPTY_MUST_DO_INDEX)
   return wt
 }

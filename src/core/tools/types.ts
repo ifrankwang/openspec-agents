@@ -77,7 +77,7 @@ export interface AgentSubmitParams {
     reject_reason?: string
   }>
   checkpoint_decision?: "continue" | "giveup"
-  /** giveup 决策配套：对当前 step 质量门必做清单（must_do）未覆盖项逐项提供的结构化降级理由
+  /** giveup 决策配套：对当前 step 已加载 skill 必做清单（must_do）未覆盖项逐项提供的结构化降级理由
    * （giveup 未覆盖项缺理由则拒绝 giveup）。adjudication 取值 user_response / unattended_auto / env_unavailable。 */
   checkpoint_skip_reasons?: Array<{
     item: string

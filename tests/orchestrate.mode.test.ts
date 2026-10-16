@@ -352,9 +352,9 @@ describe("task-simple.yaml 加载与结构", () => {
     const qr = wf.stepMap.get("quality_review")!
     expect(qr.phase.name).toBe("review")
     expect(qr.step.agents.map((a) => a.id)).toEqual(["openspec-reviewer"])
-    // 1.4 验收：capability_tags 为 11 项集合（verify_tool + verify_task + verify_quality 能力并集 + cleanup 清理规范）
+    // 1.4 验收：capability_tags 为 12 项集合（verify_tool + verify_task + verify_quality 能力并集 + cleanup 清理规范）
     const expectedTags = [
-      "quality-gate", "api-testing", "dev-practices", "efficiency", "style", "architecture",
+      "quality-gate", "api-testing", "test-design", "dev-practices", "efficiency", "style", "architecture",
       "performance", "security", "maintainability", "tool-improvement", "cleanup",
     ]
     expect([...qr.step.agents[0].capability_tags].sort()).toEqual([...expectedTags].sort())

@@ -1,15 +1,16 @@
 /**
- * 质量门必做清单（must_do）覆盖度门禁与 giveup 侧门测试。
+ * skill 必做清单（must_do）覆盖度门禁与 giveup 侧门测试。
  *
  * 覆盖（对应实施项 2/3/5/6）：
  * - 提交遗漏必做项（无 skip_reason）→ 拒绝
  * - 遗漏但带合法结构化 skip_reason → 通过
  * - 带非结构化 skip_reason → 拒绝
- * - 非质量门 step 或未声明 must_do 的 skill → 不受影响（优雅降级）
+ * - 能力集未命中声明 must_do 的 skill → 不参与门禁（优雅降级）
+ * - 挂载 test-design 的 step 走真实索引 + 真实提交路径同样被门禁约束（端到端）
  * - giveup 路径无法无痕绕过覆盖度核对（缺理由拒绝 / 带结构化理由放行并留痕）
  *
  * skill 索引注入：helpers.setupWorkspace 默认注入空索引（EMPTY_MUST_DO_INDEX）豁免存量测试；
- * 本文件用例显式注入构造索引（含 quality-gate 声明 must_do）验证门禁。
+ * 本文件用例显式注入构造索引或真实索引（scanSkillTags）验证门禁。
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { rmSync, writeFileSync, readFileSync } from "node:fs"
@@ -17,6 +18,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
 import type { SkillTagIndex } from "../src/skills/resolve"
+import { scanSkillTags } from "../src/skills/resolve"
 import {
   parseSkipReason, uncoveredMustDo, resolveMustDoForCaps, isValidSkipData,
   __setMustDoIndex, EMPTY_MUST_DO_INDEX,
@@ -50,6 +52,25 @@ function makeNoMustDoIndex(): SkillTagIndex {
   return {
     tagMap: new Map([["quality-gate", ["quality-gate"]]]),
     skillTags: new Map([["quality-gate", ["quality-gate"]]]),
+    skillMustDo: new Map(),
+  }
+}
+
+/**
+ * 任务验证/合并审查层能力集（api-testing / dev-practices / efficiency / cleanup）命中的 skill
+ * 均未声明 must_do → 该 step 无必做清单可查（优雅降级）。
+ * 注意：真实索引下 test-design 已挂这些 step，门禁会逐项要求申报（见下方真实索引 e2e 用例）。
+ */
+function makeTaskCapsNoMustDoIndex(): SkillTagIndex {
+  const pairs: Array<[string, string]> = [
+    ["api-testing", "api-test"],
+    ["dev-practices", "dev-practices"],
+    ["efficiency", "code-efficiency"],
+    ["cleanup", "cleanup"],
+  ]
+  return {
+    tagMap: new Map(pairs.map(([tag, name]) => [tag, [name]])),
+    skillTags: new Map(pairs.map(([tag, name]) => [name, [tag]])),
     skillMustDo: new Map(),
   }
 }
@@ -134,7 +155,7 @@ describe("uncoveredMustDo / resolveMustDoForCaps", () => {
     expect(uncoveredMustDo(["quality-gate"], [], makeNoMustDoIndex())).toEqual([])
   })
 
-  test("caps 空 / 无 quality-gate 能力 → 未覆盖为空（不误伤非质量门 step）", () => {
+  test("caps 空 / 无 quality-gate 能力 → 未覆盖为空（不误伤无必做清单的 step）", () => {
     expect(uncoveredMustDo(undefined, [], idx)).toEqual([])
     expect(uncoveredMustDo(["api-testing"], [], idx)).toEqual([])
   })
@@ -175,6 +196,25 @@ describe("uncoveredMustDo / resolveMustDoForCaps", () => {
       { step: "deep_scan: 核验 dev 申报并抽验命中项（本地复跑单规则静态分析验证命中真实存在）", completed: true },
     ]
     expect(uncoveredMustDo(["quality-gate"], steps, idx)).toEqual([])
+  })
+
+  test("test-design 三项必做清单：缺申报被拦、逐项申报放行", () => {
+    const tdIdx: SkillTagIndex = {
+      ...idx,
+      skillMustDo: new Map([["test-design", ["behavior_surface", "case_matrix", "negative_probe"]]]),
+      tagMap: new Map([...idx.tagMap, ["test-design", ["test-design"]]]),
+      skillTags: new Map([...idx.skillTags, ["test-design", ["test-design"]]]),
+    }
+    expect(uncoveredMustDo(["test-design"], [], tdIdx)).toEqual(["behavior_surface", "case_matrix", "negative_probe"])
+    const declared = [
+      { step: "behavior_surface: 行为面清单", completed: true },
+      { step: "case_matrix: 用例矩阵", completed: true },
+      { step: "negative_probe: 探针记录", completed: true },
+    ]
+    expect(uncoveredMustDo(["test-design"], declared, tdIdx)).toEqual([])
+    expect(uncoveredMustDo(["test-design"], declared.slice(0, 2), tdIdx)).toEqual(["negative_probe"])
+    // api-test 未声明 must_do → 该能力不参与覆盖度门禁
+    expect(uncoveredMustDo(["api-testing"], [], tdIdx)).toEqual([])
   })
 
   test("低成本项以核验形态申报：机制层 token 命中即覆盖（白名单约束由 workflow 指令与门禁错误提示承载，非门禁拦截）", () => {
@@ -290,21 +330,61 @@ describe("verify_tool 提交必做清单覆盖度门禁", () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
-  test("非质量门 step（verify_task）passed → 不受必做清单门禁影响", async () => {
+  test("能力集内 skill 均未声明 must_do → verify_task passed 无 validation_steps 也放行（优雅降级）", async () => {
     const root = `/tmp/mdg-6-${Date.now()}`
     const wt = setupWorkspace(root, CID)
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
     await driveToVerifyTask(wt, CID)
-    __setMustDoIndex(makeQualityGateIndex())
+    // 注入索引中 verify_task 能力集命中的 skill 均未声明 must_do → 无必做项可查。
+    // 真实索引下本 step 的 test-design 会产出必做清单并被门禁约束，见下方真实索引用例。
+    __setMustDoIndex(makeTaskCapsNoMustDoIndex())
     try {
-      // verify_task 的 capability 解析不出 quality-gate 必做清单 → 即使无 validation_steps 也放行
       await agent_submit.execute(
         { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] },
         makeCtx("openspec-reviewer-task", wt),
       )
       expect(readItem(wt).currentStep).toBe("verify_quality")
     } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test("真实 skill 索引 + 真实提交路径：verify_task 未申报三项测试设计物被拒，逐项申报后推进 verify_quality", async () => {
+    const root = `/tmp/mdg-9-${Date.now()}`
+    const wt = setupWorkspace(root, CID)
+    const fakeGit = new FakeGitRunner()
+    __setGitRunner(fakeGit)
+    await driveToVerifyTask(wt, CID)
+    // 真实 skill 索引（test-design 声明 must_do）驱动 verify_task 覆盖度门禁
+    __setMustDoIndex(scanSkillTags())
+    try {
+      const err = await agent_submit.execute(
+        { change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] },
+        makeCtx("openspec-reviewer-task", wt),
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toContain("behavior_surface")
+      expect(err.message).toContain("case_matrix")
+      expect(err.message).toContain("negative_probe")
+      // 拒绝后状态不变：仍停在 verify_task 未通过
+      expect(readItem(wt).currentStep).toBe("verify_task")
+
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"],
+          validation_steps: [
+            { step: "behavior_surface: 行为面清单", completed: true, evidence: "行为面清单已核验" },
+            { step: "case_matrix: 用例矩阵", completed: true, evidence: "用例矩阵已核验" },
+            { step: "negative_probe: 探针记录", completed: true, evidence: "探针记录已核验" },
+          ],
+        },
+        makeCtx("openspec-reviewer-task", wt),
+      )
+      expect(readItem(wt).currentStep).toBe("verify_quality")
+    } finally {
+      // 复位索引注入，避免污染其它用例（文件级 afterAll 另有兜底复位）
+      __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   test("无变更直提（no_change 豁免声明）→ passed 放行并推进", async () => {
@@ -441,7 +521,7 @@ describe("giveup 无法无痕绕过覆盖度核对", () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
-  test("非质量门 step（verify_quality）giveup → 无理由放行推进 verify_cleanup（不误伤）", async () => {
+  test("无必做清单的 step（verify_quality）giveup → 无理由放行推进 verify_cleanup（不误伤）", async () => {
     const root = `/tmp/mdg-g6-${Date.now()}`
     const wt = setupWorkspace(root, CID)
     const fakeGit = new FakeGitRunner()

@@ -134,7 +134,7 @@ export const checkpointSkipReasonItem: JSONSchema = {
   type: "object",
   description: "giveup 决策的必做项结构化降级理由",
   properties: {
-    item: { type: "string", minLength: 1, description: "对应的必做项（质量门 skill 的 must_do 清单项）" },
+    item: { type: "string", minLength: 1, description: "对应的必做项（已加载 skill 的 must_do 清单项）" },
     category: { type: "string", minLength: 1, description: "降级类别，如环境不可用 / 用户裁定豁免 / 无人值守自动降级" },
     adjudication: {
       type: "string",
@@ -330,7 +330,7 @@ export const agentSubmitSchema: JSONSchema = {
     },
     checkpoint_skip_reasons: {
       type: "array",
-      description: "giveup 决策配套：对当前 step 质量门必做清单未覆盖项的结构化降级理由（未覆盖项缺理由则拒绝 giveup）",
+      description: "giveup 决策配套：对当前 step 已加载 skill 必做清单未覆盖项的结构化降级理由（未覆盖项缺理由则拒绝 giveup）",
       items: checkpointSkipReasonItem,
     },
     new_children: {

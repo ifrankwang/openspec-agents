@@ -131,13 +131,13 @@ function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, i
     `唯一动作：调用 \`opx_agent_submit({ step_id: "${step}", checkpoint_decision: "continue" })\`（continue / giveup 二选一）推进。`,
     "",
   ]
-  // 质量门类 step（当前 step 能力集解析出质量门必做清单）giveup 时，未覆盖必做项须经
+  // 解析出必做清单的 step（各 skill 声明 must_do 即生效，不限质量门类）giveup 时，未覆盖必做项须经
   // checkpoint_skip_reasons 逐项申报结构化降级理由（操作指引层面，不解释门禁内部实现）。
   const entry = rec.stepId ? workflow.stepMap.get(rec.stepId) : undefined
   const stepCaps = Array.from(new Set((entry?.step.agents ?? []).flatMap((a) => a.capability_tags)))
   if (resolveMustDoForCaps(stepCaps).length > 0) {
     lines.push(
-      `质量门类 step 的 giveup 决策：未覆盖必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），缺理由 giveup 不会被受理。`,
+      `含必做清单的 step 的 giveup 决策：未覆盖必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），缺理由 giveup 不会被受理。`,
       "",
     )
   }

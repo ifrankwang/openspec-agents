@@ -14,6 +14,7 @@ import {
   getEfficiencySkills,
   getSkillMustDo,
 } from "../src/skills/resolve"
+import { resolveMustDoForCaps } from "../src/core/tools/gate"
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { stepAgentIds } from "../src/core/workflow/types"
 
@@ -135,13 +136,26 @@ describe("must_do 必做清单（机器可读）", () => {
     expectMustDo("java-quality-gate", items)
   })
 
+  test("test-design 声明的清单与文档表格一一对应，且其标签可解析出该 skill", () => {
+    const idx = scanSkillTags()
+    const items = ["behavior_surface", "case_matrix", "negative_probe"]
+    expect(idx.skillMustDo.get("test-design")).toEqual(items)
+    expect(getSkillMustDo("test-design")).toEqual(items)
+    const doc = readFileSync(
+      join(import.meta.dir, "..", "assets", "skills", "test-design", "SKILL.md"),
+      "utf8",
+    )
+    for (const item of items) expect(doc).toContain(`| ${item} |`)
+    expect(resolveSkillsForCapabilities(["test-design"]).skillNames).toContain("test-design")
+  })
+
   test("未声明 must_do 的 skill → getSkillMustDo 返回 null（不参与覆盖度门禁）", () => {
     expect(getSkillMustDo("code-efficiency")).toBeNull()
     expect(getSkillMustDo("api-test")).toBeNull()
     expect(getSkillMustDo("no-such-skill")).toBeNull()
   })
 
-  test("verify_tool capability 解析出质量门 skill 必做清单；verify_task 解析为空（不误伤）", () => {
+  test("caps 不含质量门与测试设计 skill → 必做清单为空（不误伤）", () => {
     const tool = resolveSkillsForCapabilities(["quality-gate", "efficiency", "api-testing"])
     const toolMustDo = tool.skillNames.flatMap((n) => getSkillMustDo(n) ?? [])
     expect(toolMustDo).toContain("deep_scan")
@@ -150,6 +164,40 @@ describe("must_do 必做清单（机器可读）", () => {
     const task = resolveSkillsForCapabilities(["api-testing", "efficiency", "dev-practices"])
     const taskMustDo = task.skillNames.flatMap((n) => getSkillMustDo(n) ?? [])
     expect(taskMustDo).toEqual([])
+  })
+
+  test("test-design 挂载接线：task/task-simple/review/review-simple 各 step 解析正确", () => {
+    const idx = scanSkillTags()
+    const readWf = (name: string) =>
+      loadWorkflow(readFileSync(join(import.meta.dir, "..", "assets", "workflows", name), "utf8"))
+    const capsOf = (wf: ReturnType<typeof readWf>, stepId: string, agentId: string) =>
+      wf.stepMap.get(stepId)!.step.agents.find((a) => a.id === agentId)!.capability_tags
+    const design = ["behavior_surface", "case_matrix", "negative_probe"]
+
+    const taskWf = readWf("task.yaml")
+    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(design)
+    for (const item of design) {
+      expect(resolveMustDoForCaps(capsOf(taskWf, "implement", "openspec-developer"), idx)).toContain(item)
+    }
+    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_tool", "openspec-reviewer-tool"), idx)).not.toContain("behavior_surface")
+
+    const simpleWf = readWf("task-simple.yaml")
+    const reviewMustDo = resolveMustDoForCaps(capsOf(simpleWf, "quality_review", "openspec-reviewer"), idx)
+    for (const item of design) expect(reviewMustDo).toContain(item)
+    expect(reviewMustDo).toContain("compile")
+
+    // 独立审查会话两个 workflow 与 change 会话同口径：dev 与任务验证/合并审查层均挂 test-design
+    const reviewWf = readWf("review.yaml")
+    expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(design)
+    for (const item of design) {
+      expect(resolveMustDoForCaps(capsOf(reviewWf, "implement", "openspec-developer"), idx)).toContain(item)
+    }
+    expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_tool", "openspec-reviewer-tool"), idx)).not.toContain("behavior_surface")
+
+    const simpleReviewWf = readWf("review-simple.yaml")
+    const simpleReviewMustDo = resolveMustDoForCaps(capsOf(simpleReviewWf, "quality_review", "openspec-reviewer"), idx)
+    for (const item of design) expect(simpleReviewMustDo).toContain(item)
+    expect(simpleReviewMustDo).toContain("compile")
   })
 })
 
@@ -166,9 +214,9 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
       expect(r.skillNames.length).toBeGreaterThan(0)
     }
     expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
-    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
+    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
     expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
-    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "efficiency", "dev-practices", "cleanup"])
+    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "test-design", "efficiency", "dev-practices", "cleanup"])
     expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
     expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency", "tool-improvement"])
   })

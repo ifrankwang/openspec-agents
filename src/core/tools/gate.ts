@@ -1,9 +1,10 @@
 /**
- * 质量门必做清单（must_do）覆盖度门禁与降级理由（skip_reason）结构化解析。
+ * skill 必做清单（must_do）覆盖度门禁与降级理由（skip_reason）结构化解析。
  *
  * 语义：skill 在 frontmatter 声明机器可读的 must_do 必做清单后，review 提交（verify_tool）的
  * validation_steps 必须逐项覆盖（completed=true，或 completed=false 且 skip_reason 为合法结构化
- * JSON）。未声明 must_do 的 skill 与解析不到质量门 skill 的 step 优雅跳过（不误伤非质量门 step）。
+ * JSON）。门禁按各 skill 声明的 must_do 通用生效，不限质量门类；未声明 must_do 的 skill 与解析不到
+ * 声明 must_do 的 skill 的 step 优雅跳过（不误伤无必做清单的 step）。
  * giveup 决策复用同一套未覆盖项推导，要求对未覆盖必做项补充结构化降级理由（checkpoint_skip_reasons），
  * 杜绝「放弃审查 → 直接推进收尾」的无痕绕过通道。
  *
@@ -45,7 +46,7 @@ export interface SkipReasonData {
 
 /**
  * 测试注入：覆盖门禁使用的 skill 索引。
- * 存量测试基建（tests/helpers.ts setupWorkspace）默认注入空索引以豁免门禁（解析不到质量门 skill），
+ * 存量测试基建（tests/helpers.ts setupWorkspace）默认注入空索引以豁免门禁（解析不到声明 must_do 的 skill），
  * 新增门禁用例显式注入构造索引或真实索引（scanSkillTags()）验证。null=无注入，走真实文件扫描。
  */
 let overrideIndex: SkillTagIndex | null = null
