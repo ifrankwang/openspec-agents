@@ -1,10 +1,9 @@
 schema: spec-driven-standard
 
 context: |
-  项目技术背景、架构约定与工程规范以项目根目录 AGENTS.md 为准。
-  本文件仅承载 OpenSpec 流程的通用规则；与项目相关的特化约束
-  （技术栈、分层架构、数据库约定、质量门、方法论选择等）一律写入
-  项目 AGENTS.md，生成与复核子代理会被指示读取它。
+  项目特化约束以项目根目录 AGENTS.md 为索引入口（技术栈、目录结构、项目阶段、
+  跨模块复用约定与关键坑位），规则细则以 openspec/specs/ 下的主 spec 为权威锚，
+  操作流程与方法在项目级 skill（.agents/skills/）；生成与复核子代理会被指示读取它。
   explore 模式与 proposal 侧同源同严：凡涉及理清需求，必须按
   spec-driven-standard schema clarify 指令的决策树访谈方法论逐轮穷尽
   疑点；疑点未穷尽不得收束结论、不得捕获任何变更工件
