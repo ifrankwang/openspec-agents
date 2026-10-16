@@ -36,9 +36,10 @@
 <!-- The crystallized approach: chosen direction, key decisions, 2-3 alternatives
      considered with tradeoffs, and the plan summary the user explicitly confirmed
      (interview answers alone do not count as confirmation; the summary must be
-     structured per the six elements of the plan confirmation gate — including
+     structured per the seven elements of the plan confirmation gate — including
      the itemized plain-language change list, the plain-language
-     implementation outline and the related-surface verdicts —
+     implementation outline, the related-surface verdicts and
+     the rule-boundary verdicts —
      presented as a plain message listing the key points, never a question-tool
      prompt, and only AFTER the interview was exhausted: presenting the plan or
      asking for its confirmation mid-interview is forbidden, and the recommended

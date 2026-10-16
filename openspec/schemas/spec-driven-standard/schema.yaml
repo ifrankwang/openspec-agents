@@ -73,6 +73,13 @@ artifacts:
            consistency (clarify direction ↔ proposal capabilities ↔ specs
            requirements ↔ design decisions ↔ tasks with [spec:...]
            traceability tags);
+         - for changes that add or alter a rule, validation or blocking check,
+           or introduce/reorder an execution path, check the rule-boundary
+           findings entry by entry: the proposal's Rule Boundary section, the
+           design's mount point, and the spec's blocked / allowed /
+           equivalent-path scenarios must all match the rule-boundary
+           conclusions recorded in clarify.md - use the clarify record as the
+           baseline and do not invent criteria;
          - read openspec/specs/ main specs (read-only) and cross-check:
            proposal capabilities actually exist there, and delta
            requirements/contracts (e.g. error codes, rate-limit semantics,
@@ -141,6 +148,33 @@ artifacts:
         * Data model: which entities/tables/fields are involved? any new tables or columns?
         * Business rules: which are deterministic vs non-deterministic, per the
           project's conventions (see AGENTS.md)?
+        * Rule boundary (规则边界推演): for every business rule, validation or
+          blocking check this change adds or alters - and for every execution
+          path or action sequence the change introduces or reorders - work out
+          and resolve with the user, as branches of the decision tree:
+          1) judgement condition and exception: which cases must be blocked,
+             and which look similar but must be allowed (state the minimal
+             condition under which the block applies);
+          2) legitimate counter-examples: every functionally legal scenario the
+             new rule would wrongly block, and the handling each one should get
+             (each becomes an "allowed" scenario in the spec);
+          3) equivalent paths and the mount point of the check: whether the same
+             business intent has more than one execution path (several screens,
+             several endpoints, an action composed of other actions - e.g.
+             switching a user's role implemented as remove-then-add), and which
+             action or layer the check is mounted on; the check belongs on the
+             business-intent action, never on a lower-level action that other
+             flows reuse.
+          Also ask whether this change introduces or reorders any execution
+          path; if so, go through every EXISTING rule, validation or blocking
+          check and decide whether it should still fire on the new path
+          (blocked when it should not be, not blocked when it should be).
+          Division of labour: the Related-surface survey enumerates WHO is
+          affected; this branch decides whether the judgement itself holds. The
+          multiple-persistence-path consistency branch keeps the judgement
+          semantics consistent across paths (no missed blocking); this branch's
+          mount point keeps the check off shared low-level actions (no wrongful
+          blocking).
         * Integration boundaries: external systems, APIs, ports/adapters?
         * Architecture direction: propose 2-3 approaches with tradeoffs and a recommendation.
       - Round mechanics: each round asks every question whose prerequisites
@@ -195,6 +229,10 @@ artifacts:
         5. the related-surface verdicts: for every surveyed surface,
            adapted in this change or excluded, each with a one-line reason;
         6. the capabilities affected.
+        7. the rule-boundary verdicts: for every rule this change adds or
+           alters, the blocking condition, the exceptions and legitimate
+           counter-examples that must be allowed, and the equivalent execution
+           paths with the mount point of the check - each with its verdict.
         Present it as a
         plain message — do NOT use the question tool for this confirmation
         (the question tool belongs to the interview rounds, not to this
@@ -219,11 +257,20 @@ artifacts:
       - **Architecture Direction**: the crystallized approach, key decisions,
         alternatives considered, and the confirmed plan summary with
         the user's explicit confirmation — the summary structured per the
-        six elements of the plan confirmation gate (including the
+        seven elements of the plan confirmation gate (including the
         itemized plain-language change list, the plain-language
-        implementation outline and the related-surface verdicts),
+        implementation outline, the related-surface verdicts and the
+        rule-boundary verdicts),
         presented as a plain message only after the interview
-        was exhausted. This is the HARD-GATE output.
+        was exhausted. The rule-boundary conclusions must appear here item by
+        item for changes that add or alter a rule, validation or blocking
+        check, or that introduce or reorder an execution path.
+        This is the HARD-GATE output.
+      - **Authoring Tier**: SIMPLE or COMPLEX with a one-line rationale
+        (criteria in the Phase 2 complexity criteria above), recorded before
+        authoring starts; SIMPLE means the orchestrating agent writes the
+        remaining artifacts itself, COMPLEX means one fresh generation
+        subagent writes them.
       - **Initial Capabilities**: preliminary guess of which specs will be touched
         (kebab-case). Finalized in proposal.md.
 
@@ -279,6 +326,15 @@ artifacts:
         method, or internal function names) unless the user explicitly asked
         for technical depth; contract facts (table, column, and endpoint
         names) are exempt and stay precise.
+      - **Rule Boundary (规则边界)**: required when this change adds or alters a
+        business rule, validation or blocking check, or introduces/reorders an
+        execution path; otherwise state 「不适用」 with a one-line reason. One
+        table row per rule - the blocking condition, the exceptions and
+        legitimate counter-examples that must be allowed (with their intended
+        handling), and the mount point of the check - plus one line per
+        equivalent execution path with its verdict. The reasoning method lives
+        in the Rule boundary branch of the clarify instruction; do not restate
+        it here.
       - **Capabilities**: Identify which specs will be created or modified:
         - **New Capabilities**: List capabilities being introduced. Each becomes a new `specs/<capability-path>/spec.md`. Use kebab-case for path segments you introduce (e.g., `user-auth` or `identity/user-auth`) and follow the project's existing spec organization.
         - **Modified Capabilities**: List existing capabilities whose REQUIREMENTS are changing. Only include if spec-level behavior changes (not just implementation details). Each needs a delta spec file. Use the exact existing path under `openspec/specs/`. Leave empty if no requirement changes.
@@ -367,6 +423,13 @@ artifacts:
       - Each scenario: `#### Scenario: <name>` with WHEN/THEN format
       - **CRITICAL**: Scenarios MUST use exactly 4 hashtags (`####`). Using 3 hashtags or bullets will fail silently.
       - Every requirement MUST have at least one scenario.
+      - Rule-type changes (a business rule, validation or blocking check added
+        or altered, or an execution path introduced/reordered) need one Scenario
+        per rule-boundary conclusion, covering three kinds: blocked (with the
+        minimal blocking condition), allowed (exceptions and legitimate
+        counter-examples), and allowed on equivalent execution paths (one
+        Scenario per path). Conclusions that do not apply are stated with a
+        reason. A spec with only blocked-side scenarios is incomplete.
 
       New capabilities only: start the delta spec with a `## Purpose` section -
       one or two sentences (50+ characters, or `openspec validate --strict`
@@ -427,6 +490,11 @@ artifacts:
         (see AGENTS.md / openspec/config.yaml rules). If the change does not
         involve persistence, state that explicitly ("本变更不涉及持久化" or the
         project's equivalent phrasing).
+      - **Rule Boundary Attachment**: MANDATORY when the change adds or alters a
+        business rule, validation or blocking check, or introduces/reorders any
+        execution path. State which action or layer the check is mounted on, and
+        why no other flow reusing that action can trip it. State explicitly when
+        the change involves no rules.
       - **Risks / Trade-offs**: Known limitations, things that could go wrong. Format: [Risk] → Mitigation
       - **Migration Plan**: Steps to deploy, rollback strategy (if applicable)
       - **Open Questions**: Unknowns that can safely be answered later without

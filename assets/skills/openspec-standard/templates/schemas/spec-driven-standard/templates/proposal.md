@@ -25,6 +25,23 @@
      names) unless the user explicitly asked for technical depth; contract facts
      (table/column/endpoint names) are exempt and stay precise. -->
 
+## Rule Boundary
+
+<!-- 规则边界：required when this change adds or alters a business rule,
+     validation or blocking check, or introduces/reorders an execution path;
+     otherwise write 「不适用」 + a one-line reason. One table row per rule, plus
+     the equivalent-path list. The table form is required so each conclusion can
+     be checked item by item. The reasoning method lives in the Rule boundary
+     branch of the clarify instruction in schema.yaml - point there, do not
+     restate it here.
+
+     | 规则 | 该拦的条件 | 该放的例外与合法反例（附应有处理） | 判定挂载点 |
+     |---|---|---|---|
+     | <rule> | <minimal condition that blocks> | <exception / legitimate counter-example + intended handling> | <business-intent action the check sits on> |
+
+     Equivalent execution paths: one line per path - the intent, the path, and
+     whether the check fires correctly on it. -->
+
 ## Capabilities
 
 ### New Capabilities

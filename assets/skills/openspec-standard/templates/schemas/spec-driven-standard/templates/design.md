@@ -22,9 +22,20 @@
      rules: table prefix, primary key strategy, logical delete, audit columns).
      If no persistence, state that explicitly. -->
 
+## Rule Boundary Attachment
+
+<!-- Required when this change adds or alters a business rule, validation or
+     blocking check, or introduces/reorders an execution path; otherwise state
+     「不适用」 with a one-line reason. State which action or layer the check is
+     mounted on, and why no other flow reusing that action can trip it. -->
+
 ## Risks / Trade-offs
 
 <!-- Known risks and trade-offs. Format: [Risk] → Mitigation -->
+
+## Migration Plan
+
+<!-- Steps to deploy, rollback strategy (if applicable). Omit if not applicable. -->
 
 ## Open Questions
 
