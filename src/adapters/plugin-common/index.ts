@@ -18,7 +18,7 @@ import { parseAgentMd, resolve, EXCLUDED_AGENTS } from "../agent-md.ts"
 
 export const PLUGIN_NAME = "openspec-agents"
 export const PLUGIN_DESCRIPTION =
-  "OpenSpec change orchestration for AI coding agents: turn OpenSpec change specs into reviewed, high-quality code."
+  "OpenSpec companion plugin for AI coding agents: a stricter proposal standard plus multi-agent implementation and review, gated to production-grade standards."
 /** plugin.json author（各插件包统一署名项目作者）。 */
 export const PLUGIN_AUTHOR = "ifrankwang"
 

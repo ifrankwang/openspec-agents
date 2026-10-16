@@ -34,7 +34,7 @@ const VERSION = RAW_VERSION.replace(/^v/, "")
 const MARKETPLACE_NAME = "ifrankwang"
 const PLUGIN_NAME = "openspec-agents"
 const PLUGIN_DESCRIPTION =
-  "OpenSpec change orchestration for AI coding agents: turn OpenSpec change specs into reviewed, high-quality code."
+  "OpenSpec companion plugin for AI coding agents: a stricter proposal standard plus multi-agent implementation and review, gated to production-grade standards."
 
 const TARGETS = [
   {
