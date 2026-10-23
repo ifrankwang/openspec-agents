@@ -25,6 +25,19 @@ import { buildNativeToolDefinitions, type DshToolExec } from "./native-tools.ts"
 const Config = z.object({
   /** 默认无人值守：会话已初始化且未显式设置时自动开启。默认 true，与 MCP 侧 --unattended 同口径。 */
   unattended: z.boolean().default(true),
+  /**
+   * 子代理委派规格（工具名 + 引用的 preset id），由构建期写入 patch。
+   * 委派工具不写成静态 patch 行：DSH 加载器并行激活同层条目，静态工具行会在 preset 注册前
+   * 校验 `agentPreset` 报 Unknown agent preset；改由插件在 preset 就绪后动态挂载。
+   */
+  subagents: z
+    .array(
+      z.object({
+        toolName: z.string(),
+        agentPreset: z.string(),
+      }),
+    )
+    .default([]),
 })
 
 /** cordis 插件名。 */
@@ -39,7 +52,10 @@ const inject = ["tools"]
  * worktree 每次调用从 `exec.agent.session.header.cwd` 取会话项目目录（该字段缺失即报错，不静默回落进程 cwd）；
  * `exec.signal` 在每次调用入口检查取消；调用者身份由 `_agent` 入参声明（缺省=编排主代理视角）。
  */
-function apply(ctx: any, config: { unattended?: boolean } = {}): void {
+function apply(
+  ctx: any,
+  config: { unattended?: boolean; subagents?: Array<{ toolName: string; agentPreset: string }> } = {},
+): void {
   const unattended = config.unattended !== false
   // 进程 cwd 仅用于「无 agent 上下文的非 agent 调用」兜底；agent 调用缺会话目录时工具直接报错。
   const processCwd = process.cwd()
@@ -56,6 +72,70 @@ function apply(ctx: any, config: { unattended?: boolean } = {}): void {
       }),
     )
   }
+  mountSubagentTools(ctx, config.subagents ?? [])
+}
+
+/** 子代理委派工具所属的官方包（保持 external，由 DSH 安装目录在运行时解析）。 */
+const SUBAGENT_TOOL_PACKAGE = "@deepseek-ai/dsh-tool-subagent"
+
+/** 等待 preset 声明注册完成的上限：注册在启动阶段完成，正常在毫秒级。 */
+const PRESET_READY_TIMEOUT_MS = 3000
+const PRESET_READY_POLL_MS = 50
+
+/**
+ * 轮询等待 preset 声明注册完成。
+ *
+ * `agentPresets.readDocument(id)` 直接读内存声明表：返回成功即表示 preset 行已激活，
+ * 此时再挂载委派工具，工具行的加载期校验必然通过。
+ */
+async function waitForPreset(registry: any, presetId: string, timeoutMs = PRESET_READY_TIMEOUT_MS): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await registry.readDocument(presetId)
+      return true
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, PRESET_READY_POLL_MS))
+    }
+  }
+  return false
+}
+
+/**
+ * 在 preset 就绪后动态挂载子代理委派工具。
+ *
+ * 与静态 patch 行的差异只有挂载时机：本函数先等 `agentPresets` 服务可用、再逐个确认 preset
+ * 已注册，最后才挂 `@deepseek-ai/dsh-tool-subagent` 实例——消除「工具行先于 preset 行激活」
+ * 的加载竞态（DSH 对同层条目并行激活，desktop 多插件下稳定触发）。
+ */
+function mountSubagentTools(ctx: any, specs: Array<{ toolName: string; agentPreset: string }>): void {
+  if (specs.length === 0 || typeof ctx.inject !== "function") return
+  ctx.inject(["agentPresets"], async (injected: any) => {
+    let subagentTool: any
+    try {
+      subagentTool = await import(SUBAGENT_TOOL_PACKAGE)
+    } catch (error) {
+      injected.logger?.warn?.(`openspec: 无法加载 ${SUBAGENT_TOOL_PACKAGE}，子代理委派工具未挂载：${String(error)}`)
+      return
+    }
+    for (const spec of specs) {
+      if (!(await waitForPreset(injected.agentPresets, spec.agentPreset))) {
+        injected.logger?.warn?.(
+          `openspec: agent preset "${spec.agentPreset}" 未在 ${PRESET_READY_TIMEOUT_MS}ms 内注册，跳过子代理工具 ${spec.toolName}`,
+        )
+        continue
+      }
+      try {
+        await injected.plugin(subagentTool, {
+          provider: "spawn",
+          toolName: spec.toolName,
+          agentPreset: spec.agentPreset,
+        })
+      } catch (error) {
+        injected.logger?.warn?.(`openspec: 子代理工具 ${spec.toolName} 挂载失败：${String(error)}`)
+      }
+    }
+  })
 }
 
 export { Config, apply, inject, name }

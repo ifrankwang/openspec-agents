@@ -382,12 +382,12 @@ describe("DSH 原生工具插件 · cordis 加载契约", () => {
 
     const defaulted = standard!.validate({})
     expect(defaulted.issues).toBeUndefined()
-    expect(defaulted.value).toEqual({ unattended: true })
+    expect(defaulted.value).toEqual({ unattended: true, subagents: [] })
 
     // 显式取值原样通过校验（默认值不覆盖用户显式配置）
     const explicit = standard!.validate({ unattended: false })
     expect(explicit.issues).toBeUndefined()
-    expect(explicit.value).toEqual({ unattended: false })
+    expect(explicit.value).toEqual({ unattended: false, subagents: [] })
   })
 
   test("导出 inject 且含 tools（防未声明 inject 导致访问 ctx.tools 抛错）", async () => {
@@ -414,6 +414,33 @@ describe("DSH 原生工具插件 · cordis 加载契约", () => {
       expect(def.output).toBeDefined()
       expect(typeof def.execute).toBe("function")
     }
+  })
+
+  test("apply() 把子代理挂载规格交给 agentPresets 注入（静态工具行会先于 preset 注册而失败）", async () => {
+    const { apply } = await loadPlugin()
+    const injected: Array<{ deps: readonly string[]; callback: (ctx: any) => unknown }> = []
+    const ctx = {
+      tools: { register: () => {} },
+      inject: (deps: readonly string[], callback: (ctx: any) => unknown) => {
+        injected.push({ deps, callback })
+      },
+    }
+
+    apply(ctx, {
+      unattended: false,
+      subagents: [
+        { toolName: "openspec_developer", agentPreset: "openspec-developer" },
+        { toolName: "openspec_reviewer", agentPreset: "openspec-reviewer" },
+      ],
+    })
+
+    // 委派工具必须等 agentPresets 服务就绪后再挂载，不能写成静态 patch 行
+    expect(injected).toHaveLength(1)
+    expect(injected[0]!.deps).toEqual(["agentPresets"])
+
+    // 无子代理规格（旧配置/其他 harness 形态）时不注册注入
+    const empty = { tools: { register: () => {} }, inject: () => { throw new Error("不应调用 inject") } }
+    expect(() => apply(empty, { unattended: false })).not.toThrow()
   })
 
   test("按 cordis 的加载路径（Config 校验 → inject 守卫 ctx → apply）可跑通", async () => {

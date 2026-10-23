@@ -68,7 +68,14 @@ export const DSH_NATIVE_TOOLS_ROW_ID = "openspec-opx-tools"
  */
 export const DSH_SKILLS_DIR_SEGMENTS = ["assets", "skills"] as const
 
-/** 原生工具插件与 skill 根的基础 patch；子代理工具行由 buildDshPatchContent 动态追加。 */
+/**
+ * 原生工具插件与 skill 根的基础 patch。
+ *
+ * 子代理委派工具**不写成静态 patch 行**：DSH 加载器对同一层的条目并行激活，静态工具行会在
+ * preset 声明行注册完成之前校验 `agentPreset`，报 `Unknown agent preset`。改为把
+ * toolName ↔ preset id 清单放进插件配置，由插件在 preset 就绪后动态挂载委派工具
+ * （见 plugin.ts 的 mountSubagentTools），顺序由代码保证。
+ */
 const DSH_BASE_PATCH_YAML = `# DeepSeek Harness (DSH) bundle patch: expose OpenSpec orchestration tools and skills.
 # The patch is applied as a bundle layer under dsh.profile.bundles.
 # baseUrl 指向 profile 根目录；bundle 安装后位于 profile 的 node_modules 下，
@@ -205,15 +212,25 @@ function dshSubagentPresetPlugins(editAllowed: boolean): Record<string, unknown>
   ]
 }
 
+/** 子代理委派规格：工具名 + 引用的 preset id（写入插件配置，供动态挂载使用）。 */
+export interface DshSubagentSpec {
+  toolName: string
+  agentPreset: string
+}
+
+/** 解析一个子代理的 preset 声明与委派规格。 */
+interface DshSubagentDefinition {
+  spec: DshSubagentSpec
+  presetEntry: DshSubagentEntry
+}
+
 /**
- * 从 assets/agents/*.md 收集 DSH 子代理：每个物理子代理生成一个 Agent Preset 声明行
- * 与一个 `@deepseek-ai/dsh-tool-subagent` 工具行（后者以 `agentPreset` 引用前者）。
- *
- * preset 行必须排在工具行之前：工具行在加载时校验 `agentPreset` 是否已声明。
+ * 从 assets/agents/*.md 收集 DSH 子代理：每个物理子代理生成一个 Agent Preset 声明行，
+ * 以及一份「工具名 + preset id」规格（交给插件动态挂载委派工具）。
  */
-function collectDshSubagentEntries(): DshSubagentEntry[] {
+function collectDshSubagents(): DshSubagentDefinition[] {
   const agentsRoot = resolve("assets", "agents")
-  const entries: DshSubagentEntry[] = []
+  const definitions: DshSubagentDefinition[] = []
   for (const file of readdirSync(agentsRoot)) {
     if (!file.endsWith(".md")) continue
     if (EXCLUDED_AGENTS.has(file)) continue
@@ -224,8 +241,9 @@ function collectDshSubagentEntries(): DshSubagentEntry[] {
     const persona = [DSH_SUBAGENT_TOOL_ACCESS_PREAMBLE, description, body.trim()].filter(Boolean).join("\n\n")
     const suffix = dshAgentSuffix(name)
     const presetId = `openspec-${suffix.replace(/_/g, "-")}`
-    entries.push(
-      {
+    definitions.push({
+      spec: { toolName: `openspec_${suffix}`, agentPreset: presetId },
+      presetEntry: {
         id: `openspec-preset-${suffix}`,
         name: "@deepseek-ai/dsh-agent-preset",
         config: {
@@ -238,30 +256,37 @@ function collectDshSubagentEntries(): DshSubagentEntry[] {
           ],
         },
       },
-      {
-        id: `openspec-subagent-${suffix}`,
-        name: "@deepseek-ai/dsh-tool-subagent",
-        config: {
-          provider: "spawn",
-          toolName: `openspec_${suffix}`,
-          agentPreset: presetId,
-        },
-      },
-    )
+    })
   }
-  return entries
+  return definitions
 }
 
-/** 生成完整的 DSH cordis patch 内容：基础原生工具插件行 + skill 根 + 每个子代理的 preset 与 subagent 工具。 */
+/** 把子代理规格投影为插件配置里的 `subagents` 块（缩进对齐 openspec-opx-tools 行的 config）。 */
+function subagentsConfigYaml(specs: DshSubagentSpec[]): string {
+  if (specs.length === 0) return "        subagents: []"
+  const dumped = yaml.dump(specs, { lineWidth: -1 }).trimEnd().split("\n")
+  return ["        subagents:", ...dumped.map((line) => `          ${line}`)].join("\n")
+}
+
+/** 基础 patch：原生工具插件行带上子代理委派规格，供插件在 preset 就绪后动态挂载。 */
+function buildBasePatchYaml(specs: DshSubagentSpec[]): string {
+  return DSH_BASE_PATCH_YAML.replace(
+    "        unattended: true",
+    `        unattended: true\n${subagentsConfigYaml(specs)}`,
+  )
+}
+
+/** 生成完整的 DSH cordis patch 内容：基础原生工具插件行 + skill 根 + 每个子代理的 preset 声明。 */
 export function buildDshPatchContent(): string {
-  const subagents = collectDshSubagentEntries()
-  if (subagents.length === 0) return DSH_BASE_PATCH_YAML
-  const subagentsYaml = yaml
-    .dump(subagents, { schema: DSH_YAML_SCHEMA, lineWidth: -1 })
+  const definitions = collectDshSubagents()
+  const base = buildBasePatchYaml(definitions.map((definition) => definition.spec))
+  if (definitions.length === 0) return base
+  const presetsYaml = yaml
+    .dump(definitions.map((definition) => definition.presetEntry), { schema: DSH_YAML_SCHEMA, lineWidth: -1 })
     .split("\n")
     .map((line) => (line ? `    ${line}` : line))
     .join("\n")
-  return `${DSH_BASE_PATCH_YAML.trimEnd()}\n${subagentsYaml}\n`
+  return `${base.trimEnd()}\n${presetsYaml}\n`
 }
 
 export type DeepSeekHarnessPluginBuildResult = PluginPackageResult

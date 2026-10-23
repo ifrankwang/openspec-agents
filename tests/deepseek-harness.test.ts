@@ -77,18 +77,19 @@ describe("deepseek-harness 适配器", () => {
       expect(patch).toContain("@deepseek-ai/dsh-skill-filesystem")
       expect(patch).toContain(`./node_modules/${DSH_PLUGIN_NAME}/assets/skills`)
       expect(patch).toContain("providerName: openspec-filesystem")
-      // DSH 原生子代理：每个 assets/agents 子代理生成一行 Agent Preset 声明
-      // + 一行 dsh-tool-subagent（以 agentPreset 引用前者）
-      // （物理收敛为 developer / reviewer 两个，主代理模板不生成工具）
+      // DSH 原生子代理：每个 assets/agents 子代理生成一行 Agent Preset 声明；
+      // 委派工具不写成静态行（DSH 并行激活同层条目会先于 preset 注册校验），
+      // 而是把 toolName↔preset 清单写进插件 config，由插件在 preset 就绪后动态挂载。
       expect(patch).toContain("@deepseek-ai/dsh-agent-preset")
-      expect(patch).toContain("@deepseek-ai/dsh-tool-subagent")
       expect(patch).toContain("openspec-preset-developer")
       expect(patch).toContain("openspec-preset-reviewer")
-      expect(patch).toContain("openspec-subagent-developer")
-      expect(patch).toContain("openspec-subagent-reviewer")
+      expect(patch).toContain("subagents:")
       expect(patch).toContain("toolName: openspec_reviewer")
       expect(patch).toContain("agentPreset: openspec-reviewer")
       expect(patch).toContain("agentPreset: openspec-developer")
+      // 静态委派工具行必须消失：留在 patch 里就会触发 Unknown agent preset 竞态
+      expect(patch).not.toContain("@deepseek-ai/dsh-tool-subagent")
+      expect(patch).not.toContain("id: openspec-subagent-")
       // 子代理角色提示词随 preset 的 persona 插件下发（原生工具名，无 mcp__ 前缀）
       expect(patch).toContain("@deepseek-ai/dsh-persona")
       expect(patch).toContain("`opx_status`")
@@ -100,10 +101,9 @@ describe("deepseek-harness 适配器", () => {
       expect(patch).not.toContain("enableRunInBackground")
       expect(patch).not.toContain("backgroundMode")
       expect(patch).not.toMatch(/\bpersona:/)
-      // 每个物理子代理 = 一行 preset + 一行 subagent 工具
+      // 每个物理子代理一行 preset（工具挂载规格另计，体现在插件 config 的 subagents 块）
       expect(patch.match(/id: openspec-preset-/g)?.length).toBe(result.agents.length)
-      expect(patch.match(/id: openspec-subagent-/g)?.length).toBe(result.agents.length)
-      expect(patch.match(/id: openspec-subagent-/g)?.length).toBe(2)
+      expect(patch.match(/id: openspec-preset-/g)?.length).toBe(2)
 
       // agents：与其它插件包一致保留子代理 markdown（DSH 同时通过 subagent 工具加载）
       expect(result.agents).toEqual(expect.arrayContaining(["openspec-developer", "openspec-reviewer"]))
@@ -145,31 +145,31 @@ describe("deepseek-harness 适配器", () => {
    * 于是一方写错也全绿，直到用户重启 DSH 后 skill 全部加载不上才暴露。
    */
   /**
-   * 结构锁：DSH 0.2.1 起子代理角色与工具集只能由 Agent Preset 表达，
-   * `dsh-tool-subagent` 的 persona/toolFilter/后台模式配置在加载期即抛迁移错误。
-   * 这里解析生成物本身，确保「preset 声明 ↔ 工具引用」自洽且旧字段不会回流。
+   * 结构锁：子代理角色与工具集由 Agent Preset 表达，委派工具由插件在 preset 就绪后动态挂载——
+   * 静态工具行会与 preset 行并行激活，先于注册校验而报 Unknown agent preset。
+   * 这里解析生成物本身，锁住「preset 声明 ↔ 插件 subagents 规格」一一对应。
    */
-  test("子代理 preset 与委派工具引用自洽（DSH 0.2.1 Agent Preset 形态）", async () => {
+  test("子代理 preset 与插件挂载规格自洽（无静态委派工具行）", async () => {
     const { buildDshPatchContent } = await import("../src/adapters/deepseek-harness/index")
     const entries = yaml.load(buildDshPatchContent(), { schema: DSH_PATCH_YAML_SCHEMA }) as Array<{
       insert?: Array<{ id: string; name: string; config: Record<string, any> }>
     }>
     const rows = entries.flatMap((entry) => entry.insert ?? [])
     const presetRows = rows.filter((row) => row.name === "@deepseek-ai/dsh-agent-preset")
-    const toolRows = rows.filter((row) => row.name === "@deepseek-ai/dsh-tool-subagent")
     expect(presetRows).toHaveLength(2)
-    expect(toolRows).toHaveLength(2)
+    // 静态委派工具行不得回流
+    expect(rows.filter((row) => row.name === "@deepseek-ai/dsh-tool-subagent")).toHaveLength(0)
+
+    const nativeToolsRow = rows.find((row) => row.id === "openspec-opx-tools")
+    expect(nativeToolsRow).toBeDefined()
+    const specs = nativeToolsRow!.config.subagents as Array<{ toolName: string; agentPreset: string }>
+    expect(specs).toHaveLength(2)
 
     const presetIds = new Set(presetRows.map((row) => row.config.id))
-    for (const tool of toolRows) {
-      // 被引用的 preset 必须已声明，且声明行排在工具行之前（工具行加载时校验引用）
-      expect(presetIds.has(tool.config.agentPreset)).toBe(true)
-      const presetRow = presetRows.find((row) => row.config.id === tool.config.agentPreset)!
-      expect(rows.indexOf(presetRow)).toBeLessThan(rows.indexOf(tool))
-      // 已移除字段不得出现在工具配置中（否则 DSH 0.2.1 加载即抛错）
-      for (const legacyKey of ["persona", "toolFilter", "enableRunInBackground", "backgroundMode"]) {
-        expect(tool.config).not.toHaveProperty(legacyKey)
-      }
+    for (const spec of specs) {
+      // 每条挂载规格引用的 preset 必须已声明
+      expect(presetIds.has(spec.agentPreset)).toBe(true)
+      expect(spec.toolName).toMatch(/^openspec_/)
     }
     for (const preset of presetRows) {
       const pluginNames = (preset.config.plugins as Array<{ name: string }>).map((plugin) => plugin.name)
@@ -247,13 +247,11 @@ describe("deepseek-harness 适配器", () => {
     const generated = buildDshPatchContent()
     expect(generated).toContain(DSH_NATIVE_TOOLS_ROW_ID)
     expect(generated).toContain("@deepseek-ai/dsh-agent-preset")
-    expect(generated).toContain("@deepseek-ai/dsh-tool-subagent")
     expect(generated).toContain("openspec-preset-developer")
     expect(generated).toContain("openspec-preset-reviewer")
-    expect(generated).toContain("openspec-subagent-developer")
-    expect(generated).toContain("openspec-subagent-reviewer")
     expect(generated).toContain("toolName: openspec_reviewer")
     expect(generated).toContain("agentPreset: openspec-reviewer")
+    expect(generated).not.toContain("@deepseek-ai/dsh-tool-subagent")
   })
 
   test("sync-targets 包含 deepseek-harness 目标", async () => {

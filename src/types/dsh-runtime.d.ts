@@ -154,9 +154,27 @@ declare module "@deepseek-ai/dsh-tools" {
 }
 
 declare module "@deepseek-ai/cordis" {
-  /** 本项目插件只用到 ctx.tools；其余 cordis 服务不消费。 */
+  /** 本项目插件用到的 cordis 能力：工具注册表、依赖注入与子插件挂载；其余服务不消费。 */
   export interface Context {
     tools: import("@deepseek-ai/dsh-tools").ToolRegistry
+    /**
+     * 依赖就绪后执行回调。本插件用它等 `agentPresets` 服务可用，再动态挂载子代理委派工具
+     * （DSH 对同层 patch 条目并行激活，静态工具行会先于 preset 声明校验而失败）。
+     */
+    inject(deps: readonly string[], callback: (ctx: Context) => unknown): unknown
+    /** 挂载子插件。本插件用它挂载官方 `@deepseek-ai/dsh-tool-subagent` 实例。 */
+    plugin(plugin: unknown, config?: unknown): unknown
     [key: string]: any
   }
+}
+
+declare module "@deepseek-ai/dsh-tool-subagent" {
+  /**
+   * 官方子代理委派工具插件（cordis 插件形态：命名导出 name/inject/Config/apply）。
+   * 本插件在 preset 就绪后动态挂载它，故只需声明挂载所需的公开形状。
+   */
+  export const name: string
+  export const inject: readonly string[]
+  export const Config: unknown
+  export function apply(ctx: unknown, config?: unknown): void
 }
