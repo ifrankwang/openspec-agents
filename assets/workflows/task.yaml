@@ -63,9 +63,8 @@ phases:
           - "按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界"
           - "实施前识别 spec 描述的一并操作行为组（如状态变更与数据入队这类需同时发生的多个行为）；实施后逐项自证每个行为真实生效，禁止以单一状态字段的实现替代其他行为"
           - "涉及数据模型或流程产出变更（含字段/实体承载位置搬迁、AI 生成等流程产物）时，自证须包含关键数据产出断言：产出字段已持久化到 spec 指定承载位置且值完整非空、搬迁承接与同一输入产出基线一致（按已加载接口测试规范执行）；禁止仅以流程跑通/接口成功替代"
-          - "有代码、接口契约或数据口径变更时，须按已加载的测试设计规范产出行为面清单、用例矩阵与反向探针记录，随提交在 self_check_results 中逐项申报；反向探针结束后必须先还原实现并复跑全量用例确认全绿再提交，禁止带着改坏的实现提交"
           - "自证/验证需启动服务或基础设施时，一律按已加载技术栈 skill 的隔离启动规范以隔离方式启动，隔离标识与建议端口以视图 Worktree 区块为准；隔离对象不限于数据库——为本变更启动的 mock 服务、消息队列/缓存等中间件、扫描分析平台等一切环境资源均须按隔离标识隔离，禁止复用既有实例或共享端口；启动前发现隔离环境有残留时，先按已加载的清理规范幂等清空再启动；残留判定遵循已加载清理规范的归属判别，无法确认归属本变更的进程一律不清"
-          - "涉及接口契约或数据口径变更（按已加载的接口测试规范判定）时，实施过程中即时更新/新建与变更接口对应的 `.http` 测试脚本（已有脚本更新为匹配变更后契约，尚无脚本则新建，并同步 SQL 前置数据脚本），按已加载接口测试规范的完整执行顺序（含 SQL 前置数据准备、隔离启动基础设施与服务、执行 `.http` 脚本）执行接口测试，确保变更内容真实有效；执行结果（附执行顺序与覆盖接口清单）经 test_results 参数提交；修复被驳回 issue 后再次提交前同样须执行"
+          - "涉及接口契约或数据口径变更（按已加载的接口测试规范判定）时，实施过程中即时更新/新建与变更接口对应的接口测试脚本（已有脚本更新为匹配变更后契约，尚无脚本则新建，并同步 SQL 前置数据脚本），按已加载接口测试规范的完整执行顺序（含 SQL 前置数据准备、隔离启动基础设施与服务、执行接口测试脚本）执行接口测试，确保变更内容真实有效；执行结果（附执行顺序与覆盖接口清单）经 test_results 参数提交；修复被驳回 issue 后再次提交前同样须执行"
           - "自证完成后停止本次启动的服务/基础设施实例，不留残留"
           - "环境/基础设施问题（schema 缺失、DDL 未执行、依赖未安装）应通过 migration/初始化脚本等代码层面解决；仅生产级凭据、真实第三方资源、人工运维才走 blocker/豁免"
           - "issue 指向文件的目录已并入执行边界，修复这些文件（含回归引入问题）不算越界；issue 的 file 字段指向 openspec/changes/ 下文档时，按该 issue 要求修复对应文档同样不算越界（仅限该 issue 指定文件，不得扩大范围）；可按 issue 的 suggestion 直接执行修复；reviewer 的 boundary_expansion 已并入边界"
@@ -98,7 +97,7 @@ phases:
       - id: verify_tool
         agents:
           - id: openspec-reviewer-tool
-            capability_tags: [quality-gate, efficiency, api-testing]
+            capability_tags: [quality-gate, efficiency]
         transitions:
           on_pass: verify_task
           on_fail: implement
@@ -130,8 +129,9 @@ phases:
           on_fail: implement
         instructions:
           - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷 ⑥关键数据产出核验：对照 spec 数据产出要求，核验实现与测试是否覆盖产出数据落位（spec 指定承载位置）、完整非空、搬迁承接与同一输入基线一致，识别『流程正常但数据缺失/落错位置』类缺陷"
-          # 全模式 verify_task 视图不渲染开发者自检申报，故证据源取变更 diff 与 worktree 测试代码；simple 模式该 step 可核验 dev 申报
-          - "核验测试设计物：对照 spec 与独立推导的行为面，核验测试对行为面的覆盖、用例矩阵（正常/边界/异常与断言强度）与反向探针证据（以本次变更 diff 与 worktree 测试代码为准）；无测试对象（无代码、接口契约与数据口径变更）时以 completed=false + 结构化 skip_reason 申报；不得跳过核验直接提交通过"
+          # 全模式 verify_task 视图不渲染开发者自检申报，故证据源取变更 diff 与 worktree 测试代码；两种模式均由审查者独立推导，不以开发者申报为输入
+          - "测试设计核验（独立完成，不以 dev 申报为输入）：从 spec 与既有实现独立推导行为面清单与用例矩阵，核对测试对行为面的覆盖、断言强度与实施正确性；自行对关键用例执行反向探针——改坏被测实现 → 确认对应用例变红 → 原样还原实现 → 全量用例复跑全绿，把改坏点与还原确认结果编入 validation_steps 的 negative_probe 申报；用例未变红视为该用例无对抗力，须报 issue；无测试对象（无代码、接口契约与数据口径变更）时以 completed=false + 结构化 skip_reason 申报；不得跳过核验直接提交通过"
+          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载接口测试规范执行脚本实跑通过」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
           - "验证完成后（含 verdict=failed 轮次）按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的隔离扫描项目；无残留即通过，清理结果纳入 validation_steps 申报"
           - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤⑥的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节、验收标准与数据产出要求），用于准备测试数据与对照 API 合约"
@@ -145,6 +145,7 @@ phases:
           - "提交 opx_agent_submit，必带 verdict 与 verified_tasks（覆盖全部待验证 task）"
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查；禁止 edit/write 影响代码运行的内容；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
+          - "反向探针例外：执行反向探针核验时可临时改坏被测实现（仅限探针所需的最小改动），探针结束后必须原样还原并确认 git 工作区无残留改动（git status 无改动）、全量用例复跑全绿；探针内容禁止提交，不得保留任何痕迹；用例未变红视为该用例无对抗力，须报 issue"
           - "即使无 issue / 无待验证 task 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
       - id: verify_quality
         agents:
@@ -183,6 +184,7 @@ phases:
         instructions:
           - "将基准分支（{{base_branch}}）最新代码合并进当前工作分支（git merge 基准分支），解决合并冲突；修复范围仅限合并冲突涉及文件与回归失败定位文件（改动仅用于解决合并引入的问题，可超出现有执行边界，禁止借机扩大范围）"
           - "合并后回归复验：按已加载的开发实践规范执行构建验证；按已加载的接口测试规范启动服务并执行接口测试（含关键数据产出/搬迁回归断言）；全部通过才算通过，不分失败来源（含基准分支新代码引入的失败）"
+          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载接口测试规范执行脚本实跑通过」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
           - "按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的扫描分析项目；无对应 skill 规范时跳过并在申报中注明"
           - "清理后确认工作分支 git status 干净（含未跟踪文件）"
           - "逐项申报 validation_steps（completed + 证据；未执行项以 completed=false + 结构化 skip_reason 申报：{\"item\":\"<必做项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}）"

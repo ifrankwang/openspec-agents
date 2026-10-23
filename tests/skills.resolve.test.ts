@@ -149,13 +149,18 @@ describe("must_do 必做清单（机器可读）", () => {
     expect(resolveSkillsForCapabilities(["test-design"]).skillNames).toContain("test-design")
   })
 
+  test("api-test 声明 api_script / api_execution 两项必做清单", () => {
+    const apiItems = ["api_script", "api_execution"]
+    expect(getSkillMustDo("api-test")).toEqual(apiItems)
+    expect(scanSkillTags().skillMustDo.get("api-test")).toEqual(apiItems)
+  })
+
   test("未声明 must_do 的 skill → getSkillMustDo 返回 null（不参与覆盖度门禁）", () => {
     expect(getSkillMustDo("code-efficiency")).toBeNull()
-    expect(getSkillMustDo("api-test")).toBeNull()
     expect(getSkillMustDo("no-such-skill")).toBeNull()
   })
 
-  test("caps 不含质量门与测试设计 skill → 必做清单为空（不误伤）", () => {
+  test("caps 含接口测试能力 → 解析出 api-test 两项（质量门清单照常解析）", () => {
     const tool = resolveSkillsForCapabilities(["quality-gate", "efficiency", "api-testing"])
     const toolMustDo = tool.skillNames.flatMap((n) => getSkillMustDo(n) ?? [])
     expect(toolMustDo).toContain("deep_scan")
@@ -163,7 +168,8 @@ describe("must_do 必做清单（机器可读）", () => {
 
     const task = resolveSkillsForCapabilities(["api-testing", "efficiency", "dev-practices"])
     const taskMustDo = task.skillNames.flatMap((n) => getSkillMustDo(n) ?? [])
-    expect(taskMustDo).toEqual([])
+    // caps 含 api-testing → 命中 api-test 的两项必做清单（声明顺序）
+    expect(taskMustDo).toEqual(["api_script", "api_execution"])
   })
 
   test("test-design 挂载接线：task/task-simple/review/review-simple 各 step 解析正确", () => {
@@ -173,30 +179,39 @@ describe("must_do 必做清单（机器可读）", () => {
     const capsOf = (wf: ReturnType<typeof readWf>, stepId: string, agentId: string) =>
       wf.stepMap.get(stepId)!.step.agents.find((a) => a.id === agentId)!.capability_tags
     const design = ["behavior_surface", "case_matrix", "negative_probe"]
+    // 合并顺序按 caps 解析顺序（gate.ts resolveMustDoForCaps → resolveSkillsForCapabilities）：
+    // 任务验证/合并审查能力集首个命中项为 api-testing → api-test 两项，随后 test-design 三项。
+    const reviewLayerMustDo = ["api_script", "api_execution", ...design]
 
     const taskWf = readWf("task.yaml")
-    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(design)
-    for (const item of design) {
+    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(reviewLayerMustDo)
+    for (const item of reviewLayerMustDo) {
       expect(resolveMustDoForCaps(capsOf(taskWf, "implement", "openspec-developer"), idx)).toContain(item)
     }
     expect(resolveMustDoForCaps(capsOf(taskWf, "verify_tool", "openspec-reviewer-tool"), idx)).not.toContain("behavior_surface")
+    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_tool", "openspec-reviewer-tool"), idx)).not.toContain("api_script")
 
     const simpleWf = readWf("task-simple.yaml")
     const reviewMustDo = resolveMustDoForCaps(capsOf(simpleWf, "quality_review", "openspec-reviewer"), idx)
-    for (const item of design) expect(reviewMustDo).toContain(item)
+    for (const item of reviewLayerMustDo) expect(reviewMustDo).toContain(item)
     expect(reviewMustDo).toContain("compile")
+
+    // verify_cleanup 能力集含 api-testing → 解析出 api-test 两项（该 step 能力集不含 test-design，不要求三项）
+    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_cleanup", "openspec-developer"), idx)).toEqual(["api_script", "api_execution"])
+    expect(resolveMustDoForCaps(capsOf(simpleWf, "verify_cleanup", "openspec-developer"), idx)).toEqual(["api_script", "api_execution"])
 
     // 独立审查会话两个 workflow 与 change 会话同口径：dev 与任务验证/合并审查层均挂 test-design
     const reviewWf = readWf("review.yaml")
-    expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(design)
-    for (const item of design) {
+    expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(reviewLayerMustDo)
+    for (const item of reviewLayerMustDo) {
       expect(resolveMustDoForCaps(capsOf(reviewWf, "implement", "openspec-developer"), idx)).toContain(item)
     }
     expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_tool", "openspec-reviewer-tool"), idx)).not.toContain("behavior_surface")
+    expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_tool", "openspec-reviewer-tool"), idx)).not.toContain("api_script")
 
     const simpleReviewWf = readWf("review-simple.yaml")
     const simpleReviewMustDo = resolveMustDoForCaps(capsOf(simpleReviewWf, "quality_review", "openspec-reviewer"), idx)
-    for (const item of design) expect(simpleReviewMustDo).toContain(item)
+    for (const item of reviewLayerMustDo) expect(simpleReviewMustDo).toContain(item)
     expect(simpleReviewMustDo).toContain("compile")
   })
 })
@@ -215,7 +230,7 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
     }
     expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
     expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
-    expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency", "api-testing"])
+    expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency"])
     expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "test-design", "efficiency", "dev-practices", "cleanup"])
     expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
     expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency", "tool-improvement"])

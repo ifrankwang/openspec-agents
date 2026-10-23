@@ -123,10 +123,9 @@ describe("P6-B 新流动态视图", () => {
     // instructionBlock 文案保留
     expect(output).toContain("# ✅ 当前轮到你执行")
     expect(output).toContain("**必须**调用 `opx_agent_submit()` 提交")
-    // capability_tags [quality-gate, efficiency, api-testing] → 解析出的 skill 名
+    // capability_tags [quality-gate, efficiency] → 解析出的 skill 名
     expect(output).toContain("## Skill 加载清单")
     expect(output).toContain("`code-efficiency`")
-    expect(output).toContain("`api-test`")
     expect(output).toContain("`quality-gate`")
     expect(output).toContain("## 操作指引")
     // 不泄露旧流专属提交工具

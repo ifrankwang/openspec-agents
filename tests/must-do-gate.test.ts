@@ -213,7 +213,7 @@ describe("uncoveredMustDo / resolveMustDoForCaps", () => {
     ]
     expect(uncoveredMustDo(["test-design"], declared, tdIdx)).toEqual([])
     expect(uncoveredMustDo(["test-design"], declared.slice(0, 2), tdIdx)).toEqual(["negative_probe"])
-    // api-test 未声明 must_do → 该能力不参与覆盖度门禁
+    // 本用例注入的索引未声明 api-test 的必做清单 → 该能力不参与覆盖度门禁（真实索引下 api-test 已声明两项，见下方真实索引用例）
     expect(uncoveredMustDo(["api-testing"], [], tdIdx)).toEqual([])
   })
 
@@ -348,13 +348,14 @@ describe("verify_tool 提交必做清单覆盖度门禁", () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
-  test("真实 skill 索引 + 真实提交路径：verify_task 未申报三项测试设计物被拒，逐项申报后推进 verify_quality", async () => {
+  test("真实 skill 索引 + 真实提交路径：verify_task 未申报五项必做项被拒，逐项申报后推进 verify_quality", async () => {
     const root = `/tmp/mdg-9-${Date.now()}`
     const wt = setupWorkspace(root, CID)
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
     await driveToVerifyTask(wt, CID)
-    // 真实 skill 索引（test-design 声明 must_do）驱动 verify_task 覆盖度门禁
+    // 真实 skill 索引驱动 verify_task 覆盖度门禁：
+    // 能力集首段 api-testing → api_script / api_execution，随后 test-design 三项，共五项。
     __setMustDoIndex(scanSkillTags())
     try {
       const err = await agent_submit.execute(
@@ -362,6 +363,8 @@ describe("verify_tool 提交必做清单覆盖度门禁", () => {
         makeCtx("openspec-reviewer-task", wt),
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
+      expect(err.message).toContain("api_script")
+      expect(err.message).toContain("api_execution")
       expect(err.message).toContain("behavior_surface")
       expect(err.message).toContain("case_matrix")
       expect(err.message).toContain("negative_probe")
@@ -372,9 +375,11 @@ describe("verify_tool 提交必做清单覆盖度门禁", () => {
         {
           change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"],
           validation_steps: [
-            { step: "behavior_surface: 行为面清单", completed: true, evidence: "行为面清单已核验" },
-            { step: "case_matrix: 用例矩阵", completed: true, evidence: "用例矩阵已核验" },
-            { step: "negative_probe: 探针记录", completed: true, evidence: "探针记录已核验" },
+            { step: "api_script: 变更接口对应的 .http 脚本", completed: true, evidence: "脚本已核验存在并匹配变更后契约" },
+            { step: "api_execution: ijhttp 实跑结果", completed: true, evidence: "ijhttp 实跑通过，覆盖变更接口" },
+            { step: "behavior_surface: 行为面清单", completed: true, evidence: "行为面清单已独立推导并核验" },
+            { step: "case_matrix: 用例矩阵", completed: true, evidence: "用例矩阵已独立推导并核验" },
+            { step: "negative_probe: 探针记录", completed: true, evidence: "反向探针改坏点与还原确认结果已核验" },
           ],
         },
         makeCtx("openspec-reviewer-task", wt),
