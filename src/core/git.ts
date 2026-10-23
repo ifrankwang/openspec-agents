@@ -219,6 +219,47 @@ export async function isWorktreeClean(worktree: string): Promise<boolean> {
   return out.length === 0
 }
 
+/**
+ * 文档类路径判定：`openspec/` 下文件与 `.md` 后缀文件属文档类（reviewer 直改自动提交的白名单）。
+ * 源码、配置、脚本等其余路径一律不算文档类。
+ */
+export function isDocLikePath(p: string): boolean {
+  return p.startsWith("openspec/") || /\.md$/i.test(p)
+}
+
+/**
+ * 列出 worktree 中「非文档类」的未提交改动文件（已跟踪修改/删除 + 未跟踪新文件）。
+ *
+ * 用途：reviewer 家族提交前的机制层预检——反向探针改坏的实现若未还原，其改动会被自动 commit
+ * 静默吞掉。过滤 `openspec/states/`（编排状态文件）与文档类，其余一律视为需要清理的代码类改动；
+ * 结果去重并保持 `git status --porcelain` 的出现顺序。
+ *
+ * status 查询失败时返回空数组，属 fail-open 降级：读不到工作区状态不阻断审查提交
+ * （与 runGit 失败返回空串的既有降级口径一致），不要误认为是 bug。
+ */
+export async function listDirtyNonDocFiles(worktree: string): Promise<string[]> {
+  // 用 -uall 让未跟踪目录展开成具体文件：默认 porcelain 会把新建目录折叠成 `?? docs/`，
+  // 目录路径既不是 openspec/ 前缀也不以 .md 结尾，会让「新目录里只放了 .md」被误判为代码类。
+  const res = await runGitChecked(worktree, ["status", "--porcelain", "-uall"])
+  if (!res.success) return []
+  const seen = new Set<string>()
+  const files: string[] = []
+  // 用 parseStatusEntries 而非 parsePorcelainPaths：rename 条目（`R  old -> new`）必须双向解析。
+  // 只取新路径会漏判「代码文件改名为 .md」——旧路径的代码删除被当成文档改动放行，删除会被自动
+  // commit 静默吞掉。任一方向路径非文档类即视为需清理的代码类改动。
+  for (const entry of parseStatusEntries(res.stdout)) {
+    for (const p of entry.paths) {
+      if (!p) continue
+      if (p.startsWith("openspec/states/")) continue
+      if (isDocLikePath(p)) continue
+      if (seen.has(p)) continue
+      seen.add(p)
+      files.push(p)
+    }
+  }
+  return files
+}
+
 export async function markTaskGroupCheckboxesComplete(
   worktree: string,
   changeId: string,
@@ -771,53 +812,83 @@ export async function reconcileMainPollution(
 
 /** worktree 自动提交（reviewer 家族文档直改兜底）结果。 */
 export interface AutoCommitResult {
-  /** skipped：过滤 openspec/states/ 后无已跟踪文件变更（未触发提交）；committed：add -u + commit 完成；
-   *  failed：git 调用失败（降级返回，不抛异常）。 */
+  /** skipped：过滤 openspec/states/ 后既无已跟踪文件变更、也无未跟踪文档类（未触发提交）；
+   *  committed：add -u + 未跟踪文档类的 git add + commit 完成；failed：git 调用失败（降级返回，不抛异常）。 */
   status: "skipped" | "committed" | "failed"
-  /** 纳入自动提交的已跟踪文件变更路径（skipped 时为空）。 */
+  /** 本次实际提交的文件路径（已跟踪变更 + 未跟踪文档类）。rename 条目只保留新路径，
+   *  避免同一重命名被计成两个文件；旧路径不丢信息——重命名前路径的删除已由提交前预检拦截。 */
   files: string[]
   /** status=failed 时的失败 stderr。 */
   stderr?: string
-  /** 未跟踪新建文件（?? 条目）路径清单：add -u 不纳入提交，提示编排者另行处理。 */
+  /** 未纳入自动提交的未跟踪文件（?? 条目）路径清单：非文档类，提示编排者/开发者另行处理。
+   *  未跟踪的文档类文件已纳入自动提交，不出现在此清单。 */
   untrackedFiles: string[]
 }
 
 /**
- * 自动提交 worktree 内已跟踪文件的未提交修改/删除（reviewer 家族文档直改兜底）。
+ * 自动提交 worktree 内的文档类改动（reviewer 家族文档直改兜底）。
  *
- * 触发场景：审查者/架构师按文档直改义务修正文档/注释后，由 opx_agent_submit 在 verdict
- * 校验通过后调用——未提交修正会被下一轮工具检查点增量检测误判为新变更，也会在
- * reconcileMainPollution 的干净树预检处死锁，提交时自动 commit 兜底。
+ * 触发场景：审查者/架构师按文档直改义务修正文档后，由 opx_agent_submit 在 verdict 校验通过后
+ * 调用——未提交修正会被下一轮工具检查点增量检测误判为新变更，也会在 reconcileMainPollution 的
+ * 干净树预检处死锁，提交时自动 commit 兜底。
  *
  * 语义：
- * 1. `status --porcelain` 解析路径清单，过滤 `openspec/states/` 编排状态目录；过滤后无已跟踪
- *    文件变更 → skipped（未触发）。
- * 2. 有变更 → `add -u`（仅已跟踪文件的修改/删除，未跟踪新建文件不纳入，排除 openspec/states/）
+ * 1. `status --porcelain` 解析条目（rename 双向解析），过滤 `openspec/states/` 编排状态目录；
+ *    文档类（openspec/ 与 .md）中的已跟踪改动与未跟踪新建文件都纳入提交，其余未跟踪文件
+ *    （非文档类）不纳入、经 untrackedFiles 提示调用方处理。
+ * 2. 过滤后既无已跟踪变更、也无未跟踪文档类 → skipped（不产生空 commit）。
+ * 3. 有可提交内容 → `add -u`（已跟踪修改/删除，排除 openspec/states/）+ `add -- <未跟踪文档>`
  *    → `commit`（消息风格对齐既有 `docs(tasks):` / `docs(openspec):` 惯例）。
- * 3. 任一 git 调用失败 → failed（含 stderr），不抛异常——调用方据此在返回体提示，不阻塞 verdict 写入。
+ * 4. 任一 git 调用失败 → failed（含 stderr），不抛异常——调用方据此在返回体提示，不阻塞 verdict 写入。
  */
 export async function autoCommitWorktreeChanges(
   wtPath: string,
   agent: string,
   stepId: string,
 ): Promise<AutoCommitResult> {
-  const statusRes = await runGitChecked(wtPath, ["status", "--porcelain"])
+  // -uall：未跟踪目录展开为具体文件，避免新建目录里的文档类文件被折叠成目录路径而判成非文档类。
+  const statusRes = await runGitChecked(wtPath, ["status", "--porcelain", "-uall"])
   if (!statusRes.success) {
     return { status: "failed", files: [], untrackedFiles: [], stderr: statusRes.stderr }
   }
-  const files: string[] = []
-  const untrackedFiles: string[] = []
-  for (const line of statusRes.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
-    const path = parsePorcelainPaths(line)[0]
-    if (!path || path.startsWith("openspec/states/")) continue
-    if (line.startsWith("??")) untrackedFiles.push(path)
-    else files.push(path)
+  const trackedFiles: string[] = []
+  const untrackedDocFiles: string[] = []
+  const untrackedOtherFiles: string[] = []
+  const seen = new Set<string>()
+  const pushUnique = (list: string[], path: string): void => {
+    if (seen.has(path)) return
+    seen.add(path)
+    list.push(path)
   }
-  if (files.length === 0) return { status: "skipped", files: [], untrackedFiles }
+  for (const entry of parseStatusEntries(statusRes.stdout)) {
+    const isUntracked = entry.x === "?" && entry.y === "?"
+    if (isUntracked) {
+      for (const path of entry.paths) {
+        if (!path || path.startsWith("openspec/states/")) continue
+        pushUnique(isDocLikePath(path) ? untrackedDocFiles : untrackedOtherFiles, path)
+      }
+      continue
+    }
+    // 已跟踪条目：rename（`R  old -> new`）只记新路径，避免同一重命名在提示里计成两个文件。
+    // 旧路径不丢信息：重命名前路径的删除已由提交前预检拦截（走不到这里的自动提交阶段）。
+    const newPath = entry.paths[entry.paths.length - 1]
+    if (!newPath || newPath.startsWith("openspec/states/")) continue
+    pushUnique(trackedFiles, newPath)
+  }
+  if (trackedFiles.length === 0 && untrackedDocFiles.length === 0) {
+    return { status: "skipped", files: [], untrackedFiles: untrackedOtherFiles }
+  }
 
+  const committedFiles = [...trackedFiles, ...untrackedDocFiles]
   const addResult = await runGitChecked(wtPath, ["add", "-u", "--", ".", ":(exclude)openspec/states"])
   if (!addResult.success) {
-    return { status: "failed", files, untrackedFiles, stderr: addResult.stderr }
+    return { status: "failed", files: committedFiles, untrackedFiles: untrackedOtherFiles, stderr: addResult.stderr }
+  }
+  if (untrackedDocFiles.length > 0) {
+    const addDocResult = await runGitChecked(wtPath, ["add", "--", ...untrackedDocFiles])
+    if (!addDocResult.success) {
+      return { status: "failed", files: committedFiles, untrackedFiles: untrackedOtherFiles, stderr: addDocResult.stderr }
+    }
   }
   const commitResult = await runGitChecked(wtPath, [
     "commit",
@@ -825,7 +896,7 @@ export async function autoCommitWorktreeChanges(
     `docs(opx): direct fixes by ${agent} (${stepId})`,
   ])
   if (!commitResult.success) {
-    return { status: "failed", files, untrackedFiles, stderr: commitResult.stderr }
+    return { status: "failed", files: committedFiles, untrackedFiles: untrackedOtherFiles, stderr: commitResult.stderr }
   }
-  return { status: "committed", files, untrackedFiles }
+  return { status: "committed", files: committedFiles, untrackedFiles: untrackedOtherFiles }
 }

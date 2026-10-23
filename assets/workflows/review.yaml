@@ -41,7 +41,7 @@ phases:
           - "以视图 Issue 清单驱动修复：Low+ 必办（修复后经 fixed_issue_ids 上报进入待复核），Info 建议修复不阻塞提交；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定状态，由报源 reviewer 裁定，被驳回的 issue 回待修复）；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "执行边界缺省整个 worktree（独立审查无分析环节，不生成边界白名单）；issue 的 file 字段指向的文件即修复边界，修复这些文件（含回归引入问题）不算越界；可按 issue 的 suggestion 直接执行修复；reviewer 的 boundary_expansion 已并入边界"
           - "对修复未过次数≥2 的 issue 须先完成 5-Why 根因分析再动手，不得跳过分析直接改代码"
-          - "修复完成后先 git commit 再提交；提交前按已加载的质量门类 skill 完成本地构建验证，并按维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次修复文件逐项自检，自检结论与工具检查结果一并汇总进 self_check_results"
+          - "修复完成后先 git commit 再提交（未提交内容会被工具拒绝）；提交前按已加载的质量门类 skill 完成本地构建验证，并按维度规范类 skill（style/architecture/performance/security/maintainability 能力类别）对本次修复文件逐项自检，自检结论与工具检查结果一并汇总进 self_check_results"
           - "自证/验证需启动服务或基础设施时，一律按已加载技术栈 skill 的隔离启动规范以隔离方式启动，隔离标识与建议端口以视图 Worktree 区块为准；验证完成后停止本次启动的实例，不留残留，残留判定遵循已加载清理规范的归属判别，无法确认归属本变更的进程一律不清；禁止为腾出端口或资源而停止、复用或干扰非本会话启动的进程"
           - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由，并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复"
           - "提交 opx_agent_submit：必传 verdict；修复完成的 issue 经 fixed_issue_ids 上报、不可修 issue 经 exempt_issue_ids 申请豁免"
@@ -73,6 +73,7 @@ phases:
           - "报静态分析类 issue 时，description 必须含：①复现命令（非静默形态，含必要开关）；②实测数据（命中类清单/计数）；③规则默认阈值与当前项目配置对比（引用可改的配置文件路径）"
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行工具；禁止 edit/write 影响代码运行的内容；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
+          - "提交前工作区不得残留代码类未提交改动（反向探针改动必须还原、新增临时文件必须删除）；文档类改动（openspec/ 下文件与 .md 文件，含新建的未跟踪文件）会在提交时自动 commit，不受此限。工具层会拒绝带代码类未提交改动的提交"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
           - "压制类 issue 严重级别至少 Low"
@@ -97,6 +98,7 @@ phases:
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit；可 bash 启动服务/执行检查；禁止 edit/write 影响代码运行的内容；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
           - "反向探针例外：执行反向探针核验时可临时改坏被测实现（仅限探针所需的最小改动），探针结束后必须原样还原并确认 git 工作区无残留改动（git status 无改动）、全量用例复跑全绿；探针内容禁止提交，不得保留任何痕迹；用例未变红视为该用例无对抗力，须报 issue"
+          - "提交前工作区不得残留代码类未提交改动（反向探针改动必须还原、新增临时文件必须删除）；文档类改动（openspec/ 下文件与 .md 文件，含新建的未跟踪文件）会在提交时自动 commit，不受此限。工具层会拒绝带代码类未提交改动的提交"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "禁止为腾出端口或资源而停止、复用或干扰非本会话启动的进程（含用户或其他会话运行的服务实例）；验证所需环境一律按隔离标识隔离启动"
       - id: verify_quality
@@ -124,4 +126,5 @@ phases:
         constraints:
           - "禁止运行确定性工具检查（包括但不限于 linter/formatter/静态分析/编译/测试/架构约束检查等）；运行权归工具检查层，本约束不排斥基于已加载 skill 做工具化可行性判断并提交工具改进 issue"
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit；禁止 edit/write 影响代码运行的内容，仅输出审查报告；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
+          - "提交前工作区不得残留代码类未提交改动（反向探针改动必须还原、新增临时文件必须删除）；文档类改动（openspec/ 下文件与 .md 文件，含新建的未跟踪文件）会在提交时自动 commit，不受此限。工具层会拒绝带代码类未提交改动的提交"
           - "即使无 issue 也必须提交 verdict=passed；passed=false 时必须有至少一个归属本维度的 Low+ issue 作为理由"

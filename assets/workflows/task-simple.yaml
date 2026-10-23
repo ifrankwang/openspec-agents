@@ -97,6 +97,7 @@ phases:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）；可 bash 运行确定性工具检查、启动服务并执行验证命令"
           - "只报不改与文档直改：禁止 edit/write 影响代码运行的内容（逻辑类问题仅上报）；文档/注释等不影响代码运行的内容发现不一致/过时问题时直接修正，不为此报 issue"
           - "反向探针例外：执行反向探针核验时可临时改坏被测实现（仅限探针所需的最小改动），探针结束后必须原样还原并确认 git 工作区无残留改动（git status 无改动）、全量用例复跑全绿；探针内容禁止提交，不得保留任何痕迹；用例未变红视为该用例无对抗力，须报 issue"
+          - "提交前工作区不得残留代码类未提交改动（反向探针改动必须还原、新增临时文件必须删除）；文档类改动（openspec/ 下文件与 .md 文件，含新建的未跟踪文件）会在提交时自动 commit，不受此限。工具层会拒绝带代码类未提交改动的提交"
           - "即使无 issue / 无待验证 task 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
           - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"

@@ -15,7 +15,7 @@ import { agentToReviewDimension, agentToReviewLayer, isReviewerFamily, readIssue
 import { REVIEW_DIMENSIONS } from "../types.ts"
 import type { Dimension } from "../types.ts"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.ts"
-import { autoCommitWorktreeChanges, reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
+import { autoCommitWorktreeChanges, listDirtyNonDocFiles, reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
 import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
@@ -792,6 +792,28 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
     if (stepPhase === "review") {
+      // 机制层预检：工作区不得残留「非文档类」未提交改动。reviewer 家族提交后会对 wtPath 自动
+      // commit 工作区改动（见下方 isReviewerFamily 分支），反向探针改坏的实现若未还原会被静默
+      // 提交掉；这里在一切参数处理与状态写入之前拦截，拒绝时零状态变更（与 simple implement
+      // 检查同守则）。failed 提交同样拦截——failed 也会触发自动 commit，不拦会把探针残留提交掉。
+      // 文档类（openspec/ 与 .md）放行，由自动 commit 兜底；verify_cleanup 是 developer 身份，
+      // 非 reviewer 家族，不经此预检。
+      if (isReviewerFamily(ctx.agent)) {
+        const dirtyNonDoc = await listDirtyNonDocFiles(wtPath)
+        if (dirtyNonDoc.length > 0) {
+          const fileLines = dirtyNonDoc.map((f) => `  - ${f}`).join("\n")
+          throw new Error(
+            `提交被拒绝：工作区存在未提交的代码类改动。\n` +
+            `可能是反向探针改坏的实现未还原，或违反了「只报不改」直接修改了代码。\n` +
+            `涉及文件：\n${fileLines}\n` +
+            `请先清理后再提交：\n` +
+            `  - 已跟踪文件的改动：git checkout -- <文件> 还原\n` +
+            `  - 新增的临时文件：直接删除\n` +
+            `文档类改动（openspec/ 下文件与 .md 文件）不受此限，提交时会自动 commit；\n` +
+            `确属必要的代码修正，请自行 commit 后再提交。`,
+          )
+        }
+      }
       // 必做清单覆盖度门禁取「当前提交 agent 的能力集」：各 agent 只按自身 capability_tags 解析 skill。
       // verify_quality 多 agent 各自解析不出声明 must_do 的 skill（自动跳过），verify_tool 按 quality-gate
       // 能力集、verify_task 按 test-design 能力集分别校验各自的必做清单。
@@ -810,15 +832,21 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     } else if (stepPhase === "todo") {
       handleAnalyzeParams(item, params)
     } else if (stepPhase === "in_progress") {
-      // simple 模式 implement 提交强检查（2.2）：工作区必须无未提交内容，不干净直接拒绝并提示先 commit。
-      // simple 无 analyze 环节、执行边界默认整个 worktree，dev 提交即收尾合并的载体，未提交内容会
-      // 让收尾裸合并携带脏状态；检查在一切参数处理与状态写入之前，拒绝时零状态变更（含内存态）。
-      // 收尾门禁（completeTaskGroupExecute 的 worktree 干净检查）仍原样保留作最终兜底。
-      if (state.mode === "simple" && params.step_id === "implement") {
+      // implement 提交工作区干净校验：工作区必须无未提交内容，不干净直接拒绝并提示先 commit。
+      // 两种模式口径不同：
+      // - simple：无 analyze 环节、执行边界默认整个 worktree，dev 提交即收尾合并的载体，未提交内容
+      //   会让收尾裸合并携带脏状态——无条件检查（含 verdict=failed）。
+      // - full：仅 verdict=passed 时检查。failed 提交多为 blocker/需求缺口上报，此时半成品脏工作区
+      //   属正常，强查会把 dev 报 blocker 的路径堵死。
+      // 检查在一切参数处理与状态写入之前，拒绝时零状态变更（含内存态）；收尾门禁
+      // （completeTaskGroupExecute 的 worktree 干净检查）仍原样保留作最终兜底。
+      if (params.step_id === "implement" && (state.mode === "simple" || params.verdict === "passed")) {
         const clean = await isWorktreeClean(wtPath)
         if (!clean) {
           throw new Error(
-            "simple 模式 implement 提交被拒绝：工作区存在未提交内容。\n请先 git commit 提交全部变更后再提交 implement。"
+            state.mode === "simple"
+              ? "simple 模式 implement 提交被拒绝：工作区存在未提交内容。\n请先 git commit 提交全部变更后再提交 implement。"
+              : "full 模式 implement 提交被拒绝：工作区存在未提交内容。\n请先 git commit 后再提交 implement。"
           )
         }
       }
@@ -875,12 +903,12 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         )
       } else if (ac.status === "failed") {
         autoCommitLines.push(
-          `- ⚠️ worktree 直改修正自动提交失败：${ac.stderr || "未知错误"}。请编排者安排补提交（worktree 内 git add -u 后 commit）`,
+          `- ⚠️ worktree 直改修正自动提交失败：${ac.stderr || "未知错误"}。请编排者安排补提交（在 worktree 内手工 add 并 commit：已跟踪改动用 git add -u，未跟踪文档用 git add -- <文件>）`,
         )
       }
       if (ac.untrackedFiles.length > 0) {
         autoCommitLines.push(
-          `- ⚠️ 存在未跟踪新建文件未纳入自动提交（须纳入版本控制时由编排者/开发者处理）：${ac.untrackedFiles.join("、")}`,
+          `- ⚠️ 存在未跟踪的非文档类文件未纳入自动提交（文档类已自动提交；这些须由编排者/开发者自行处理）：${ac.untrackedFiles.join("、")}`,
         )
       }
     }
