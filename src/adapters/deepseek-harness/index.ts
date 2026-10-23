@@ -10,9 +10,12 @@
  * - 本包自有的 `openspec-opx-tools` cordis 插件：6 个 opx_* 编排工具注册为 DSH 原生工具，
  *   每次调用从 `exec.agent.session.header.cwd` 取会话项目目录。多项目共用同一插件进程时
  *   各自作用于各自项目（MCP 形态因 worktree 固定在进程启动参数上而做不到，见 patch 注释）。
- * - DSH 官方能力：`@deepseek-ai/dsh-skill-filesystem`（skill 根）、`@deepseek-ai/dsh-tool-subagent`
- *   （每个 assets/agents 子代理一个 DSH 原生 subagent 工具）。opx_* 工具不再经
- *   `@deepseek-ai/dsh-mcp-client` 桥接——原生插件已直接注册工具，patch 内不挂 MCP client。
+ * - DSH 官方能力：`@deepseek-ai/dsh-skill-filesystem`（skill 根）、子代理委派。
+ *   子代理的角色提示词与工具集由 `@deepseek-ai/dsh-agent-preset` 声明承载，每个物理子代理
+ *   一行 preset + 一行 `@deepseek-ai/dsh-tool-subagent`（以 `agentPreset` 引用前者）——
+ *   DSH 0.2.1 起 `dsh-tool-subagent` 移除了 `persona` / `toolFilter` / 后台模式配置，
+ *   角色与工具组合改由 preset 表达。opx_* 工具不再经 `@deepseek-ai/dsh-mcp-client` 桥接——
+ *   原生插件已直接注册工具，patch 内不挂 MCP client。
  */
 import { writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -95,6 +98,25 @@ interface DshSubagentEntry {
   config: Record<string, unknown>
 }
 
+/**
+ * YAML `!!js` 表达式节点。
+ *
+ * DSH 的 entry-list 方言把 `!!js <expr>` 解析为延迟求值的表达式（官方 preset 用它做平台分支）。
+ * js-yaml 默认 schema 不认识该标签，故以自定义 Type 承载：dump 时输出 `!!js <expr>` 原文。
+ */
+class DshJsExpression {
+  constructor(readonly expr: string) {}
+}
+
+/** 带 `!!js` 标签的 YAML schema（仅 DSH patch 生成使用）。 */
+const DSH_YAML_SCHEMA = yaml.DEFAULT_SCHEMA.extend([
+  new yaml.Type("tag:yaml.org,2002:js", {
+    kind: "scalar",
+    instanceOf: DshJsExpression,
+    represent: (value: unknown) => (value as DshJsExpression).expr,
+  }),
+])
+
 /** 将 openspec-architect 转换为 openspec_architect 这类 DSH 工具名后缀。 */
 function dshAgentSuffix(name: string): string {
   return name.replace(/^openspec-/, "").replace(/-/g, "_")
@@ -120,16 +142,75 @@ const DSH_SUBAGENT_TOOL_ACCESS_PREAMBLE = `## DSH 工具接入（必读）
   - \`opx_status\`
   - \`opx_agent_submit\`
 - 调用工具时必须携带 \`_agent\` 参数传自身角色名（如 \`openspec-developer\`），否则身份无法判定、会被按编排主代理视角处理。
-- 如果当前工具列表中没有这些工具，请立即调用 \`dev_tool_search\` 搜索 \`opx\`，或一次性解锁：
-  \`\`\`json
-  {"toolNames": ["opx_status", "opx_agent_submit"]}
-  \`\`\`
-  如果计划使用 \`todo_write\` 跟踪任务，也请在同一轮一并解锁。
-- 严禁使用 \`find\` / \`which\` / \`grep\` 等 shell 命令搜索 \`opx\`、\`openspec\`、MCP 配置或安装路径；工具未出现是因为尚未解锁，不是未安装。
-- 解锁后第一件事是调用 \`opx_status\` 获取上下文，不要先探查仓库或读取状态文件。
+- 若工具列表中没有这些工具，不要用 shell 搜索 \`opx\`、\`openspec\`、MCP 配置或安装路径——它们不是被隐藏，而是插件未加载成功，直接向编排者报告。
+- 开始工作前第一件事是调用 \`opx_status\` 获取上下文，不要先探查仓库或读取状态文件。
 `
 
-/** 从 assets/agents/*.md 收集 DSH 子代理工具（跳过主代理模板）。 */
+/**
+ * 每个子代理的 Agent Preset 组合（DSH 0.2.1 起子代理的角色提示词与工具集由 preset 声明，
+ * `@deepseek-ai/dsh-tool-subagent` 的 `persona` / `toolFilter` 已移除）。
+ *
+ * 该组合是子代理可见的完整工具面：opx_* 原生工具由本包在宿主层全局注册，无需在此重复挂载。
+ */
+function dshSubagentPresetPlugins(editAllowed: boolean): Record<string, unknown>[] {
+  return [
+    {
+      id: "agent-instructions",
+      name: "@deepseek-ai/dsh-agent-instructions",
+      config: { maxBytes: 65536 },
+    },
+    {
+      id: "tool-fs",
+      name: "@deepseek-ai/dsh-tool-fs",
+      ...(editAllowed ? {} : { config: { write: false, edit: false } }),
+    },
+    {
+      id: "tool-fs-search",
+      name: "@deepseek-ai/dsh-tool-fs-search",
+      config: { sampleOverCapGlobResults: false },
+    },
+    {
+      id: "tool-bash",
+      name: "@deepseek-ai/dsh-tool-bash",
+      disabled: new DshJsExpression("process.platform === 'win32'"),
+    },
+    {
+      id: "tool-pwsh",
+      name: "@deepseek-ai/dsh-tool-pwsh",
+      disabled: new DshJsExpression("process.platform !== 'win32'"),
+    },
+    { id: "skill-filesystem", name: "@deepseek-ai/dsh-skill-filesystem" },
+    { id: "tool-skill", name: "@deepseek-ai/dsh-tool-skill" },
+    {
+      id: "tool-todo",
+      name: "@deepseek-ai/dsh-tool-todo",
+      config: { allowParallelInProgress: true },
+    },
+    { id: "tool-ask-user", name: "@deepseek-ai/dsh-tool-ask-user" },
+    { id: "tool-web", name: "@deepseek-ai/dsh-tool-web", config: { fetch: true, searchTimeoutMs: 60000 } },
+    {
+      id: "compaction",
+      name: "cordis:group",
+      group: true,
+      isolate: { compaction: true, toolResultPruner: true },
+      config: [
+        { id: "compaction-basic", name: "@deepseek-ai/dsh-compaction-basic" },
+        {
+          id: "tool-result-pruner",
+          name: "@deepseek-ai/dsh-compaction-tool-result-pruner",
+          config: { thresholdChars: 8192, headChars: 4096, tailChars: 1024 },
+        },
+      ],
+    },
+  ]
+}
+
+/**
+ * 从 assets/agents/*.md 收集 DSH 子代理：每个物理子代理生成一个 Agent Preset 声明行
+ * 与一个 `@deepseek-ai/dsh-tool-subagent` 工具行（后者以 `agentPreset` 引用前者）。
+ *
+ * preset 行必须排在工具行之前：工具行在加载时校验 `agentPreset` 是否已声明。
+ */
 function collectDshSubagentEntries(): DshSubagentEntry[] {
   const agentsRoot = resolve("assets", "agents")
   const entries: DshSubagentEntry[] = []
@@ -142,30 +223,41 @@ function collectDshSubagentEntries(): DshSubagentEntry[] {
     const description = (frontmatter.description as string) ?? ""
     const persona = [DSH_SUBAGENT_TOOL_ACCESS_PREAMBLE, description, body.trim()].filter(Boolean).join("\n\n")
     const suffix = dshAgentSuffix(name)
-    entries.push({
-      id: `openspec-subagent-${suffix}`,
-      name: "@deepseek-ai/dsh-tool-subagent",
-      config: {
-        provider: "spawn",
-        toolName: `openspec_${suffix}`,
-        persona,
-        enableRunInBackground: false,
-        backgroundMode: "one-shot",
-        ...(denyEditTools(frontmatter)
-          ? { toolFilter: { deny: ["write", "edit", "apply_patch", "str_replace_editor"] } }
-          : {}),
+    const presetId = `openspec-${suffix.replace(/_/g, "-")}`
+    entries.push(
+      {
+        id: `openspec-preset-${suffix}`,
+        name: "@deepseek-ai/dsh-agent-preset",
+        config: {
+          id: presetId,
+          name,
+          description,
+          plugins: [
+            { id: "persona", name: "@deepseek-ai/dsh-persona", config: { prefix: persona } },
+            ...dshSubagentPresetPlugins(!denyEditTools(frontmatter)),
+          ],
+        },
       },
-    })
+      {
+        id: `openspec-subagent-${suffix}`,
+        name: "@deepseek-ai/dsh-tool-subagent",
+        config: {
+          provider: "spawn",
+          toolName: `openspec_${suffix}`,
+          agentPreset: presetId,
+        },
+      },
+    )
   }
   return entries
 }
 
-/** 生成完整的 DSH cordis patch 内容：基础原生工具插件行 + skill 根 + 每个子代理一个 DSH 原生 subagent 工具。 */
+/** 生成完整的 DSH cordis patch 内容：基础原生工具插件行 + skill 根 + 每个子代理的 preset 与 subagent 工具。 */
 export function buildDshPatchContent(): string {
   const subagents = collectDshSubagentEntries()
   if (subagents.length === 0) return DSH_BASE_PATCH_YAML
   const subagentsYaml = yaml
-    .dump(subagents, { lineWidth: -1 })
+    .dump(subagents, { schema: DSH_YAML_SCHEMA, lineWidth: -1 })
     .split("\n")
     .map((line) => (line ? `    ${line}` : line))
     .join("\n")

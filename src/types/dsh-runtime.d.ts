@@ -10,7 +10,7 @@
  * 本文件不写任何顶层 export/import（保持为全局脚本文件），否则其中的 `declare module`
  * 会被 TypeScript 当作模块增强而非 ambient 声明。
  *
- * 形状依据（DSH 0.2.0-rc.2 源码）：
+ * 形状依据（DSH 0.2.1-rc.2 源码）：
  * - defineTool 与 schema DSL：dsh-tools/lib/types/schema.js:274
  * - ctx.tools.register：dsh-tools/README.zh.md:41-57
  * - exec 上下文字段：dsh-tools/lib/types/index.js:790-802（token/callId/rootCallId/name/signal/

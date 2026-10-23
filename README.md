@@ -84,6 +84,8 @@ dsh plugin --profile web add @ifrankwang/openspec-agents
 
 `web` 是 profile 名，换成你自己的（`~/.dsh/profiles/` 下的目录名）。装完重启该 profile；作用项目随当前会话所属项目自动确定，同一个 profile 下切换项目不必重装或改配置。编排工具需要在一个项目会话里使用。
 
+要求 DSH 0.2.1 及以上。子代理的角色提示词与工具集由 Agent Preset 承载，profile 需包含 web 应用 bundle（`desktop` / `web` 模板都满足）。子代理委派为异步：分派后等完成通知，再继续下一步。
+
 #### OpenCode
 
 要求 OpenCode 2.x（1.x 的插件接口不兼容）。

@@ -23,9 +23,9 @@ import { jsonSchemaToToolParameters, type ToolParameters } from "./schema-dsl.ts
 import { OPX_TOOL_SPECS, OPX_TOOL_NAMES } from "../tool-specs.ts"
 
 /**
- * DSH 工具执行上下文（本插件只消费三处，均已在 DSH 0.2.0-rc.2 源码中核实）：
- * - agent.session.header.cwd：本次会话的项目目录（会话目录，非进程启动目录）；
- *   官方文件工具同机制，见 dsh-tool-fs/lib/index.js:161-173 的 sessionCwd。
+ * DSH 工具执行上下文（本插件只消费三处，均已在 DSH 0.2.1-rc.2 源码中核实）：
+ * - agent.session.header.cwd：本次会话的项目目录（会话目录，非进程启动目录）。DSH 0.2.1 起官方
+ *   文件工具改用 `ctx.workingDirectory`（会话内可 cd），编排状态按项目根落盘，故仍取 header.cwd。
  * - agent.id：与 agent.session.id 同值（dsh-agent/lib/index.js:510 的 enter() 校验）。
  * - signal：协作式取消信号。
  * 结构用 ambient 声明（src/types/dsh-runtime.d.ts）而非本地手写，避免与官方形状漂移。
