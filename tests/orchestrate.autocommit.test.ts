@@ -253,6 +253,13 @@ describe("机制层拦截脏工作区提交（非文档类）", () => {
       expect(err.message).toContain("git checkout --")
       expect(err.message).toContain("新增的临时文件")
       expect(err.message).toContain("openspec/")
+      // 文案边界：代码类改动必须还原、不得以 commit 绕过；只有注释与文档类可提交
+      expect(err.message).toContain("不得以 commit 方式提交掉")
+      expect(err.message).toContain("只含注释改动")
+      expect(err.message).toContain("审查者不应修改代码逻辑")
+      // 反向断言：不得再出现「自行 commit 后提交」这类绕过暗示
+      expect(err.message).not.toContain("请自行 commit 后再提交")
+      expect(err.message).not.toContain("确属必要的代码修正")
       // 零状态变更：step 未推进、无 verdict tag、自动提交未触发
       expect(readItem(wt, CID).currentStep).toBe("verify_tool")
       expect(readItem(wt, CID).tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()

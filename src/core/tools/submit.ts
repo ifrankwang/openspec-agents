@@ -803,14 +803,17 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         if (dirtyNonDoc.length > 0) {
           const fileLines = dirtyNonDoc.map((f) => `  - ${f}`).join("\n")
           throw new Error(
-            `提交被拒绝：工作区存在未提交的代码类改动。\n` +
-            `可能是反向探针改坏的实现未还原，或违反了「只报不改」直接修改了代码。\n` +
+            `提交被拒绝：工作区存在未提交的代码类改动，工具不允许这类改动随审查提交。\n` +
+            `常见来源有两种：① 反向探针改坏的实现未还原；② 审查过程中临时修改的代码未清理。\n` +
+            `这两种都必须先还原，不得以 commit 方式提交掉。\n` +
             `涉及文件：\n${fileLines}\n` +
-            `请先清理后再提交：\n` +
+            `请先还原或清理，再重新提交：\n` +
             `  - 已跟踪文件的改动：git checkout -- <文件> 还原\n` +
             `  - 新增的临时文件：直接删除\n` +
-            `文档类改动（openspec/ 下文件与 .md 文件）不受此限，提交时会自动 commit；\n` +
-            `确属必要的代码修正，请自行 commit 后再提交。`,
+            `允许提交的范围只有注释修正与文档类：\n` +
+            `  - 文档类（openspec/ 下文件与 .md 文件）：提交时自动 commit，无需手工处理。\n` +
+            `  - 源码内的注释修正：可以先 commit，但该提交必须只含注释改动，不得夹带任何逻辑改动或探针改动。\n` +
+            `代码类改动不在此列：不要把探针改动或临时改动 commit 掉来绕过本检查；审查者不应修改代码逻辑，发现问题请报 issue。`,
           )
         }
       }
