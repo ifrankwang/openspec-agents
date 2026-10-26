@@ -45,14 +45,13 @@ Claude Code 和 DeepSeek Harness 自带的工作流能力擅长**并行完成大
 
 ## 快速开始
 
-项目还没用 OpenSpec 的话，先装上并初始化：
+项目还没用 OpenSpec 的话，先装 CLI（初始化由插件代做）：
 
 ```bash
 npm install -g @fission-ai/openspec
-openspec init
 ```
 
-装好后项目根会出现 `openspec/` 目录。
+在项目里调用 `/openspec-standard` 时，项目还没有 `openspec/` 就会先以 Core Profile 初始化，项目根随即出现 `openspec/` 目录。
 
 ### 第一步：安装
 
@@ -149,7 +148,7 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 | 任务划分 | 分组 + 每条带验证方式 | 追加：每组必须有真实代码改动（禁止「收尾组」凑数）、测试跟着实现同组、只覆盖本仓库 |
 | 归档 | 官方归档命令本身会同步主规格 | 追加写作纪律：主规格只写终态，不留「原 X 改为 Y」；废弃项显式删除并补 REMOVED；同语义合并去重 |
 
-**用法**：在目标项目的普通会话里调用 `/openspec-standard`（不要在被编排流程占用的会话里调用，那种会话不能改文件）。它会往项目写入 `openspec/config.yaml`（指定 `spec-driven-standard` schema）与 `openspec/schemas/spec-driven-standard/`。
+**用法**：在目标项目的普通会话里调用 `/openspec-standard`（不要在被编排流程占用的会话里调用，那种会话不能改文件）。项目还没有 `openspec/` 时，它先以 Core Profile 执行 `openspec init --profile core --tools agents`：建 `openspec/` 骨架，并在 `.agents/skills/` 下生成 propose、explore、apply、update、sync、archive 六个 workflow skill；随后写入 `openspec/config.yaml`（指定 `spec-driven-standard` schema）与 `openspec/schemas/spec-driven-standard/`。
 
 装好之后提变更不必换命令，仍走 OpenSpec 官方用法：调用 `/openspec-propose {具体需求描述}`，生成的 proposal / specs / design / tasks 就会按这套标准产出，再由 `/orchestrator {change-id}` 接手实施与把关。
 
@@ -223,7 +222,7 @@ Java 后端项目会自动带上配套那套；其它语言目前只有通用规
 - `.worktree/<变更号>/ws` —— 本次变更的独立工作副本；
 - 一条 `change/<变更号>` 分支。
 
-另外两处不在编排流程内：OpenCode 安装方式首次加载会在 `.opencode/agents/` 放三个代理定义文件；调用 `/openspec-standard` 会写 `openspec/config.yaml` 与 `openspec/schemas/spec-driven-standard/`。
+另外两处不在编排流程内：OpenCode 安装方式首次加载会在 `.opencode/agents/` 放三个代理定义文件；调用 `/openspec-standard` 在项目尚未初始化时先以 Core Profile 建 `openspec/` 骨架并生成 `.agents/skills/` 下六个 workflow skill，再写 `openspec/config.yaml` 与 `openspec/schemas/spec-driven-standard/`。
 
 变更的全部任务组完成后，才会把这条分支合并回基准分支，随后自动删掉工作副本和分支。合并前如果基准分支已经往前走了，插件先比对两边改动：只有文档、规划文件或版本号这类无害变化时直接合并；有实质冲突时退回做一次收尾回归，通过后才合并。
 
