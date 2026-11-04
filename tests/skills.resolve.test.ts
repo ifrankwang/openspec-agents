@@ -19,6 +19,7 @@ import { resolveMustDoForCaps } from "../src/core/tools/gate"
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { renderSkillSuggestions } from "../src/core/views"
 import { stepAgentIds } from "../src/core/workflow/types"
+import { __setKnownStackTags, knownStackTags } from "../src/skills/stacks"
 
 describe("resolveSkillsForCapabilities tag 匹配", () => {
   test("caps 命中 → skillNames 非空", () => {
@@ -37,19 +38,39 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
     expect(r.skillNames).toContain("java-quality-tool-improve")
   })
 
-  test("dev-practices 命中 java-dev-practices（未声明形态/框架标签 → 通用，始终命中）", () => {
+  test("dev-practices 命中 java-dev-practices（不传会话栈时不过滤）", () => {
     const r = resolveSkillsForCapabilities(["dev-practices"])
-    expect(r.skillNames).toContain("java-dev-practices")
     expect(r.skillNames).toContain("java-dev-practices")
   })
 
-  test("旧 tech-stack-* 前缀标签不参与栈过滤：任意会话栈下都命中", () => {
-    // skill 尚未迁移到形态/框架标签时，tech-stack-java 不是形态/框架标签 → 按通用处理
-    const r = resolveSkillsForCapabilities(["quality-gate", "efficiency"], { project_stacks: ["frontend"], project_frameworks: ["vue"] })
-    expect(r.skillNames).toContain("quality-gate")
-    expect(r.skillNames).toContain("code-efficiency")
-    expect(r.skillNames).toContain("java-quality-gate")
-      })
+  test("真实索引：后端 java 会话命中 Java 技术栈 skill，前端会话不命中", () => {
+    const backend = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["backend"], project_frameworks: ["java"] })
+    expect(backend.skillNames).toContain("quality-gate")
+    expect(backend.skillNames).toContain("java-quality-gate")
+
+    const frontend = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["frontend"], project_frameworks: ["vue"] })
+    expect(frontend.skillNames).toContain("quality-gate")
+    expect(frontend.skillNames).not.toContain("java-quality-gate")
+  })
+
+  test("真实索引：未声明 stacks / frameworks 的基座 skill 在所有会话栈下命中", () => {
+    for (const session of [
+      { project_stacks: ["backend"], project_frameworks: ["java"] },
+      { project_stacks: ["frontend"], project_frameworks: ["vue"] },
+      { project_stacks: ["frontend"], project_frameworks: ["react"] },
+    ]) {
+      expect(resolveSkillsForCapabilities(["test-design"], session).skillNames).toContain("test-design")
+    }
+  })
+
+  test("真实索引：api-test 声明 backend 形态——后端会话命中、前端会话不命中", () => {
+    expect(
+      resolveSkillsForCapabilities(["api-testing"], { project_stacks: ["backend"], project_frameworks: ["java"] }).skillNames,
+    ).toContain("api-test")
+    expect(
+      resolveSkillsForCapabilities(["api-testing"], { project_stacks: ["frontend"], project_frameworks: ["vue"] }).skillNames,
+    ).not.toContain("api-test")
+  })
 
   test("architecture 命中技术债识别 skill（均为通用，不分组）", () => {
     const r = resolveSkillsForCapabilities(["architecture"])
@@ -93,25 +114,40 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
 })
 
 /**
- * 会话栈过滤（构造索引，不依赖真实 skill 文件的标签迁移进度）：
- * 命中规则 = 能力维度命中 ∧ skill 形态标签 ⊆ 会话 project_stacks ∧ skill 框架标签 ⊆ 会话 project_frameworks；
- * skill 未声明形态/框架标签视为通用，始终命中。
+ * 会话栈过滤（构造索引，不依赖真实 skill 文件）：
+ * 命中规则 = 能力维度命中 ∧ skill 声明的 stacks ⊆ 会话 project_stacks ∧ skill 声明的 frameworks ⊆
+ * 会话 project_frameworks；未声明 stacks / frameworks 视为通用，始终命中。
  */
-describe("会话项目栈过滤（形态/框架标签）", () => {
+describe("会话项目栈过滤（stacks / frameworks 字段）", () => {
   const stackIndex: SkillTagIndex = {
     tagMap: new Map([
-      ["quality-gate", ["quality-gate", "java-quality-gate", "vue-quality-gate"]],
+      ["quality-gate", ["quality-gate", "java-quality-gate", "vue-quality-gate", "fullstack-quality-gate"]],
       ["style", ["generic-style", "java-style", "vue-style"]],
     ]),
     skillTags: new Map([
       ["quality-gate", ["quality-gate"]], // 通用
-      ["java-quality-gate", ["quality-gate", "backend", "java"]],
-      ["vue-quality-gate", ["quality-gate", "frontend", "vue"]],
+      ["java-quality-gate", ["quality-gate"]],
+      ["vue-quality-gate", ["quality-gate"]],
+      ["fullstack-quality-gate", ["quality-gate"]],
       ["generic-style", ["style"]], // 通用
-      ["java-style", ["style", "backend", "java"]],
-      ["vue-style", ["style", "frontend", "vue"]],
+      ["java-style", ["style"]],
+      ["vue-style", ["style"]],
     ]),
     skillMustDo: new Map(),
+    skillStacks: new Map([
+      ["java-quality-gate", ["backend"]],
+      ["vue-quality-gate", ["frontend"]],
+      ["fullstack-quality-gate", ["backend", "frontend"]],
+      ["java-style", ["backend"]],
+      ["vue-style", ["frontend"]],
+    ]),
+    skillFrameworks: new Map([
+      ["java-quality-gate", ["java"]],
+      ["vue-quality-gate", ["vue"]],
+      ["fullstack-quality-gate", ["java", "vue"]],
+      ["java-style", ["java"]],
+      ["vue-style", ["vue"]],
+    ]),
   }
 
   test("后端 java 会话只看得到后端与通用 skill，看不到前端 skill", () => {
@@ -119,6 +155,7 @@ describe("会话项目栈过滤（形态/框架标签）", () => {
     expect(r.skillNames).toContain("quality-gate")
     expect(r.skillNames).toContain("java-quality-gate")
     expect(r.skillNames).not.toContain("vue-quality-gate")
+    expect(r.skillNames).not.toContain("fullstack-quality-gate")
   })
 
   test("前端 vue 会话只看得到前端与通用 skill，看不到后端 skill", () => {
@@ -126,9 +163,10 @@ describe("会话项目栈过滤（形态/框架标签）", () => {
     expect(r.skillNames).toContain("quality-gate")
     expect(r.skillNames).toContain("vue-quality-gate")
     expect(r.skillNames).not.toContain("java-quality-gate")
+    expect(r.skillNames).not.toContain("fullstack-quality-gate")
   })
 
-  test("混合栈会话（前后端 + 多框架）两侧 skill 都可见", () => {
+  test("混合栈会话（前后端 + 多框架）两侧 skill 都可见，多形态 skill 也被覆盖", () => {
     const r = resolveSkillsForCapabilities(
       ["quality-gate"],
       { project_stacks: ["backend", "frontend"], project_frameworks: ["java", "vue"] },
@@ -136,15 +174,17 @@ describe("会话项目栈过滤（形态/框架标签）", () => {
     )
     expect(r.skillNames).toContain("java-quality-gate")
     expect(r.skillNames).toContain("vue-quality-gate")
+    expect(r.skillNames).toContain("fullstack-quality-gate")
     expect(r.skillNames).toContain("quality-gate")
   })
 
-  test("形态命中但框架不匹配 → 不命中（框架标签须 ⊆ 会话 frameworks）", () => {
+  test("形态命中但框架不匹配 → 不命中（frameworks 须 ⊆ 会话 frameworks）", () => {
     const r = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["backend"], project_frameworks: ["vue"] }, stackIndex)
     expect(r.skillNames).not.toContain("java-quality-gate")
+    expect(r.skillNames).toContain("quality-gate")
   })
 
-  test("未声明形态/框架标签的 skill 在任何会话栈下都命中", () => {
+  test("未声明 stacks / frameworks 的 skill 在任何会话栈下都命中", () => {
     for (const session of [
       { project_stacks: ["backend"], project_frameworks: ["java"] },
       { project_stacks: ["frontend"], project_frameworks: ["vue"] },
@@ -168,12 +208,70 @@ describe("scanSkillTags 进程内缓存", () => {
     expect(a).toBe(b)
     expect(a.tagMap).toBe(b.tagMap)
     expect(a.skillTags).toBe(b.skillTags)
+    expect(a.skillStacks).toBe(b.skillStacks)
+    expect(a.skillFrameworks).toBe(b.skillFrameworks)
   })
 
   test("skill 索引内容正确", () => {
     const a = scanSkillTags()
     expect(a.skillTags.get("code-efficiency")).toEqual(["efficiency"])
     expect(a.tagMap.get("efficiency")).toContain("code-efficiency")
+  })
+})
+
+/**
+ * frontmatter 三层次字段解析：capabilities（能力维度）/ stacks（形态）/ frameworks（框架）。
+ * stacks / frameworks 未声明 = 通用；值域词汇由 skill 索引动态提供，代码内无硬编码清单。
+ */
+describe("frontmatter stacks / frameworks 解析与动态值域", () => {
+  test("真实索引：java 技术栈 skill 声明 stacks/frameworks，基座 skill 不声明", () => {
+    const idx = scanSkillTags()
+    expect(idx.skillStacks.get("java-quality-gate")).toEqual(["backend"])
+    expect(idx.skillFrameworks.get("java-quality-gate")).toEqual(["java"])
+    expect(idx.skillStacks.get("api-test")).toEqual(["backend"])
+    expect(idx.skillFrameworks.has("api-test")).toBe(false)
+    expect(idx.skillStacks.has("quality-gate")).toBe(false)
+    expect(idx.skillFrameworks.has("quality-gate")).toBe(false)
+    expect(idx.skillStacks.has("test-design")).toBe(false)
+  })
+
+  test("真实索引：所有 java-* skill 均声明 stacks=[backend] 且 frameworks=[java]", () => {
+    const idx = scanSkillTags()
+    const javaSkills = [...idx.skillTags.keys()].filter((n) => n.startsWith("java-"))
+    expect(javaSkills.length).toBeGreaterThan(0)
+    for (const name of javaSkills) {
+      expect(idx.skillStacks.get(name)).toEqual(["backend"])
+      expect(idx.skillFrameworks.get(name)).toEqual(["java"])
+    }
+  })
+
+  test("能力维度标签不进入形态/框架值域（stacks/frameworks 与 capabilities 三层次独立）", () => {
+    const idx = scanSkillTags()
+    const values = new Set<string>()
+    for (const list of idx.skillStacks.values()) for (const t of list) values.add(t)
+    for (const list of idx.skillFrameworks.values()) for (const t of list) values.add(t)
+    for (const tag of idx.tagMap.keys()) expect(values.has(tag)).toBe(false)
+  })
+
+  test("knownStackTags = 索引声明的 stacks ∪ frameworks 并集（动态取值，无硬编码清单）", () => {
+    const idx = scanSkillTags()
+    const expected = new Set<string>()
+    for (const list of idx.skillStacks.values()) for (const t of list) expected.add(t)
+    for (const list of idx.skillFrameworks.values()) for (const t of list) expected.add(t)
+    expect(knownStackTags(idx)).toEqual(expected)
+    expect(knownStackTags(idx).has("backend")).toBe(true)
+    expect(knownStackTags(idx).has("java")).toBe(true)
+    expect(knownStackTags(idx).has("quality-gate")).toBe(false)
+  })
+
+  test("测试注入覆盖值域；null 恢复动态并集", () => {
+    __setKnownStackTags(["x-stack"])
+    try {
+      expect(knownStackTags(scanSkillTags())).toEqual(new Set(["x-stack"]))
+    } finally {
+      __setKnownStackTags(null)
+    }
+    expect(knownStackTags(scanSkillTags()).has("backend")).toBe(true)
   })
 })
 
@@ -385,8 +483,7 @@ phases:
 
 /**
  * opx_status 视图侧：Skill 加载清单渲染。
- * 标签迁移期（skill 仍声明旧 tech-stack-* 标签）形态/框架过滤为空操作，行为与迁移前一致；
- * 旧「仅当技术栈匹配时加载」分区已随标签模型废弃，不再渲染。
+ * 渲染按会话项目栈过滤（stacks / frameworks ⊆ 会话），旧「仅当技术栈匹配时加载」分区已废弃。
  */
 describe("Skill 加载清单视图渲染", () => {
   test("渲染清单且不再出现旧技术栈分区提示", () => {
@@ -397,14 +494,28 @@ describe("Skill 加载清单视图渲染", () => {
     expect(out).not.toContain("仅当技术栈匹配时加载")
   })
 
-  test("传会话栈不改变迁移期输出（旧标签按通用处理，全部命中）", () => {
-    const withoutSession = renderSkillSuggestions("openspec-developer", ["quality-gate", "dev-practices"]).join("\n")
-    const withSession = renderSkillSuggestions(
+  test("会话栈参与清单过滤：后端 java 会话含 Java 技术栈 skill，前端 vue 会话不含", () => {
+    const backend = renderSkillSuggestions(
+      "openspec-developer",
+      ["quality-gate", "dev-practices"],
+      { project_stacks: ["backend"], project_frameworks: ["java"] },
+    ).join("\n")
+    expect(backend).toContain("`quality-gate`")
+    expect(backend).toContain("`java-dev-practices`")
+
+    const frontend = renderSkillSuggestions(
       "openspec-developer",
       ["quality-gate", "dev-practices"],
       { project_stacks: ["frontend"], project_frameworks: ["vue"] },
     ).join("\n")
-    expect(withSession).toBe(withoutSession)
+    expect(frontend).toContain("`quality-gate`")
+    expect(frontend).not.toContain("`java-dev-practices`")
+    expect(frontend).not.toContain("仅当技术栈匹配时加载")
+  })
+
+  test("不传会话栈 → 不过滤（兼容无会话调用）", () => {
+    const out = renderSkillSuggestions("openspec-developer", ["quality-gate", "dev-practices"]).join("\n")
+    expect(out).toContain("`java-dev-practices`")
   })
 
   test("能力集为空 → 不渲染清单区块", () => {

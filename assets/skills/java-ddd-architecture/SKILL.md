@@ -1,7 +1,9 @@
 ---
 name: java-ddd-architecture
 description: 仅限 Java 后端开发场景。DDD 四层分层与六边形（Hexagonal）两种架构风格 Java 实现——Java 代码实现规范、Spring DI、MapStruct、ArchUnit 规则。DDD 方法论见 ddd-architecture。适用场景同前。
-capabilities: ["architecture", "tech-stack-java"]
+capabilities: ["architecture"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

@@ -1,7 +1,9 @@
 ---
 name: java-api-conventions
 description: 仅限 Java 后端开发场景。接口层 Java/Spring 实现规范——Spring 注解、Swagger/SpringDoc 注解、R<T> 统一返回、@RestControllerAdvice 异常处理。通用 REST 设计原则见 api-conventions。适用场景同前。
-capabilities: ["api-design", "architecture", "tech-stack-java"]
+capabilities: ["api-design", "architecture"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

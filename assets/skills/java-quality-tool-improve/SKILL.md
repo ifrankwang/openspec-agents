@@ -1,7 +1,9 @@
 ---
 name: java-quality-tool-improve
 description: 仅限 Java 后端开发场景。工具规则改进指南。Quality reviewer（architecture/maintainability/style/performance/security）加载，用于将 Java 项目中可工具化的 pattern 转化为具体的 ArchUnit / PMD / Spotless / SonarQube 规则草案。skill 提供各场景下工具配置改动的信号表与规则模板。
-capabilities: ["tool-improvement", "tech-stack-java"]
+capabilities: ["tool-improvement"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

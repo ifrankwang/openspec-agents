@@ -506,6 +506,8 @@ function makeQualityGateIndex(items = ["compile", "static_analysis", "deep_scan"
     tagMap: new Map([["quality-gate", ["quality-gate"]]]),
     skillTags: new Map([["quality-gate", ["quality-gate"]]]),
     skillMustDo: new Map([["quality-gate", items]]),
+    skillStacks: new Map(),
+    skillFrameworks: new Map(),
   }
 }
 

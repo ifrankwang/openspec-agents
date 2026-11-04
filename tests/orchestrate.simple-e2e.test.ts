@@ -289,6 +289,8 @@ describe("simple 模式端到端：验证分流（自检申报视图化 + deep_s
         ["api-test", ["api-testing"]],
       ]),
       skillMustDo: new Map([["quality-gate", items]]),
+      skillStacks: new Map(),
+      skillFrameworks: new Map(),
     }
   }
 

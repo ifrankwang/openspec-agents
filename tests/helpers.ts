@@ -1,6 +1,6 @@
 import { __setGitRunner, type GitRunner } from "../src/core/git"
 import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
-import { __setKnownSkillTags } from "../src/skills/stacks"
+import { __setKnownStackTags } from "../src/skills/stacks"
 import type { ToolContext } from "../src/core/tools/types"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
@@ -412,11 +412,11 @@ export function createFakeGit(): FakeGitRunner {
   return new FakeGitRunner()
 }
 
-// ─── 会话项目栈入参 / skill 标签词汇（测试共享） ───
+// ─── 会话项目栈入参 / 形态与框架标签词汇（测试共享） ───
 
 /**
  * opx_orch_init 必传的会话项目栈入参（change 与 review_scope 两入口均必传）。
- * 测试统一取值，避免逐处重复字面量；取值落在 {@link TEST_SKILL_TAGS} 内使动态校验可通过。
+ * 测试统一取值，避免逐处重复字面量；取值落在 {@link TEST_STACK_TAGS} 内使动态校验可通过。
  */
 export const INIT_PROJECT_STACKS: { project_stacks: string[]; project_frameworks: string[] } = {
   project_stacks: ["backend"],
@@ -424,10 +424,10 @@ export const INIT_PROJECT_STACKS: { project_stacks: string[]; project_frameworks
 }
 
 /**
- * 测试注入的 skill 标签词汇（opx_orch_init 动态校验的值域）：与真实 skill 索引解耦，
- * 使用例不依赖 assets/skills 下标签迁移进度。门禁/过滤用例按需覆盖注入验证真实规则。
+ * 测试注入的形态/框架标签词汇（opx_orch_init 动态校验的值域）：与真实 skill 索引解耦，
+ * 使用例不依赖 assets/skills 下的标签声明。门禁/过滤用例按需覆盖注入验证真实规则。
  */
-export const TEST_SKILL_TAGS = ["backend", "frontend", "java", "vue", "react"]
+export const TEST_STACK_TAGS = ["backend", "frontend", "java", "vue", "react"]
 
 /**
  * 统一安装测试 skill 环境，供各测试文件自建 fixture 复用：空 must_do 索引（存量用例默认豁免
@@ -435,7 +435,7 @@ export const TEST_SKILL_TAGS = ["backend", "frontend", "java", "vue", "react"]
  */
 export function installTestSkillEnv(): void {
   __setMustDoIndex(EMPTY_MUST_DO_INDEX)
-  __setKnownSkillTags(TEST_SKILL_TAGS)
+  __setKnownStackTags(TEST_STACK_TAGS)
 }
 
 // ─── Workspace Setup ───
@@ -527,7 +527,7 @@ export function setupWithFakeGit(tmpRoot: string, changeId: string): { worktree:
 export function teardown(tmpRoot: string): void {
   __setGitRunner(null)
   __setMustDoIndex(null)
-  __setKnownSkillTags(null)
+  __setKnownStackTags(null)
   if (existsSync(tmpRoot)) {
     for (const entry of readdirSync(tmpRoot)) {
       try { rmSync(join(tmpRoot, entry), { recursive: true, force: true }) } catch {}

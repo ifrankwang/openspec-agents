@@ -1,7 +1,9 @@
 ---
 name: java-code-style
 description: Java 代码风格规范——Lombok 注解优先、日志约定、Swagger/SpringDoc 注解、.gitignore 必须项、命名约定。仅在 Java 后端项目使用。
-capabilities: ["style", "tech-stack-java"]
+capabilities: ["style"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

@@ -11,7 +11,9 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
 import { agentSubmitSchema } from "../src/core/tools/schemas"
-import { INIT_PROJECT_STACKS, FakeGitRunner, makeOrchCtx, readState, setupWithFakeGit, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeOrchCtx, readState, setupWithFakeGit, teardown } from "./helpers"
+import { __setKnownStackTags, knownStackTags } from "../src/skills/stacks"
+import { scanSkillTags } from "../src/skills/resolve"
 import { setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, taskIdsOf, readItem } from "./helpers-workflow"
 
 const CID = "param-validation"
@@ -419,8 +421,9 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
 
 /**
  * D. 会话项目栈（project_stacks / project_frameworks）必传与动态值域校验：
- * 两入口（change / review_scope）均必传；非空字符串数组 + 每个值须命中当前 skill 索引实际存在的标签。
- * 测试标签词汇由 helpers.installTestSkillEnv 注入（backend / frontend / java / vue / react）。
+ * 两入口（change / review_scope）均必传；非空字符串数组 + 每个值须命中当前 skill 索引声明的
+ * stacks / frameworks 动态并集。测试词汇由 helpers.installTestSkillEnv 注入（与真实 skill 声明解耦）；
+ * 真实索引用例在用例内显式关闭注入，验证值域确实来自 skill frontmatter。
  */
 describe("D. init 会话项目栈必传参数校验", () => {
   test("缺 project_stacks → 拒绝且错误指明参数名与用法", async () => {
@@ -469,12 +472,49 @@ describe("D. init 会话项目栈必传参数校验", () => {
     try {
       const err = await expectError(
         init.execute({ project_stacks: ["backend"], project_frameworks: ["golang"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
-        /project_frameworks 中的值未命中当前 skill 索引中实际存在的标签：golang/
+        /project_frameworks 中的值未命中当前 skill 索引中实际声明的形态\/框架标签：golang/
       )
       // 错误体给出动态扫描到的现存标签（非硬编码值域清单）
       expect(err.message).toContain("backend")
       expect(err.message).toContain("java")
     } finally { teardown(root) }
+  })
+
+  test("真实 skill 索引下：已声明的 stacks / frameworks 值 → 校验通过并固化", async () => {
+    const { wt, root } = fresh()
+    try {
+      __setKnownStackTags(null) // 关闭注入，值域取真实 skill frontmatter 的动态并集
+      await init.execute(
+        { project_stacks: ["backend"], project_frameworks: ["java"], change_id: CID, task_group_id: "1", mode: "full" },
+        makeOrchCtx(wt),
+      )
+      const state = readState(wt, CID) as any
+      expect(state.stacks).toEqual({ project_stacks: ["backend"], project_frameworks: ["java"] })
+    } finally {
+      installTestSkillEnv()
+      teardown(root)
+    }
+  })
+
+  test("真实 skill 索引下：传入从未声明过的栈值 → 拒绝（值域 = skill 声明的 stacks ∪ frameworks）", async () => {
+    const { wt, root } = fresh()
+    try {
+      __setKnownStackTags(null)
+      const err = await expectError(
+        init.execute(
+          { project_stacks: ["cobol"], project_frameworks: ["java"], change_id: CID, task_group_id: "1", mode: "full" },
+          makeOrchCtx(wt),
+        ),
+        /project_stacks 中的值未命中当前 skill 索引中实际声明的形态\/框架标签：cobol/,
+      )
+      // 值域确为动态并集：真实 skill 声明的值出现在可用清单里，能力维度标签不出现
+      const idx = scanSkillTags()
+      for (const tag of knownStackTags(idx)) expect(err.message).toContain(tag)
+      expect(err.message).not.toContain("quality-gate")
+    } finally {
+      installTestSkillEnv()
+      teardown(root)
+    }
   })
 
   test("review_scope 独立审查入口同样必传", async () => {

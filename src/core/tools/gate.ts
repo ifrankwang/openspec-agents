@@ -60,6 +60,8 @@ export const EMPTY_MUST_DO_INDEX: SkillTagIndex = {
   tagMap: new Map(),
   skillTags: new Map(),
   skillMustDo: new Map(),
+  skillStacks: new Map(),
+  skillFrameworks: new Map(),
 }
 
 function currentIndex(): SkillTagIndex {

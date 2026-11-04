@@ -1,7 +1,9 @@
 ---
 name: java-security
 description: Java 后端安全实现规范（security-baseline 的 Java 配套）。MyBatisPlus 注入防护、POI OOM 防范、LangChain4j 安全配置、Spring 安全配置、SLF4J 日志脱敏。
-capabilities: ["security", "tech-stack-java"]
+capabilities: ["security"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

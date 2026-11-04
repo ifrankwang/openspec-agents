@@ -1,7 +1,9 @@
 ---
 name: java-quality-gate
 description: 仅限 Java 后端开发场景。Java 项目质量门工具集——Maven/Spotless/PMD/ArchUnit/JaCoCo/SonarQube。通用质量门流程见 quality-gate。
-capabilities: ["quality-gate", "tech-stack-java"]
+capabilities: ["quality-gate"]
+stacks: ["backend"]
+frameworks: ["java"]
 # 机器可读必做清单：与下方「必做检查清单」表格逐项一一对应（汇总与产出属流程元项，不作为必做申报项）。
 # 第 2-6 行「全量生命周期」拆分为 compile/format/architecture/static_analysis/unit_test/coverage；
 # 第 7 行「SonarQube 深度扫描」对应 deep_scan（quality-gate 第 6 类深度扫描的 Java 具体实现）。

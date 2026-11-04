@@ -1,7 +1,9 @@
 ---
 name: java-code-performance
 description: Java 性能规范——N+1 查询防范、外部调用超时与重试、大文件流式读取、循环优化、对象创建优化、缓存策略、异步处理。仅在 Java 后端项目使用。
-capabilities: ["performance", "tech-stack-java"]
+capabilities: ["performance"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

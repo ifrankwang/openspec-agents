@@ -36,6 +36,8 @@ const QUALITY_GATE_INDEX: SkillTagIndex = {
     ["api-test", ["api-testing"]],
   ]),
   skillMustDo: new Map([["quality-gate", ["compile", "static_analysis", "deep_scan"]]]),
+  skillStacks: new Map(),
+  skillFrameworks: new Map(),
 }
 
 function readItem(wt: string): any {

@@ -1,7 +1,9 @@
 ---
 name: java-code-maintainability
 description: Java 代码可维护性规范——方法长度、类职责、异常处理、MapStruct 转换、魔法数提取、DRY 禁止、死代码、构建忽略项。仅在 Java 后端项目使用。
-capabilities: ["maintainability", "tech-stack-java"]
+capabilities: ["maintainability"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

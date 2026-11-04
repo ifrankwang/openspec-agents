@@ -1,7 +1,9 @@
 ---
 name: java-technical-debt
 description: 仅限 Java 后端开发场景。Java 项目技术债识别（架构维度）——Spring 版本 EOL、javax→jakarta 迁移残留、双持久层并存、手写基础设施 vs 框架内置、临时方案固化、契约不一致（枚举 vs 数字码）等 Java 特有形态。通用技术债识别框架见 technical-debt。
-capabilities: ["architecture", "tech-stack-java"]
+capabilities: ["architecture"]
+stacks: ["backend"]
+frameworks: ["java"]
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。
