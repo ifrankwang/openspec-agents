@@ -543,20 +543,21 @@ describe("D. init 会话项目栈必传参数校验", () => {
   })
 
   test("真实 skill 索引下：前端项目 init（frontend / vue 或 react）通过", async () => {
-    const { wt, root } = fresh()
-    try {
-      __setKnownStackTags(null)
-      // 前端框架无关 skill 声明 frameworks: ["vue","react"]，两框架值均应命中动态值域
-      for (const framework of ["vue", "react"]) {
+    // 前端框架无关 skill 声明 frameworks: ["vue","react"]，两框架值均应命中动态值域；
+    // 每次初始化独立会话（已固化后传不同栈会被拒，见下方重复 init 用例）
+    for (const framework of ["vue", "react"]) {
+      const { wt, root } = fresh()
+      try {
+        __setKnownStackTags(null)
         await init.execute(
           { project_stacks: ["frontend"], project_frameworks: [framework], change_id: CID, task_group_id: "1", mode: "full" },
           makeOrchCtx(wt),
         )
+        expect((readState(wt, CID) as any).stacks).toEqual({ project_stacks: ["frontend"], project_frameworks: [framework] })
+      } finally {
+        installTestSkillEnv()
+        teardown(root)
       }
-      expect((readState(wt, CID) as any).stacks).toEqual({ project_stacks: ["frontend"], project_frameworks: ["vue"] })
-    } finally {
-      installTestSkillEnv()
-      teardown(root)
     }
   })
 
@@ -618,16 +619,39 @@ describe("D. init 会话项目栈必传参数校验", () => {
     } finally { teardown(root) }
   })
 
-  test("同一会话重复 init 不覆盖已固化参数（同生命周期持久化）", async () => {
+  test("同一会话重复 init 传不同项目栈 → 拒绝并说明变更须新建会话", async () => {
     const { wt, root } = fresh()
     try {
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
-      await init.execute(
-        { project_stacks: ["frontend"], project_frameworks: ["vue"], change_id: CID, task_group_id: "1", mode: "full" },
-        makeOrchCtx(wt),
+      const err = await expectError(
+        init.execute(
+          { project_stacks: ["frontend"], project_frameworks: ["vue"], change_id: CID, task_group_id: "1", mode: "full" },
+          makeOrchCtx(wt),
+        ),
+        /会话已固化项目栈，变更请新建会话/,
       )
+      // 错误体给出已固化值与本次传入值，状态不被改写
+      expect(err.message).toContain("已固化")
+      expect(err.message).toContain("frontend")
       const state = readState(wt, CID) as any
       expect(state.stacks).toEqual(INIT_PROJECT_STACKS)
+    } finally { teardown(root) }
+  })
+
+  test("同一会话重复 init 传一致项目栈（顺序无关）→ 放行且不覆盖", async () => {
+    const { wt, root } = fresh()
+    try {
+      await init.execute(
+        { project_stacks: ["backend", "frontend"], project_frameworks: ["java", "react"], change_id: CID, task_group_id: "1", mode: "full" },
+        makeOrchCtx(wt),
+      )
+      const out = await init.execute(
+        { project_stacks: ["frontend", "backend"], project_frameworks: ["react", "java"], change_id: CID, task_group_id: "1", mode: "full" },
+        makeOrchCtx(wt),
+      )
+      expect(out).toContain("编排会话已初始化")
+      const state = readState(wt, CID) as any
+      expect(state.stacks).toEqual({ project_stacks: ["backend", "frontend"], project_frameworks: ["java", "react"] })
     } finally { teardown(root) }
   })
 })

@@ -23,7 +23,7 @@ phases:
       - id: implement
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency, api-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
+            capability_tags: [efficiency, api-testing, e2e-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
         transitions:
           on_pass: quality_review
           on_fail: implement
@@ -74,7 +74,7 @@ phases:
           - "分级复验：低成本必做项（分钟级）全量实跑 + 逐项申报（completed=true 附执行结果）；deep_scan 核验上方「开发者自检申报」区块的 dev 申报（证据完整性、命中项与 diff 的合理性）并抽验命中项（如本地复跑单规则静态分析验证命中真实存在），不重扫全量，申报形态为 step 名首段 deep_scan、completed=true、描述注明核验方式与抽验样本；白名单口径：仅高成本必做项（deep_scan）允许核验申报形态，低成本必做项必须实跑后申报；升级回退全量重跑触发条件（统一四处）：dev 申报缺证据或不完整 / 抽验失败 / 发现断言放水类 issue / 本轮为修复轮且修复波及接口契约或数据口径——命中任一即本轮高成本项改为实跑全量"
           - "对抗性判断（独立视角，不重走 dev 路径）：①task 产出完整性 ②③按 spec 验收标准选样的核心链路抽样重放（1-2 条端到端，覆盖创建-检索-变更-删除闭环中 spec 声明的关键行为；服务健康并入抽样重放——能重放即健康）并审查接口测试脚本质量（对照 spec 核断言覆盖/放水/Mock 过度——防作弊主力；含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值）④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷 ⑥关键数据产出核验：对照 spec 数据产出要求，核验实现与测试是否覆盖产出数据落位（spec 指定承载位置）、完整非空、搬迁承接与同一输入基线一致，识别『流程正常但数据缺失/落错位置』类缺陷；轮次口径：首轮按上述分级复验与对抗判断全项执行；复核轮（二轮起）聚焦被修复 issue 相关面 + 本轮修复 diff 波及面 + dev 再自检申报（「开发者自检申报」区块），首轮已通过且无波及的维度与低成本工具结论不重审，但低成本工具实跑保留（防修复引入回归）"
           - "测试设计核验（独立完成，不以 dev 申报为输入）：从 spec 与既有实现独立推导行为面清单与用例矩阵，核对测试对行为面的覆盖、断言强度与实施正确性（检查点按已加载测试设计规范与任务维度判例执行）；自行对关键用例执行反向探针——改坏被测实现 → 确认对应用例变红 → 原样还原实现 → 全量用例复跑全绿，把改坏点与还原确认结果编入 validation_steps 的 negative_probe 申报；用例未变红视为该用例无对抗力，须报 issue；无测试对象（无代码、接口契约与数据口径变更）时以 completed=false + 结构化 skip_reason 申报；不得跳过核验直接提交通过"
-          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载测试规范执行脚本实跑」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
+          - "本 step 能力集含测试类能力，须按已加载测试规范申报对应必做项（接口测试为 api_script/api_execution，端到端测试为 e2e_script/e2e_run）：脚本类必做项对应「变更涉及的行为有对应测试脚本」，执行类必做项对应「按已加载测试规范执行脚本实跑」；变更不涉及对应行为（接口契约、数据口径或端到端行为）时，对应两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及对应行为但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅执行类必做项置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，脚本类必做项仍须实查脚本存在性，脚本缺失按「变更行为无对应脚本」判例报 issue，不得以环境不可用为由跳过；多类测试语义分开，不得混用"
           - "验证完成后（含 verdict=failed 报 issue 回退 implement 的轮次）按已加载的清理规范执行幂等清理：停止残留的服务实例（含抽样重放启动的服务）、清理本 change 的隔离环境、删除残留的隔离扫描项目；无残留即通过，不因重复执行报错；清理结果纳入 validation_steps 申报（未执行须以 completed=false + 结构化 skip_reason 说明）"
           - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②③核心链路抽样重放，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免抽样重放」及判定依据；⑤⑥的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节、验收标准与数据产出要求），用于准备测试数据与对照 API 合约、选样核心链路"
@@ -112,8 +112,8 @@ phases:
           on_fail: verify_cleanup
         instructions:
           - "将基准分支（{{base_branch}}）最新代码合并进当前工作分支（git merge 基准分支），解决合并冲突；修复范围仅限合并冲突涉及文件与回归失败定位文件（改动仅用于解决合并引入的问题，禁止借机扩大范围）"
-          - "合并后回归复验：按已加载的开发实践规范执行构建验证；按已加载的接口测试规范启动服务并执行接口测试（含关键数据产出/搬迁回归断言）；全部通过才算通过，不分失败来源（含基准分支新代码引入的失败）"
-          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载测试规范执行脚本实跑」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
+          - "合并后回归复验：按已加载的开发实践规范执行构建验证；按已加载测试规范执行全量测试（含接口测试与端到端测试，按会话技术栈对应；含关键数据产出/搬迁回归断言）；全部通过才算通过，不分失败来源（含基准分支新代码引入的失败）"
+          - "本 step 能力集含测试类能力，须按已加载测试规范申报对应必做项（接口测试为 api_script/api_execution，端到端测试为 e2e_script/e2e_run）：脚本类必做项对应「变更涉及的行为有对应测试脚本」，执行类必做项对应「按已加载测试规范执行脚本实跑」；变更不涉及对应行为（接口契约、数据口径或端到端行为）时，对应两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及对应行为但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅执行类必做项置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，脚本类必做项仍须实查脚本存在性，脚本缺失按「变更行为无对应脚本」判例报 issue，不得以环境不可用为由跳过；多类测试语义分开，不得混用"
           - "按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的扫描分析项目；无对应 skill 规范时跳过并在申报中注明"
           - "清理后确认工作分支 git status 干净（含未跟踪文件）"
           - "逐项申报 validation_steps（completed + 证据；未执行项以 completed=false + 结构化 skip_reason 申报：{\"item\":\"<必做项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}）"

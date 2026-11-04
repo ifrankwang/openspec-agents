@@ -17,7 +17,7 @@ import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
 import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.ts"
-import { knownFrameworks, knownStacks } from "../../skills/stacks.ts"
+import { knownFrameworks, knownStacks, type SessionStacks } from "../../skills/stacks.ts"
 
 /** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
 function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
@@ -525,6 +525,7 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
         `会话 id 由审查范围推导，重复 init 仅支持同参数幂等复用；需不同范围请调整参数（id 随之变化）。`
       )
     }
+    const stacksNote = adoptOrAssertSessionStacks(state, args)
     if (args.recovery) {
       const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
       if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
@@ -533,11 +534,13 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
       await writeState(ctx.worktree, state)
       return `独立审查会话 "${sessionId}" 已恢复到 review 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。后续工具以 change_id="${sessionId}" 传入。`
     }
+    if (stacksNote) await writeState(ctx.worktree, state)
     return [
       "独立审查会话已初始化（复用既有会话）。",
       "",
       `- **会话 ID**: \`${sessionId}\``,
       `- **说明**: 后续所有 opx_* 工具以 \`change_id="${sessionId}"\` 传入。`,
+      ...(stacksNote ? ["", stacksNote] : []),
     ].join("\n")
   }
   if (args.recovery) {
@@ -597,17 +600,57 @@ async function initReviewRecovery(params: InitParams, state: OrchestrateState, c
   }
   const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
   if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
+  const stacksNote = adoptOrAssertSessionStacks(state, args)
   if (args.recovery) {
     applyRecoveryState(item, args.recovery, [], state)
     await writeState(ctx.worktree, state)
     return `独立审查会话 "${state.changeId}" 已恢复到 ${args.recovery.phase} 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。`
   }
+  if (stacksNote) await writeState(ctx.worktree, state)
   return [
     "独立审查会话已就绪（复用既有会话）。",
     "",
     `- **会话 ID**: \`${state.changeId}\``,
     `- **说明**: 后续所有 opx_* 工具以 \`change_id="${state.changeId}"\` 传入。`,
+    ...(stacksNote ? ["", stacksNote] : []),
   ].join("\n")
+}
+
+/** 标签数组按集合语义比较（顺序无关、去重后比较）。 */
+function sameTagSet(a: string[], b: string[]): boolean {
+  const as = new Set(a)
+  const bs = new Set(b)
+  if (as.size !== bs.size) return false
+  for (const t of as) if (!bs.has(t)) return false
+  return true
+}
+
+/**
+ * 会话项目栈固化校验：
+ * - state 已固化 stacks：本次 init 传值须与之一致，不一致直接拒绝（变更项目栈须新建会话）；
+ * - 旧会话（state 无 stacks）：按本次 init 参数补齐（升级在途会话，恢复按会话栈过滤）。
+ * 返回补齐说明（无补齐动作返回 null），供调用方在返回体提示。
+ */
+function adoptOrAssertSessionStacks(state: OrchestrateState, args: InitParams): string | null {
+  const next: SessionStacks = {
+    project_stacks: [...args.project_stacks],
+    project_frameworks: [...args.project_frameworks],
+  }
+  if (state.stacks) {
+    const same =
+      sameTagSet(state.stacks.project_stacks, next.project_stacks) &&
+      sameTagSet(state.stacks.project_frameworks, next.project_frameworks)
+    if (!same) {
+      throw new Error(
+        "会话已固化项目栈，变更请新建会话。\n" +
+        `已固化：project_stacks=${JSON.stringify(state.stacks.project_stacks)}、project_frameworks=${JSON.stringify(state.stacks.project_frameworks)}；\n` +
+        `本次传入：project_stacks=${JSON.stringify(next.project_stacks)}、project_frameworks=${JSON.stringify(next.project_frameworks)}。`
+      )
+    }
+    return null
+  }
+  state.stacks = next
+  return "已为旧会话补齐项目栈（skill 过滤与 must_do 门禁按本次声明生效）。"
 }
 
 /** 错误信息中最多列出的可选标签数：清单过长时只列前 N 个 + 总数，避免刷屏。 */
@@ -730,6 +773,8 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   const baseBranch = args.base_branch || await getCurrentBranch(ctx.worktree)
   let state = await readStateByChangeId(ctx.worktree, changeId)
   const wasCurrentGroup = state?.taskGroupId === args.task_group_id
+  // 已固化项目栈 → 要求本次 init 与之一致；旧会话无 stacks → 补齐（升级在途会话）
+  const stacksNote = state ? adoptOrAssertSessionStacks(state, args) : null
 
   // state 已存在时的 mode 变更窗口校验/更新（位于 for 循环前——循环内非活跃组新建 item 与
   // applyRecoveryState 均读 state.mode；错误早于任何状态变更抛出，不落盘）：
@@ -882,6 +927,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   const parts = ["编排会话已初始化。"]
   if (args.recovery) parts.push(`已恢复到 ${args.recovery.phase} 阶段。`)
   if (modeSwitchNote) parts.push(modeSwitchNote)
+  if (stacksNote) parts.push(stacksNote)
   // review_layer 在 simple 模式下无对应子层（仅 quality_review 单层审查），该参数接受但不生效：
   // 返回体显式警告，避免调用方误以为已按子层恢复
   if (args.recovery?.review_layer && (state.mode ?? "full") === "simple") {

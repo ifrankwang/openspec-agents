@@ -11,3 +11,6 @@ dsh/
 openspec/states/
 .opencode/.orchestrate_state/
 .zcode/plans/
+.workbuddy/
+openspec-agents-poster.miora
+openspec-agents-poster_assets/

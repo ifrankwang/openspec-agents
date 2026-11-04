@@ -39,7 +39,7 @@ Claude Code 和 DeepSeek Harness 自带的工作流能力擅长**并行完成大
 
 **存量项目需要一次收敛成本。** 判据按理想状态定义（方法不超过 50 行、类职责单一、核心域不依赖框架、构建产物需忽略、覆盖率需达标），且工具检查覆盖全量代码——存量违规同样按原级别上报并阻塞。存量项目首次运行会暴露大量存量问题，只能逐个修复，或逐个走豁免裁定；裁定通过的会沉淀进项目级清单，后续变更不再重复阻塞。
 
-**Java 之外只有通用规范。** 通用规范 skill 与技术栈无关；Java 后端配套的那套在此之上补齐具体构建与检查命令（ArchUnit 规则、Spotless / PMD 配置、质量扫描平台接入）。非 Java 项目审查照常执行，但编译、格式、静态分析、覆盖率这几项确定性检查没有现成命令，需自行补充一份技术栈 skill，否则只能按降级申报跳过。
+**技术栈配套需覆盖到你的栈。** 通用规范 skill 与技术栈无关；内置的 Java 后端与前端（Vue / React）配套在此之上补齐具体构建与检查命令（构建工具、格式、静态分析、覆盖率、质量扫描平台接入）。其他技术栈项目审查照常执行，但编译、格式、静态分析、覆盖率、端到端这几项确定性检查没有现成命令，需补一份技术栈 skill（在 frontmatter 声明 `stacks` / `frameworks` 即可被识别并加载），否则只能按降级申报跳过。
 
 **架构规范只有 DDD 一套。** 包组织有两种等价的合法风格——四层分层（domain / application / infrastructure / interfaces）与六边形（内核 + 入站 / 出站适配器），采用哪种由项目声明，未声明时按四层认定。不按 DDD 组织的项目（例如 MVC + Service + DAO 直写）没有对应规范，会被判定为偏离规范并报出问题；项目已有自己的架构规范时以项目规范为准，但该规范需自行写入。
 
@@ -200,14 +200,17 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 
 **Java 后端配套**：在通用规范之上补齐 Java / Spring 的实现细节 —— Lombok、日志与命名约定、REST 接口的 Java 实现、MyBatisPlus 与 Flyway、DDD 的 Java 实现与 ArchUnit 规则、Maven / Spotless / PMD / 质量扫描平台接入、工具规则改进、Java 开发实践、Java 安全实现、Java 性能与可维护性、Java 技术债形态。
 
-skill 用「形态标签」（backend / frontend）与「框架标签」（java / vue / react）声明自己适配哪类项目。初始化编排会话时声明本项目的形态栈与框架栈（`opx_orch_init` 的 `project_stacks` / `project_frameworks`），skill 清单与必做清单门禁都按这份声明过滤：形态与框架标签都被声明覆盖的 skill 才会加载，未声明形态/框架标签的 skill 视为通用、始终加载。声明值须命中当前 skill 库里实际存在的标签，拼错会被直接拒绝。Java 后端项目带上的是 Java 配套那套；尚未补齐配套的栈只有通用规范生效，具体的构建与检查命令由你项目的规范补充。
+**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、TypeScript 严格度、代码风格与 ESLint / Prettier、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现、前端 e2e（Playwright）与工具规则改进。
+
+skill 用「形态标签」（`stacks`：backend / frontend）与「框架标签」（`frameworks`：java / vue / react）声明自己适配哪类项目。初始化编排会话时必传本项目的形态栈与框架栈（`opx_orch_init` 的 `project_stacks` / `project_frameworks`，独立审查入口同样必传），skill 清单与必做清单门禁都按这份声明过滤：skill 声明的标签与会话同通道取值有交集即加载，未声明该通道的 skill 视为通用、始终加载；两个值域分字段校验，跨字段混用或传入未声明的值会被直接拒绝。扩展新框架不需要改工具代码——新增或替换 skill 时在 frontmatter 写 `stacks` / `frameworks` 即可被动态识别。
 
 ## 独立审查会话
 
 除了绑定变更的编排，插件也支持不绑定任何变更的独立代码审查：对一个 PR 的改动区间、或整个代码库做一次完整审查。
 
-初始化时说明三件事：
+初始化时说明以下事项：
 
+- **项目形态栈与框架栈**：`project_stacks`（如 backend / frontend）与 `project_frameworks`（如 java / vue / react），两入口均必传；取值须为 skill 已声明的标签，形态与框架分字段不可混用。
 - **审查范围**：`pr`（两个**本地**分支之间的改动区间，远端分支名会被拒）或 `full`（全量代码库）。
 - **颗粒度**：`thorough`（工具检查 → 回归验证 → 风格 / 架构 / 性能 / 安全 / 可维护性五个维度的质量审查）或 `simple`（一个审查者合并完成全部检查）。
 - **修复策略**：`fix`（发现问题自动修复再重审）或 `none`（只审不修，问题报告本身即交付物）。

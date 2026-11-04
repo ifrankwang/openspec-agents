@@ -81,13 +81,17 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
 
 /**
  * 按 capability tag 语义匹配 skill，并按会话项目栈过滤（形态/框架字段命中规则见 stacks.ts）。
- * 返回过滤后的 skill 名清单（不按 tech-stack-* 前缀分组，过滤统一在解析层完成）；
- * session 未传（undefined）时不过滤——兼容无会话调用（如 workflow 静态校验、单测）。
+ * 返回过滤后的 skill 名清单（不按 tech-stack-* 前缀分组，过滤统一在解析层完成）。
+ * session 三种取值：
+ * - 传对象：按会话项目栈做交集过滤；
+ * - 传 null：旧会话未固化项目栈（无 stacks）——只保留未声明 stacks/frameworks 的通用 skill，
+ *   技术栈配套 skill 一律不列（避免升级在途会话被要求加载错误技术栈的 skill 与必做项）；
+ * - 不传（undefined）：无会话上下文（如 workflow 静态校验、单测），不过滤。
  * caps 为空/undefined 返回空。
  */
 export function resolveSkillsForCapabilities(
   caps: string[] | undefined,
-  session?: SessionStacks,
+  session?: SessionStacks | null,
   index?: SkillTagIndex,
 ): { skillNames: string[] } {
   if (!caps || caps.length === 0) return { skillNames: [] }
@@ -99,7 +103,12 @@ export function resolveSkillsForCapabilities(
   }
   const skillNames: string[] = []
   for (const name of matched) {
-    if (session && !matchesSessionStacks(skillStacks.get(name) ?? [], skillFrameworks.get(name) ?? [], session)) continue
+    const declaredStacks = skillStacks.get(name) ?? []
+    const declaredFrameworks = skillFrameworks.get(name) ?? []
+    if (session === null) {
+      // 旧会话未固化项目栈：仅通用 skill（两通道均未声明）
+      if (declaredStacks.length > 0 || declaredFrameworks.length > 0) continue
+    } else if (session && !matchesSessionStacks(declaredStacks, declaredFrameworks, session)) continue
     skillNames.push(name)
   }
   return { skillNames }

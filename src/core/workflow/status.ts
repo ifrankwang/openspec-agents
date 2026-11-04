@@ -51,7 +51,28 @@ export interface StatusViewCaller {
  *   - 调用者 ∈ 推荐 agents → ✅ 执行视图（skill 加载清单 + 按 step 渲染 children/blocker/会话摘要 + 操作指引）
  *   - 否则 → ⛔ 阶段门禁（复用既有 gate 文案）
  */
+/**
+ * 新流动态视图入口：旧会话（state 无 stacks）在视图顶部追加项目栈补齐指引，随后渲染常规视图。
+ * 未固化项目栈的会话只加载通用 skill（过滤层按 null 处理），指引告知如何补齐并恢复进度。
+ */
 export function renderWorkflowStatusView(
+  item: WorkItem,
+  workflow: LoadedWorkflow,
+  rec: EngineRecommendation,
+  caller: StatusViewCaller,
+  options: WorkflowStatusViewOptions,
+): string {
+  const body = renderWorkflowStatusViewCore(item, workflow, rec, caller, options)
+  if (options.state.stacks) return body
+  return [
+    "> **旧会话未固化项目栈**：当前只加载通用 skill，技术栈配套 skill 与其必做项不参与。",
+    "> 补齐方式：调用 `opx_orch_init` 并携带 `project_stacks` / `project_frameworks`（可用 `recovery` 恢复当前进度）。",
+    "",
+    body,
+  ].join("\n")
+}
+
+function renderWorkflowStatusViewCore(
   item: WorkItem,
   workflow: LoadedWorkflow,
   rec: EngineRecommendation,
@@ -135,7 +156,7 @@ function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, i
   // checkpoint_skip_reasons 逐项申报结构化降级理由（操作指引层面，不解释门禁内部实现）。
   const entry = rec.stepId ? workflow.stepMap.get(rec.stepId) : undefined
   const stepCaps = Array.from(new Set((entry?.step.agents ?? []).flatMap((a) => a.capability_tags)))
-  if (resolveMustDoForCaps(stepCaps, undefined, state?.stacks).length > 0) {
+  if (resolveMustDoForCaps(stepCaps, undefined, state?.stacks ?? null).length > 0) {
     lines.push(
       `含必做清单的 step 的 giveup 决策：未覆盖必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），缺理由 giveup 不会被受理。`,
       "",
@@ -684,7 +705,7 @@ function renderAgentWorking(
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx))
-  lines.push(...renderSkillSuggestions(ctxAgent, caps, state.stacks))
+  lines.push(...renderSkillSuggestions(ctxAgent, caps, state.stacks ?? null))
   lines.push("## 操作指引", "")
   let n = 0
   lines.push(`${n++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)

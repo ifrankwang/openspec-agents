@@ -90,13 +90,10 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
     const r = resolveSkillsForCapabilities(["architecture"])
     expect(r.skillNames).toContain("technical-debt")
     expect(r.skillNames).toContain("java-technical-debt")
-    expect(r.skillNames).toContain("technical-debt")
-    expect(r.skillNames).toContain("java-technical-debt")
   })
 
   test("architecture 命中架构演进审查 skill", () => {
     const r = resolveSkillsForCapabilities(["architecture"])
-    expect(r.skillNames).toContain("architecture-evolution")
     expect(r.skillNames).toContain("architecture-evolution")
   })
 
@@ -117,7 +114,6 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
 
   test("无匹配 tag → 清单为空", () => {
     const r = resolveSkillsForCapabilities(["no-such-capability"])
-    expect(r.skillNames).toEqual([])
     expect(r.skillNames).toEqual([])
   })
 
@@ -484,7 +480,7 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
       expect(r.skillNames.length).toBeGreaterThan(0)
     }
     expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
-    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
+    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "e2e-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
     expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency"])
     expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "e2e-testing", "test-design", "efficiency", "dev-practices", "cleanup"])
     expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])

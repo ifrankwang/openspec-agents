@@ -5,7 +5,7 @@ import { findSkillPath } from "../skills/scan.ts"
 import { scanSkillTags, resolveSkillsForCapabilities, getEfficiencySkills } from "../skills/resolve.ts"
 import type { SessionStacks } from "../skills/stacks.ts"
 
-export function renderSkillSuggestions(agent: string, caps: string[], session?: SessionStacks): string[] {
+export function renderSkillSuggestions(agent: string, caps: string[], session?: SessionStacks | null): string[] {
   if (caps.length === 0) return []
   const index = scanSkillTags()
   const { skillNames } = resolveSkillsForCapabilities(caps, session, index)

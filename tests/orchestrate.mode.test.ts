@@ -292,14 +292,18 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     } finally { teardown(root) }
   })
 
-  test("旧 state 缺 mode + 传 mode=full（与生效兜底值一致）→ 放行无提示、mode 保持缺省不写回", async () => {
+  test("旧 state 缺 mode + 传 mode=full（与生效兜底值一致）→ 放行无模式提示、mode 保持缺省不写回", async () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
       writeLegacyState(wt)
-      // 生效值为兜底 full，传入 full 视为无变更意图：放行且无切换提示
+      // 生效值为兜底 full，传入 full 视为无变更意图：放行且无模式切换提示
       const out = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
-      expect(out).toBe("编排会话已初始化。")
+      expect(out).toContain("编排会话已初始化。")
+      expect(out).not.toContain("流程模式已从")
+      // 旧会话无 stacks → 本次 init 补齐（升级在途会话），返回体给出提示
+      expect(out).toContain("已为旧会话补齐项目栈")
+      expect(stateOf(wt).stacks).toEqual(INIT_PROJECT_STACKS)
       // 不写回：mode 保持缺省（消费端读时兜底 full 的既有语义不变）
       expect(stateOf(wt).mode).toBeUndefined()
     } finally { teardown(root) }

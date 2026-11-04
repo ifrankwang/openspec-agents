@@ -23,7 +23,7 @@ capabilities: ["orchestrator"]
 - 调用时直接使用工具列表中的完整名称，不要因为带 `mcp__...__` 前缀而误认为不是本流程工具。
 - 启动编排的常规入口（以工具实际可用为准）：
   1. 先调用状态查询工具（如 `opx_status` 或列表中对应的 status 工具）查看当前是否已初始化 / worktree 是否就绪；
-  2. 若未初始化，调用初始化工具（如 `opx_orch_init`）传入 `change_id` / `task_group_id`；
+  2. 若未初始化，调用初始化工具（如 `opx_orch_init`）传入 `change_id` / `task_group_id`，以及必传的 `project_stacks` / `project_frameworks`（本项目形态栈与框架栈，取值须为 skill 已声明的标签，形态与框架分字段不可混用）；
   3. 若 worktree 未就绪，调用 `opx_orch_set_worktree`（或列表中对应工具）；
   4. 再次调用状态查询工具获取权威「下一步」并严格按返回执行。
 - 用户仅给出 change 名（未指定任务组）时的约定语义：表示以简单模式串行实施该 change 的全部任务组。先读取 `openspec/changes/<change 名>/tasks.md` 获取任务组清单与顺序（该文件是编排规划清单，非被编排项目的业务源码，也是初始化前唯一允许读取的项目文件）：未初始化时从清单第一个任务组开始，以显式 `mode="simple"` 调用初始化工具；当前任务组收尾完成后初始化顺序中的下一个任务组，直至全部任务组完成后按状态视图指引完成部署注意事项汇报，编排结束。用户明确指定任务组或要求 full 模式时按用户指定执行，不适用本约定。
@@ -33,7 +33,7 @@ capabilities: ["orchestrator"]
 
 ## 审查请求入口（独立审查会话）
 
-用户表达审查意图且不绑定 OpenSpec change（如「审查这个 PR」「对代码库做一次审查」）时，走独立审查入口：初始化工具传 `review_scope`（不传 `change_id`/`task_group_id`，两者互斥）。`review_scope` 含四个要素：`scope_type`（pr=按 base..head 本地分支区间 / full=全量代码库）、`base_ref`（pr 基准分支，缺省自动推导 main→master）、`head_ref`（pr 审查目标分支，须为本地分支——`origin/*` 远端引用不受支持）、`granularity`（simple=单层合并审查 / thorough=三层审查）、`fix`（none=只审不修 / fix=审并修）。
+用户表达审查意图且不绑定 OpenSpec change（如「审查这个 PR」「对代码库做一次审查」）时，走独立审查入口：初始化工具传 `review_scope`（不传 `change_id`/`task_group_id`，两者互斥），并同样必传 `project_stacks` / `project_frameworks`（取值须为 skill 已声明的标签）。`review_scope` 含四个要素：`scope_type`（pr=按 base..head 本地分支区间 / full=全量代码库）、`base_ref`（pr 基准分支，缺省自动推导 main→master）、`head_ref`（pr 审查目标分支，须为本地分支——`origin/*` 远端引用不受支持）、`granularity`（simple=单层合并审查 / thorough=三层审查）、`fix`（none=只审不修 / fix=审并修）。
 
 - 有人值守且 `fix` 或 `granularity` 未明确：用 question 工具逐项向用户确认后显式传入，不擅自替用户拍板
 - 无人值守且未明确：缺省 `fix=none` + `granularity=simple`（只读零副作用、成本最低）；遇高敏信号（如用户明确要求安全审计）可自行升档 `thorough`

@@ -113,11 +113,11 @@ function stepToken(name: string): string {
 
 /** 按 capability_tags 解析出所有命中 skill 声明 must_do 的合并集合（去重、保持声明顺序）。
  *  session 为会话项目栈（opx_orch_init 固化），传入时 must_do 只统计过滤后命中的 skill；
- *  不传（undefined）不过滤（兼容旧会话与无会话调用）。 */
+ *  传 null（旧会话无 stacks）时只统计通用 skill；不传（undefined）不过滤（无会话调用）。 */
 export function resolveMustDoForCaps(
   caps: string[] | undefined,
   index?: SkillTagIndex,
-  session?: SessionStacks,
+  session?: SessionStacks | null,
 ): string[] {
   const idx = index ?? currentIndex()
   const { skillNames } = resolveSkillsForCapabilities(caps, session, idx)
@@ -138,7 +138,7 @@ export function uncoveredMustDo(
   caps: string[] | undefined,
   validationSteps: Array<{ step: string; completed: boolean; skip_reason?: string }> | undefined,
   index?: SkillTagIndex,
-  session?: SessionStacks,
+  session?: SessionStacks | null,
 ): string[] {
   const must = resolveMustDoForCaps(caps, index, session)
   if (must.length === 0) return []

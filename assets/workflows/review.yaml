@@ -33,7 +33,7 @@ phases:
       - id: implement
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency, api-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
+            capability_tags: [efficiency, api-testing, e2e-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
         transitions:
           on_pass: verify_tool
           on_fail: implement
@@ -87,7 +87,7 @@ phases:
         instructions:
           - "回归验证层（独立审查场景，无 spec 验收标准——以既有测试与行为基线为锚）逐项验证：①构建通过；②既有测试全量执行不引入新失败——首轮跑出的存量失败按 issue 上报进入处置通道（审并修模式进修复闭环或豁免，只审模式进报告），修复轮出现「上轮未登记的新失败」即回归、verdict=failed 并报 issue（说明失败用例与归因）；③可启动服务时按已加载技术栈 skill 的隔离启动规范隔离启动做冒烟与既有 API 测试脚本执行（存在时），验证后幂等清理"
           - "测试设计核验（独立审查无 spec：行为面从变更 diff 与既有实现独立推导）：独立产出行为面清单与用例矩阵，核对既有与新增测试对行为面的覆盖、断言强度与实施正确性（检查点按已加载测试设计规范与任务维度判例执行）；自行对关键用例执行反向探针——改坏被测实现 → 确认对应用例变红 → 原样还原实现 → 全量用例复跑全绿，把改坏点与还原确认结果编入 validation_steps 的 negative_probe 申报；用例未变红视为该用例无对抗力，须报 issue；无测试对象（无代码、接口契约与数据口径变更）时以 completed=false + 结构化 skip_reason 申报；不得跳过核验直接提交通过"
-          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载测试规范执行脚本实跑」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
+          - "本 step 能力集含测试类能力，须按已加载测试规范申报对应必做项（接口测试为 api_script/api_execution，端到端测试为 e2e_script/e2e_run）：脚本类必做项对应「变更涉及的行为有对应测试脚本」，执行类必做项对应「按已加载测试规范执行脚本实跑」；变更不涉及对应行为（接口契约、数据口径或端到端行为）时，对应两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及对应行为但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅执行类必做项置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，脚本类必做项仍须实查脚本存在性，脚本缺失按「变更行为无对应脚本」判例报 issue，不得以环境不可用为由跳过；多类测试语义分开，不得混用"
           - "验证完成后（含 verdict=failed 轮次）按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本会话的隔离环境、删除残留的隔离扫描项目；无残留即通过，清理结果纳入 validation_steps 申报"
           - "无法启动服务或不存在 API 测试脚本时，③置 completed=false 并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），注明判定依据"
           - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
