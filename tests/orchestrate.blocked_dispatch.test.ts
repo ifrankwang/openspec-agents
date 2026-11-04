@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, setupWithFakeGit, teardown, makeCtx } from "./helpers"
 import {
   setupToAnalyze, driveToQuality, submitQualityPassed,
   taskIdsOf, readItem, DEFAULT_EXECUTION_BOUNDARY,
@@ -189,7 +189,7 @@ describe("recovery reset_steps 重置 review tag", () => {
         item.tags["verify_quality:openspec-reviewer-security"] = "passed"
         item.tags["verify_quality:openspec-reviewer-maintainability"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_quality"] } }, ctx.orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_quality"] } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_quality")
@@ -216,7 +216,7 @@ describe("recovery reset_steps 重置 review tag", () => {
         item.tags["verify_quality:openspec-reviewer-security"] = "passed"
         item.tags["verify_quality:openspec-reviewer-maintainability"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_task"] } }, ctx.orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["verify_task"] } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.currentStep).toBe("verify_task")
       expect(item.tags["verify_task:openspec-reviewer-task"]).toBeUndefined()
@@ -232,24 +232,24 @@ describe("recovery reset_steps 重置 review tag", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl", reset_steps: ["verify_tool"] } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl", reset_steps: ["verify_tool"] } } as any, ctx.orch),
         /reset_steps 参数仅当 recovery.phase 为 review/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "task", reset_steps: ["verify_tool"] } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "task", reset_steps: ["verify_tool"] } } as any, ctx.orch),
         /reset_steps 与 review_layer 互斥/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: [] } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: [] } } as any, ctx.orch),
         /reset_steps 不能为空数组/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["implement"] } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["implement"] } } as any, ctx.orch),
         /reset_steps 中的 step "implement" 不属于当前会话形态/
       )
       // full 模式传 simple 模式的 quality_review → 模式不匹配报错
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, ctx.orch),
         /quality_review.*不属于当前会话形态（full 模式）的审查 step/
       )
       // 抛错零变更：仍停留在 analyze

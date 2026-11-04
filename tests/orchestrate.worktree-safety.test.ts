@@ -12,13 +12,12 @@ import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "node
 import { join } from "node:path"
 
 import { __setGitRunner, detectMainRepoPollution, type GitRunner } from "../src/core/git"
-import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
 import { acquireLock, releaseLock, getLockPath, writeState } from "../src/core/state"
 import type { OrchestrateState } from "../src/core/types"
 import {
   init, set_worktree, agent_submit, status,
 } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
 import { setupToAnalyze, driveToQuality, DIMENSION_AGENTS } from "./helpers-workflow"
 
 const CID = "test-wtsafe"
@@ -33,8 +32,8 @@ function freshWt(root: string): string {
     `## 1. G1\n\n- [ ] 1.1 T1 [spec:s1]\n- [ ] 1.2 T2 [spec:s2]\n\n## 2. G2\n\n- [ ] 2.1 T3\n`,
     "utf-8"
   )
-  // 与 helpers.setupWorkspace 对齐：非必做清单用例默认豁免门禁（gate 索引置空）
-  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+  // 与 helpers.setupWorkspace 对齐：门禁豁免 + init 标签词汇注入。
+  installTestSkillEnv()
   return wt
 }
 
@@ -64,7 +63,7 @@ describe("W1. set_worktree 分支安全守卫", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       const first = await set_worktree.execute({ change_id: CID }, o)
       expect(first).toContain("已创建 worktree")
 
@@ -92,7 +91,7 @@ describe("W1. set_worktree 分支安全守卫", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       const first = await set_worktree.execute({ change_id: CID }, o)
       expect(first).toContain("已创建 worktree")
 
@@ -128,7 +127,7 @@ describe("W2. init recovery 对 worktree 引用", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       await set_worktree.execute({ change_id: CID }, o)
 
       const orig = taskItemOf(wt)
@@ -136,6 +135,7 @@ describe("W2. init recovery 对 worktree 引用", () => {
       expect(orig.metadata["base_ref"]).not.toBeNull()
 
       await init.execute({
+        ...INIT_PROJECT_STACKS,
         change_id: CID, task_group_id: "1", mode: "full",
         recovery: { phase: "dev_impl" } }, o)
 
@@ -156,11 +156,12 @@ describe("W2. init recovery 对 worktree 引用", () => {
     try {
       const o = makeOrchCtx(wt)
 
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       await set_worktree.execute({ change_id: CID }, o)
 
       const orig = taskItemOf(wt)
       await init.execute({
+        ...INIT_PROJECT_STACKS,
         change_id: CID, task_group_id: "1", mode: "full",
         recovery: { phase: "task_analysis" } }, o)
 
@@ -328,7 +329,7 @@ async function setupToToolReview(wt: string, fakeGit: FakeGitRunner): Promise<vo
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
   await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed",
     execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } }, a)
@@ -438,7 +439,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
     __setGitRunner(fakeGit)
     const o = makeOrchCtx(wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     await expect(
       set_worktree.execute({ change_id: CID, worktree_path: "/tmp/outside-worktree" }, o)
     ).rejects.toThrow(/超出/)
@@ -453,7 +454,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
     __setGitRunner(fakeGit)
     const o = makeOrchCtx(wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     await expect(
       set_worktree.execute({ change_id: CID, worktree_path: join(wt, "..", "evil") }, o)
     ).rejects.toThrow(/超出/)
@@ -468,7 +469,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
     __setGitRunner(fakeGit)
     const o = makeOrchCtx(wt)
 
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     const custom = join(wt, ".worktree", "custom")
     const result = await set_worktree.execute({ change_id: CID, worktree_path: custom }, o)
     expect(result).toContain("已创建 worktree")
@@ -583,7 +584,7 @@ describe("W8. 主仓库 openspec 污染诊断", () => {
     fakeGit.dirtyPaths.add(`${mainRepo}-openspec`)
 
     const o = makeOrchCtx(mainRepo)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     const out = await status.execute({ change_id: CID }, o)
 
     expect(out).toContain("## ⚠️ 主仓库 openspec 污染")
@@ -602,7 +603,7 @@ const BOUNDARY = { allowed_directories: ["src"], allowed_packages: ["com.t"], no
 /** init → set_worktree，agent_submit(analyze) 前 worktree 已就绪 */
 async function setupToWorktreeReady(wt: string, fakeGit: FakeGitRunner): Promise<void> {
   const o = makeOrchCtx(wt)
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
 }
 
@@ -755,7 +756,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     const fakeGit = new FakeGitRunner()
     __setGitRunner(fakeGit)
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
     await expect(

@@ -24,6 +24,7 @@ import {
   getSkillMustDo,
   type SkillTagIndex,
 } from "../../skills/resolve.ts"
+import type { SessionStacks } from "../../skills/stacks.ts"
 
 /** 裁定方式枚举：用户答复 / 无人值守自动降级 / 环境不可用（须附尝试记录）。 */
 export const SKIP_REASON_ADJUDICATIONS = ["user_response", "unattended_auto", "env_unavailable"] as const
@@ -108,10 +109,16 @@ function stepToken(name: string): string {
   return name.trim().split(/[:：（(]/)[0].trim()
 }
 
-/** 按 capability_tags 解析出所有命中 skill 声明 must_do 的合并集合（去重、保持声明顺序）。 */
-export function resolveMustDoForCaps(caps: string[] | undefined, index?: SkillTagIndex): string[] {
+/** 按 capability_tags 解析出所有命中 skill 声明 must_do 的合并集合（去重、保持声明顺序）。
+ *  session 为会话项目栈（opx_orch_init 固化），传入时 must_do 只统计过滤后命中的 skill；
+ *  不传（undefined）不过滤（兼容旧会话与无会话调用）。 */
+export function resolveMustDoForCaps(
+  caps: string[] | undefined,
+  index?: SkillTagIndex,
+  session?: SessionStacks,
+): string[] {
   const idx = index ?? currentIndex()
-  const { skillNames } = resolveSkillsForCapabilities(caps, idx)
+  const { skillNames } = resolveSkillsForCapabilities(caps, session, idx)
   const seen = new Set<string>()
   const out: string[] = []
   for (const name of skillNames) {
@@ -129,8 +136,9 @@ export function uncoveredMustDo(
   caps: string[] | undefined,
   validationSteps: Array<{ step: string; completed: boolean; skip_reason?: string }> | undefined,
   index?: SkillTagIndex,
+  session?: SessionStacks,
 ): string[] {
-  const must = resolveMustDoForCaps(caps, index)
+  const must = resolveMustDoForCaps(caps, index, session)
   if (must.length === 0) return []
   const steps = validationSteps ?? []
   // 全量豁免声明：无代码/配置变更直提、或经审查确认仅注释/文档性变更免全量时，

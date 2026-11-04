@@ -15,11 +15,10 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
-import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
 import { init, status, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { loadWorkflow } from "../src/core/workflow/loader"
-import { FakeGitRunner, makeCtx, makeOrchCtx } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeCtx, makeOrchCtx } from "./helpers"
 
 const CID = "wf-status"
 
@@ -30,8 +29,8 @@ function freshWt(root: string): string {
   const wt = join(root, id, "w")
   mkdirSync(join(wt, "openspec", "changes", CID), { recursive: true })
   writeFileSync(join(wt, "openspec", "changes", CID, "tasks.md"), "## 1. G1\n\n- [ ] 1.1 T1\n- [ ] 1.2 T2\n", "utf-8")
-  // 与 helpers.setupWorkspace 对齐：非必做清单用例默认豁免门禁（gate 索引置空）
-  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+  // 与 helpers.setupWorkspace 对齐：门禁豁免 + init 标签词汇注入。
+  installTestSkillEnv()
   return wt
 }
 
@@ -54,7 +53,7 @@ async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
   await agent_submit.execute(
     {
@@ -71,7 +70,7 @@ async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx
 async function driveToImplement(wt: string): Promise<ReturnType<typeof makeCtx>> {
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
   await agent_submit.execute(
     {
@@ -701,7 +700,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     await set_worktree.execute({ change_id: CID }, o)
 
     const state = readStateSync(wt)
@@ -1070,7 +1069,7 @@ describe("simple 模式 quality_review：开发者自检申报区块渲染（验
   /** simple 模式推进到 quality_review（implement passed 可携带 self_check_results）。 */
   async function driveToQualityReviewSimple(wt: string, extra: Record<string, unknown> = {}): Promise<void> {
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
     await set_worktree.execute({ change_id: CID }, o)
     await agent_submit.execute(
       { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"], ...extra },
@@ -1157,7 +1156,7 @@ describe("simple 模式 quality_review：本次变更证据区块（检查点增
   /** simple 模式推进到 quality_review；extra 透传 implement 提交参数。 */
   async function driveToQualityReviewSimple(wt: string, extra: Record<string, unknown> = {}): Promise<void> {
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
     await set_worktree.execute({ change_id: CID }, o)
     await agent_submit.execute(
       { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"], ...extra },
@@ -1275,7 +1274,7 @@ describe("simple 模式 quality_review：本次变更证据区块（检查点增
     fakeGit.diffNameOnlyByRange.set(`${BASE_REF}..HEAD`, "src/main/java/com/t/App.java")
     __setGitRunner(fakeGit)
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
     await set_worktree.execute({ change_id: CID }, o)
 
     const output = await status.execute({ change_id: CID }, makeCtx("openspec-developer", wt))
@@ -1292,7 +1291,7 @@ describe("test_results 提交通道：implement 申报存档 + quality_review �
   /** simple 模式推进到 quality_review，dev 提交时携带 test_results 申报。 */
   async function driveToQualityReviewWithTestResults(wt: string, testResults: string): Promise<void> {
     const o = makeOrchCtx(wt)
-    await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+    await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
     await set_worktree.execute({ change_id: CID }, o)
     await agent_submit.execute(
       {

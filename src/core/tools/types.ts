@@ -44,6 +44,10 @@ export interface InitParams {
    *  或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）
    *  时允许更新，窗口外传不同 mode 报错。 */
   mode?: WorkflowMode
+  /** 会话项目栈（两入口必传）：skill 加载清单与 must_do 门禁的过滤基准。
+   *  每个值必须命中当前 skill 索引中实际存在的标签（动态校验）。 */
+  project_stacks: string[]
+  project_frameworks: string[]
 }
 
 export interface SetWorktreeParams {

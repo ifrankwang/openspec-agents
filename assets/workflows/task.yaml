@@ -89,7 +89,7 @@ phases:
           - "生产路径禁止 stub/fake/空实现/硬编码成功"
           - "提交前自检必须覆盖已加载的全部 skill（含维度规范类）检查点，不得以工具检查结果替代维度规范自检"
           - "需以 verdict=failed + blocker 上报的条件：需求模糊 / design 问题 / 技术阻塞 / 超出执行边界"
-          - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
+          - "禁止以质量扫描平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前质量扫描平台项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
           - "禁止以压制手段静默规避确定性质量工具问题：压制必须附明确理由并经豁免申请流程裁定，不得以工具不再报错为由跳过申报"
           - "禁止为腾出端口或资源而停止、复用或干扰非本变更启动的进程（含用户或其他会话运行的服务实例）；验证所需环境（数据库、mock 服务、消息队列/缓存等中间件、扫描分析平台等）一律按隔离标识隔离启动，禁止共享或占用宿主既有实例"
   - name: review
@@ -118,13 +118,13 @@ phases:
           - "提交前工作区不得残留代码类未提交改动（反向探针改动必须还原、新增临时文件必须删除；不得以 commit 方式提交这类改动绕过检查）；仅注释修正与文档类可提交——源码内注释修正的 commit 必须只含注释改动、不得夹带逻辑改动，文档类改动（openspec/ 下文件与 .md 文件，含新建的未跟踪文件）会在提交时自动 commit，不受此限。工具层会拒绝带代码类未提交改动的提交"
           - "即使无 issue 也必须提交 verdict=passed（不通过必须有至少一个 Low+ issue 作为理由）"
           - "Info 级 issue 的 description/suggestion 禁止阶段/时机表述（如'可后续处理'）"
-          - "禁止以 SonarQube 平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前 SonarQube 项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
+          - "禁止以质量扫描平台状态修改（SAFE/WONTFIX/False Positive/Confirmed 等）作为豁免手段：平台状态仅作用于当前质量扫描平台项目实例，每次 change 使用独立项目 key，不跨 change 生效；存量问题跨 change 豁免必须经 exempt_issue_ids 申请 → 报源 reviewer 裁定 dismissed 的流程"
           - "压制类 issue 严重级别至少 Low"
           - "有实质变更时，工具检查及 issue 报告覆盖全量代码；非本轮变更文件的工具违规同样必须映射为 issue（命中项目级豁免清单的按 Info，不重新豁免；其余非本轮引入问题按原严重级别上报），不得以不在变更清单或未越界修改为由丢弃"
       - id: verify_task
         agents:
           - id: openspec-reviewer-task
-            capability_tags: [api-testing, test-design, efficiency, dev-practices, cleanup]
+            capability_tags: [api-testing, e2e-testing, test-design, efficiency, dev-practices, cleanup]
         transitions:
           on_pass: verify_quality
           on_fail: implement
@@ -132,7 +132,7 @@ phases:
           - "逐项验证：①task 产出完整性 ②启动服务并检查健康 ③独立执行全量 API 测试并审查质量（含 API 测试自闭环链路：创建后可检索、状态变更后可见、删除后不可见；测试数据贴近业务语义，禁止无意义占位值） ④审查测试代码质量（断言放水/Mock 过度/覆盖不足）⑤业务行为真实性：对照 spec 逐项核验每个业务行为的实现与断言证据（含一并操作的行为组、连带效果、下游消费），识别『仅打状态标记未实际生效』类缺陷 ⑥关键数据产出核验：对照 spec 数据产出要求，核验实现与测试是否覆盖产出数据落位（spec 指定承载位置）、完整非空、搬迁承接与同一输入基线一致，识别『流程正常但数据缺失/落错位置』类缺陷"
           # 全模式 verify_task 视图不渲染开发者自检申报，故证据源取变更 diff 与 worktree 测试代码；两种模式均由审查者独立推导，不以开发者申报为输入
           - "测试设计核验（独立完成，不以 dev 申报为输入）：从 spec 与既有实现独立推导行为面清单与用例矩阵，核对测试对行为面的覆盖、断言强度与实施正确性；自行对关键用例执行反向探针——改坏被测实现 → 确认对应用例变红 → 原样还原实现 → 全量用例复跑全绿，把改坏点与还原确认结果编入 validation_steps 的 negative_probe 申报；用例未变红视为该用例无对抗力，须报 issue；无测试对象（无代码、接口契约与数据口径变更）时以 completed=false + 结构化 skip_reason 申报；不得跳过核验直接提交通过"
-          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载接口测试规范执行脚本实跑通过」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
+          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载测试规范执行脚本实跑」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
           - "验证完成后（含 verdict=failed 轮次）按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的隔离扫描项目；无残留即通过，清理结果纳入 validation_steps 申报"
           - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②启动服务并检查健康与③独立执行全量 API 测试，仅验证①④；豁免时 validation_steps 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免启动服务与 API 测试」及判定依据；⑤⑥的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节、验收标准与数据产出要求），用于准备测试数据与对照 API 合约"
@@ -180,14 +180,14 @@ phases:
       - id: verify_cleanup
         agents:
           - id: openspec-developer
-            capability_tags: [cleanup, api-testing, dev-practices, efficiency]
+            capability_tags: [cleanup, api-testing, e2e-testing, dev-practices, efficiency]
         transitions:
           on_pass: done
           on_fail: verify_cleanup
         instructions:
           - "将基准分支（{{base_branch}}）最新代码合并进当前工作分支（git merge 基准分支），解决合并冲突；修复范围仅限合并冲突涉及文件与回归失败定位文件（改动仅用于解决合并引入的问题，可超出现有执行边界，禁止借机扩大范围）"
           - "合并后回归复验：按已加载的开发实践规范执行构建验证；按已加载的接口测试规范启动服务并执行接口测试（含关键数据产出/搬迁回归断言）；全部通过才算通过，不分失败来源（含基准分支新代码引入的失败）"
-          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载接口测试规范执行脚本实跑通过」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
+          - "本 step 能力集含接口测试能力，须按必做项口径申报 api_script 与 api_execution：api_script 对应「变更接口有对应的接口测试脚本」，api_execution 对应「按已加载测试规范执行脚本实跑」；变更不涉及接口契约或数据口径时，两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及接口契约或数据口径但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅 api_execution 置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，api_script 仍须实查脚本存在性，脚本缺失按「契约变更无对应脚本」判例报 issue，不得以环境不可用为由跳过；两类语义分开，不得混用"
           - "按已加载的清理规范执行幂等清理：停止残留的服务实例、清理本 change 的隔离环境、删除残留的扫描分析项目；无对应 skill 规范时跳过并在申报中注明"
           - "清理后确认工作分支 git status 干净（含未跟踪文件）"
           - "逐项申报 validation_steps（completed + 证据；未执行项以 completed=false + 结构化 skip_reason 申报：{\"item\":\"<必做项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}）"

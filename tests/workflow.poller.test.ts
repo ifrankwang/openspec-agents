@@ -15,7 +15,7 @@ import {
 import type { CollectorAdapter } from "../src/core/workflow"
 import { createInitialWorkItem } from "../src/core/workflow/engine"
 import type { WorkItem } from "../src/core/workflow/types"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace } from "./helpers"
 
 const CID = "poller"
 
@@ -42,7 +42,7 @@ function freshSetup(root: string): { wt: string } {
 }
 
 async function initSession(wt: string): Promise<void> {
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
 }
 
 /** 可配置假 adapter：pull 返回固定原始项，可注入 pull/transform/writeback 失败。 */

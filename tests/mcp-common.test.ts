@@ -8,7 +8,7 @@ import { join } from "node:path"
 import type { Server } from "node:http"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { setupWithFakeGit, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, setupWithFakeGit, teardown } from "./helpers"
 import { startMcpServer } from "../src/adapters/mcp-common/index"
 import * as poller from "../src/core/workflow/poller"
 
@@ -74,7 +74,7 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
 
       const initRes = await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1", mode: "full" },
+        arguments: { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" },
       })
       const initText = (initRes.content as Array<{ text: string }>)[0].text
       expect(initText).toContain("编排会话已初始化")
@@ -119,7 +119,7 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
 
       await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1", mode: "full" },
+        arguments: { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" },
       })
       await client.callTool({
         name: "opx_orch_set_worktree",
@@ -179,7 +179,7 @@ describe("默认无人值守（unattended-default）", () => {
       const client = await connectClient(`http://127.0.0.1:${port}/mcp`)
       await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1" },
+        arguments: { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1" },
       })
       const state = JSON.parse(
         readFileSync(join(worktree, "openspec", "states", `${CID}.json`), "utf-8")
@@ -199,7 +199,7 @@ describe("默认无人值守（unattended-default）", () => {
       const client = await connectClient(`http://127.0.0.1:${port}/mcp`)
       await client.callTool({
         name: "opx_orch_init",
-        arguments: { change_id: CID, task_group_id: "1" },
+        arguments: { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1" },
       })
       const state = JSON.parse(
         readFileSync(join(worktree, "openspec", "states", `${CID}.json`), "utf-8")

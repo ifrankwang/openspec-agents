@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
 
 const CID = "mode-submit"
 const DEV = "openspec-developer"
@@ -153,7 +153,7 @@ describe("2.3 quality_review failed 理由判定不按维度过滤", () => {
       // full 模式（显式 mode: full）：quality 层遗留阻塞维度为 architecture
       const { init, set_worktree } = await import("../src/adapters/opencode/tools")
       const orch = makeCtx("primary", wt, { orchestrator: true })
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
       await set_worktree.execute({ change_id: CID }, orch)
       const p = join(wt, "openspec", "states", `${CID}.json`)
       const state = JSON.parse(readFileSync(p, "utf-8")) as { workItems: any[] }

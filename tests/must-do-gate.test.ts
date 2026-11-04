@@ -226,6 +226,50 @@ describe("uncoveredMustDo / resolveMustDoForCaps", () => {
     ]
     expect(uncoveredMustDo(["quality-gate"], steps, idx)).toEqual([])
   })
+
+  /**
+   * 会话项目栈过滤：同一 capability 命中多个形态/框架 skill 时，必做清单只统计会话栈覆盖的 skill。
+   * 形态/框架标签未覆盖的 skill（含未声明形态/框架标签的通用 skill）不参与覆盖度门禁。
+   */
+  test("must_do 门禁按会话栈过滤后集合生效（后端会话不计前端 skill 清单）", () => {
+    const stackIdx: SkillTagIndex = {
+      tagMap: new Map([["quality-gate", ["quality-gate", "java-quality-gate", "vue-quality-gate"]]]),
+      skillTags: new Map([
+        ["quality-gate", ["quality-gate"]],
+        ["java-quality-gate", ["quality-gate", "backend", "java"]],
+        ["vue-quality-gate", ["quality-gate", "frontend", "vue"]],
+      ]),
+      skillMustDo: new Map([
+        ["quality-gate", ["compile"]],
+        ["java-quality-gate", ["static_analysis"]],
+        ["vue-quality-gate", ["coverage_front"]],
+      ]),
+    }
+    const backend = { project_stacks: ["backend"], project_frameworks: ["java"] }
+    const frontend = { project_stacks: ["frontend"], project_frameworks: ["vue"] }
+    const both = { project_stacks: ["backend", "frontend"], project_frameworks: ["java", "vue"] }
+
+    // 后端会话：通用 + 后端 skill 的清单，不含前端 skill 的 coverage_front
+    expect(resolveMustDoForCaps(["quality-gate"], stackIdx, backend)).toEqual(["compile", "static_analysis"])
+    expect(uncoveredMustDo(["quality-gate"], [], stackIdx, backend)).toEqual(["compile", "static_analysis"])
+
+    // 前端会话：通用 + 前端 skill 的清单，不含后端 skill 的 static_analysis
+    expect(resolveMustDoForCaps(["quality-gate"], stackIdx, frontend)).toEqual(["compile", "coverage_front"])
+
+    // 混合栈会话：两侧清单都统计
+    expect(resolveMustDoForCaps(["quality-gate"], stackIdx, both)).toEqual(["compile", "static_analysis", "coverage_front"])
+
+    // 覆盖后端清单即通过后端门禁，但前端会话的对应项仍未覆盖
+    const backendDeclared = [
+      { step: "compile", completed: true },
+      { step: "static_analysis", completed: true },
+    ]
+    expect(uncoveredMustDo(["quality-gate"], backendDeclared, stackIdx, backend)).toEqual([])
+    expect(uncoveredMustDo(["quality-gate"], backendDeclared, stackIdx, frontend)).toEqual(["coverage_front"])
+
+    // 未传会话栈 → 不过滤（兼容旧会话），三份清单都统计
+    expect(resolveMustDoForCaps(["quality-gate"], stackIdx)).toEqual(["compile", "static_analysis", "coverage_front"])
+  })
 })
 
 // ─── 集成：verify_tool 提交门禁 ───

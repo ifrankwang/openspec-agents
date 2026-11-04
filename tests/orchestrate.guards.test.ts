@@ -15,7 +15,7 @@ import { writeFileSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
   taskItemOf, taskListOf, metaOf, readItem, taskIdsOf, rollbackQuality,
@@ -142,7 +142,7 @@ describe("G1. set_worktree 守卫已移除", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
       expect(result).toContain("**路径**")
@@ -158,7 +158,7 @@ describe("G1.2. set_worktree 自修复", () => {
     try {
       fakeGit.dirtyPaths.add(`${wt}-openspec`)
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
     } finally { teardown(root) }
@@ -168,7 +168,7 @@ describe("G1.2. set_worktree 自修复", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       let result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
       result = await set_worktree.execute({ change_id: CID }, o)
@@ -180,7 +180,7 @@ describe("G1.2. set_worktree 自修复", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       const result = await set_worktree.execute({ change_id: CID }, o)
       expect(result).toContain("已创建 worktree")
       fakeGit.dirtyPaths.add(join(wt, ".worktree", CID, "ws"))
@@ -194,13 +194,13 @@ describe("G1.2. set_worktree 自修复", () => {
 describe("G2. 身份守卫", () => {
   test("non-orchestrator 调 init → throws", async () => {
     const dev = makeCtx("openspec-developer", "/tmp")
-    await expectError(init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, dev), /仅限编排者/)
+    await expectError(init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, dev), /仅限编排者/)
   })
 
   test("non-orchestrator 调 set_worktree → throws", async () => {
     const { wt, root } = fresh()
     try {
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
       await expectError(
         set_worktree.execute({ change_id: CID }, makeCtx("openspec-developer", wt)),
         /仅限编排者/
@@ -267,7 +267,7 @@ describe("G4.1. init 重入", () => {
     const { wt, root } = fresh()
     try {
       await driveToImplement(wt, CID)
-      const result = await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
+      const result = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
       expect(result).toBe("编排会话已初始化。")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")

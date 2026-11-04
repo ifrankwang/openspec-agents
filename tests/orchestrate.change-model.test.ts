@@ -16,7 +16,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, status, complete_task_group, agent_submit } from "../src/adapters/opencode/tools"
 import {
-  makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState, settleOtherGroups,
+  INIT_PROJECT_STACKS, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState, settleOtherGroups,
   type FakeGitRunner,
 } from "./helpers"
 
@@ -106,7 +106,7 @@ describe("scope 端点记录", () => {
 
       // 切组：init 组 2 + set_worktree → 复用同一 worktree 与分支，新组记录新端点
       fakeGit.branchOids.set(`change/${CID}`, "scope-g2")
-      await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "simple" }, makeOrchCtx(wt))
       await set_worktree.execute({ change_id: CID }, makeOrchCtx(wt))
 
       const g1 = taskItemOf(wt, "1")
@@ -203,7 +203,7 @@ describe("复用校验与升级路径", () => {
       expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(false)
 
       // 真实 init 切组 2（2 个子任务）→ worktree 复用 → 推到 done → complete：组 3 未终态仍不合并
-      await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "simple" }, makeOrchCtx(wt))
       await set_worktree.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(taskItemOf(wt, "2").metadata["worktree_path"]).toBe(wtPathOf(wt))
       await driveToDone(wt, ["1", "2"])
@@ -213,7 +213,7 @@ describe("复用校验与升级路径", () => {
       expect(fakeGit.refUpdates.length).toBe(0)
 
       // 切组 3（1 个子任务）→ 推到 done → complete：最后组一次性收口合并
-      await init.execute({ change_id: CID, task_group_id: "3", mode: "simple" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "3", mode: "simple" }, makeOrchCtx(wt))
       await set_worktree.execute({ change_id: CID }, makeOrchCtx(wt))
       await driveToDone(wt, ["1"])
       const out3 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))

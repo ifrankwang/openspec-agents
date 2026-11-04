@@ -483,7 +483,7 @@ function handleReviewParams(
   params: AgentSubmitParams,
   newChildren: WorkItem[],
   stepId: string,
-  opts: { capabilityTags: string[]; skipMustDoGate: boolean },
+  opts: { capabilityTags: string[]; skipMustDoGate: boolean; session?: OrchestrateState["stacks"] },
 ): void {
   // passed=true 与 Low+ 新报一致性：passed 只能带 Info 新报
   if (params.verdict === "passed" && newChildren.some((c) => isBlockingSeverity(c.severity))) {
@@ -518,7 +518,7 @@ function handleReviewParams(
   // 高成本必做项的合法覆盖形态，仅限 workflow 指令白名单限定的高成本必做项（deep_scan）；低成本必做项
   // 必须实跑后申报（机制层只认 token 命中不区分形态，白名单口径在错误提示中明示）。
   if (params.verdict === "passed" && !opts.skipMustDoGate) {
-    const uncovered = uncoveredMustDo(opts.capabilityTags, params.validation_steps)
+    const uncovered = uncoveredMustDo(opts.capabilityTags, params.validation_steps, undefined, opts.session)
     if (uncovered.length > 0) {
       throw new Error(
         `提交的验证步骤未覆盖已加载 skill 的必做清单，缺少以下必做项：${uncovered.join("、")}。\n` +
@@ -824,6 +824,8 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       const agentCfg = stepCfg.agents.find((a) => a.id === ctx.agent)
       handleReviewParams(item, params, newChildren, params.step_id, {
         capabilityTags: agentCfg?.capability_tags ?? [],
+        // 会话项目栈过滤：must_do 门禁只统计会话栈覆盖命中的 skill（与视图加载清单同口径）
+        session: state.stacks,
         // 补交豁免（仅裁定参数 / 仅 verified_tasks 的任务验证补交，均无实质审查内容）不重复校验
         // 必做清单覆盖度——完整审查在首次 passed 时已做过。任务验证补交的跳过与守卫放宽同源
         //（isTaskVerifySupplementAllowed：已 passed 且存在 review 态 task child），首次提交
@@ -996,7 +998,7 @@ async function applyCheckpointDecision(
     // uncovered 为空，giveup 行为不受影响（与「编排改动须评估全流程连锁影响」一致）。
     const stepCaps = Array.from(new Set(step.agents.flatMap((a) => a.capability_tags)))
     const prevSteps = (item.metadata["validation_steps"] as Array<{ step: string; completed: boolean }> | undefined)
-    const uncovered = uncoveredMustDo(stepCaps, prevSteps)
+    const uncovered = uncoveredMustDo(stepCaps, prevSteps, undefined, state.stacks)
     if (uncovered.length > 0) {
       const provided = new Map<string, unknown>()
       for (const r of params.checkpoint_skip_reasons ?? []) {

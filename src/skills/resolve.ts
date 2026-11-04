@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { SKILL_SCAN_ROOTS } from "./scan.ts"
+import { matchesSessionStacks, type SessionStacks } from "./stacks.ts"
 
 export interface SkillTagIndex {
   tagMap: Map<string, string[]>
@@ -58,14 +59,18 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
 }
 
 /**
- * 按 capability tag 语义匹配 skill：skill 含 tech-stack- 前缀 tag 归 techStackOnly，否则归 generic。
+ * 按 capability tag 语义匹配 skill，并按会话项目栈过滤（形态/框架标签匹配规则见 stacks.ts）。
+ * 返回过滤后的 skill 名清单（不再按 tech-stack-* 前缀分组，过滤统一在解析层完成）；
+ * session 未传（undefined）时不过滤——兼容无会话调用，以及 skill 尚未迁移到形态/框架标签的
+ * 迁移期（旧标签不合形态/框架词汇表，按通用处理、始终命中）。
  * caps 为空/undefined 返回空。
  */
 export function resolveSkillsForCapabilities(
   caps: string[] | undefined,
+  session?: SessionStacks,
   index?: SkillTagIndex,
-): { skillNames: string[]; techStackOnly: string[]; generic: string[] } {
-  if (!caps || caps.length === 0) return { skillNames: [], techStackOnly: [], generic: [] }
+): { skillNames: string[] } {
+  if (!caps || caps.length === 0) return { skillNames: [] }
   const idx = index ?? scanSkillTags()
   const { tagMap, skillTags } = idx
   const matched = new Set<string>()
@@ -73,15 +78,11 @@ export function resolveSkillsForCapabilities(
     for (const n of tagMap.get(cap) || []) matched.add(n)
   }
   const skillNames: string[] = []
-  const generic: string[] = []
-  const techStackOnly: string[] = []
   for (const name of matched) {
+    if (session && !matchesSessionStacks(skillTags.get(name) || [], session)) continue
     skillNames.push(name)
-    const tags = skillTags.get(name) || []
-    if (tags.some((t) => t.startsWith("tech-stack-"))) techStackOnly.push(name)
-    else generic.push(name)
   }
-  return { skillNames, techStackOnly, generic }
+  return { skillNames }
 }
 
 /** efficiency tag 命中的效率类 skill 名 */

@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, status, complete_task_group, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
 import type { ToolContext } from "../src/core/tools/types"
 
 afterAll(() => { __setGitRunner(null) })
@@ -38,7 +38,7 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      const out = await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       expect(out).toContain("`review-pr-main-feature-x`")
       const s = readState(wt, PR_SESSION)!
       expect(s.kind).toBe("review")
@@ -58,9 +58,9 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
     try {
       fakeGit.currentBranch = "develop"
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       expect(itemOf(wt, PR_SESSION).currentStep).toBe("quality_review")
-      const fullOut = await init.execute({ review_scope: { scope_type: "full", granularity: "thorough", fix: "none" } }, o)
+      const fullOut = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "full", granularity: "thorough", fix: "none" } }, o)
       const day = new Date().toISOString().slice(0, 10).replace(/-/g, "")
       const fullId = `review-full-develop-${day}`
       expect(fullOut).toContain(fullId)
@@ -74,10 +74,10 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      const err1 = await init.execute({ review_scope: { scope_type: "pr", head_ref: "origin/feature-x", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
+      const err1 = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "origin/feature-x", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
       expect(err1).toBeInstanceOf(Error)
       expect(err1.message).toMatch(/远端引用/)
-      const err2 = await init.execute({ review_scope: { scope_type: "pr", head_ref: "no-such-branch", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
+      const err2 = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "no-such-branch", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
       expect(err2.message).toMatch(/不是本地分支/)
       expect(err2.message).toContain("feature-x")
     } finally { teardown(root) }
@@ -88,10 +88,10 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
     try {
       fakeGit.localBranches = new Set(["master", "feature-x"])
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "none" } }, o)
       expect(readState(wt, "review-pr-master-feature-x")!.reviewScope.baseRef).toBe("master")
       fakeGit.localBranches = new Set(["feature-x"])
-      const err = await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
+      const err = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
       expect(err.message).toMatch(/无法自动推导/)
     } finally { teardown(root) }
   })
@@ -101,14 +101,14 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
     try {
       const o = makeOrchCtx(wt)
       const scope = { scope_type: "pr" as const, head_ref: "feature-x", granularity: "thorough" as const, fix: "none" as const }
-      await init.execute({ review_scope: scope }, o)
-      const again = await init.execute({ review_scope: scope }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope }, o)
+      const again = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope }, o)
       expect(again).toContain("复用既有会话")
-      const errDiff = await init.execute({ review_scope: { ...scope, fix: "fix" } }, o).catch((e: Error) => e)
+      const errDiff = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { ...scope, fix: "fix" } }, o).catch((e: Error) => e)
       expect(errDiff.message).toMatch(/审查范围不同/)
-      const errBoth = await init.execute({ review_scope: scope, change_id: "x", task_group_id: "1" } as any, o).catch((e: Error) => e)
+      const errBoth = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, change_id: "x", task_group_id: "1" } as any, o).catch((e: Error) => e)
       expect(errBoth.message).toMatch(/互斥/)
-      const errNone = await init.execute({} as any, o).catch((e: Error) => e)
+      const errNone = await init.execute({ ...INIT_PROJECT_STACKS, } as any, o).catch((e: Error) => e)
       expect(errNone.message).toMatch(/两种入口/)
     } finally { teardown(root) }
   })
@@ -117,7 +117,7 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       const item = itemOf(wt, PR_SESSION)
       expect(item.metadata["branch_name"]).toBe(`review/${PR_SESSION}`)
@@ -151,7 +151,7 @@ describe("流转矩阵：审查通过收口", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await passThorough(wt, PR_SESSION)
       expect(itemOf(wt, PR_SESSION).phase).toBe("done")
@@ -168,7 +168,7 @@ describe("流转矩阵：审查通过收口", () => {
     try {
       fakeGit.currentBranch = "develop"
       const o = makeOrchCtx(wt)
-      const out = await init.execute({ review_scope: { scope_type: "full", granularity: "simple", fix: "fix" } }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "full", granularity: "simple", fix: "fix" } }, o)
       const sessionId = (out.match(/`review-full-develop-\d+`/) ?? [""])[0].replace(/`/g, "")
       await set_worktree.execute({ change_id: sessionId }, o)
       const item = itemOf(wt, sessionId)
@@ -189,7 +189,7 @@ describe("流转矩阵：fix=none 失败直达 done 不死循环", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", {
         step_id: "verify_tool", verdict: "failed",
@@ -215,7 +215,7 @@ describe("流转矩阵：fix=none 失败直达 done 不死循环", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      const out = await init.execute({ review_scope: { scope_type: "full", granularity: "simple", fix: "none" } }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "full", granularity: "simple", fix: "none" } }, o)
       const sessionId = (out.match(/`review-full-main-\d+`/) ?? [""])[0].replace(/`/g, "")
       await set_worktree.execute({ change_id: sessionId }, o)
       await submit(wt, sessionId, "openspec-reviewer", {
@@ -234,7 +234,7 @@ describe("流转矩阵：fix 模式失败进 implement 修复后回审查层重�
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", {
         step_id: "verify_tool", verdict: "failed",
@@ -269,7 +269,7 @@ describe("流转矩阵：fix 模式失败进 implement 修复后回审查层重�
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer", {
         step_id: "quality_review", verdict: "failed",
@@ -287,7 +287,7 @@ describe("流转矩阵：fix 模式失败进 implement 修复后回审查层重�
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer", {
         step_id: "quality_review", verdict: "failed",
@@ -313,7 +313,7 @@ describe("回归验证（thorough 第二层）", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       // 首轮工具层通过 → 回归验证层报存量失败 issue（进入修复闭环）
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
@@ -335,24 +335,24 @@ describe("恢复路径", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
       // change_id 入口恢复（task_group_id 缺省，虚拟组 review）
-      await init.execute({ change_id: PR_SESSION, recovery: { phase: "review" } } as any, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "review" } } as any, o)
       const item = itemOf(wt, PR_SESSION)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_task")
       expect(item.tags["implement:openspec-developer"]).toBe("passed")
       expect(item.tags["verify_tool:openspec-reviewer-tool"]).toBe("passed")
       // reset_steps 值域按形态：thorough 不接受 quality_review
-      const err = await init.execute({ change_id: PR_SESSION, recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, o).catch((e: Error) => e)
+      const err = await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, o).catch((e: Error) => e)
       expect(err.message).toMatch(/不属于当前会话形态/)
       // task_analysis 拒绝
-      const errTa = await init.execute({ change_id: PR_SESSION, recovery: { phase: "task_analysis" } } as any, o).catch((e: Error) => e)
+      const errTa = await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "task_analysis" } } as any, o).catch((e: Error) => e)
       expect(errTa.message).toMatch(/task_analysis/)
       // reset_steps 强制重审 verify_tool
-      await init.execute({ change_id: PR_SESSION, recovery: { phase: "review", reset_steps: ["verify_tool"] } } as any, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "review", reset_steps: ["verify_tool"] } } as any, o)
       expect(itemOf(wt, PR_SESSION).currentStep).toBe("verify_tool")
       expect(itemOf(wt, PR_SESSION).tags["verify_tool:openspec-reviewer-tool"]).toBeUndefined()
     } finally { teardown(root) }
@@ -362,13 +362,13 @@ describe("恢复路径", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
-      await init.execute({ change_id: PR_SESSION, recovery: { phase: "dev_impl" } } as any, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "dev_impl" } } as any, o)
       const item = itemOf(wt, PR_SESSION)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
-      await init.execute({ change_id: PR_SESSION, recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, o)
       expect(itemOf(wt, PR_SESSION).currentStep).toBe("quality_review")
     } finally { teardown(root) }
   })
@@ -379,7 +379,7 @@ describe("fix=none 中途层失败直达 done（thorough 后置层 / simple）",
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
       await submit(wt, PR_SESSION, "openspec-reviewer-task", {
@@ -398,7 +398,7 @@ describe("fix=none 中途层失败直达 done（thorough 后置层 / simple）",
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
       await submit(wt, PR_SESSION, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
@@ -421,7 +421,7 @@ describe("fix=none 中途层失败直达 done（thorough 后置层 / simple）",
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer", {
         step_id: "quality_review", verdict: "failed",
@@ -438,7 +438,7 @@ describe("full + thorough 组合关键路径", () => {
     try {
       fakeGit.currentBranch = "develop"
       const o = makeOrchCtx(wt)
-      const out = await init.execute({ review_scope: { scope_type: "full", granularity: "thorough", fix: "fix" } }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "full", granularity: "thorough", fix: "fix" } }, o)
       const day = new Date().toISOString().slice(0, 10).replace(/-/g, "")
       const sessionId = `review-full-develop-${day}`
       expect(out).toContain(sessionId)
@@ -476,7 +476,7 @@ describe("fix=none 经 recovery 重放：fail→done 映射恢复后仍生效", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
       await submit(wt, PR_SESSION, "openspec-reviewer-task", {
@@ -485,7 +485,7 @@ describe("fix=none 经 recovery 重放：fail→done 映射恢复后仍生效", 
       })
       expect(itemOf(wt, PR_SESSION).phase).toBe("done")
       // 收口前经 recovery(review) 恢复：verify_tool passed 保留、verify_task failed tag 清除，currentStep 回落该层
-      const rec = await init.execute({ change_id: PR_SESSION, recovery: { phase: "review" } } as any, o)
+      const rec = await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "review" } } as any, o)
       expect(rec).toContain("已恢复到 review")
       const item = itemOf(wt, PR_SESSION)
       expect(item.phase).toBe("review")
@@ -509,16 +509,16 @@ describe("防御性路径", () => {
       fakeGit.localBranches = new Set(["main", "feature/x", "release v1.2"])
       const o = makeOrchCtx(wt)
       // 斜杠与其它非法字符归一为单个连字符（feature/x → feature-x）
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature/x", granularity: "simple", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature/x", granularity: "simple", fix: "none" } }, o)
       expect(readState(wt, "review-pr-main-feature-x")).not.toBeNull()
       // full 形态当前分支含空格/点：归一后无连续连字符、无首尾连字符
       fakeGit.currentBranch = "release v1.2"
-      const out = await init.execute({ review_scope: { scope_type: "full", granularity: "simple", fix: "none" } }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "full", granularity: "simple", fix: "none" } }, o)
       const day = new Date().toISOString().slice(0, 10).replace(/-/g, "")
       expect(out).toContain(`review-full-release-v1-2-${day}`)
       // 含空白字符的 head_ref（pr 形态）在入口即拒绝
       fakeGit.localBranches.add("bad branch")
-      const err = await init.execute({ review_scope: { scope_type: "pr", head_ref: "bad branch", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
+      const err = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "bad branch", granularity: "simple", fix: "none" } }, o).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/分支名不合法/)
     } finally { teardown(root) }
@@ -528,7 +528,7 @@ describe("防御性路径", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       // 人为构造异常 state：item 落进 implement（正常 fix=none 不可达）
       const s = readState(wt, PR_SESSION)! as any
@@ -560,7 +560,7 @@ describe("防御性路径", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       // 预置磁盘痕迹：默认布局路径 + review/<sessionId> 分支
       const wtPath = join(root, "workspace", ".worktree", PR_SESSION, "review")
       fakeGit.worktrees.set(wtPath, { branch: `review/${PR_SESSION}`, path: wtPath })
@@ -580,7 +580,7 @@ describe("防御性路径", () => {
     const { wt, root, fakeGit } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
       const wtPath = join(root, "workspace", ".worktree", PR_SESSION, "review")
       fakeGit.worktrees.set(wtPath, { branch: `review/${PR_SESSION}`, path: wtPath })
       fakeGit.forceMergeFailure = true
@@ -600,20 +600,20 @@ describe("入口拒绝分支（review_scope 入口参数互斥与 recovery 值�
     try {
       const o = makeOrchCtx(wt)
       const scope = { scope_type: "pr" as const, head_ref: "feature-x", granularity: "simple" as const, fix: "none" as const }
-      const errBase = await init.execute({ review_scope: scope, base_branch: "main" } as any, o).catch((e: Error) => e)
+      const errBase = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, base_branch: "main" } as any, o).catch((e: Error) => e)
       expect(errBase).toBeInstanceOf(Error)
       expect(errBase.message).toMatch(/互斥/)
       expect(errBase.message).toMatch(/base_branch/)
-      const errMode = await init.execute({ review_scope: scope, mode: "full" } as any, o).catch((e: Error) => e)
+      const errMode = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, mode: "full" } as any, o).catch((e: Error) => e)
       expect(errMode.message).toMatch(/互斥/)
       expect(errMode.message).toMatch(/mode/)
-      const errChange = await init.execute({ review_scope: scope, change_id: "some-change" } as any, o).catch((e: Error) => e)
+      const errChange = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, change_id: "some-change" } as any, o).catch((e: Error) => e)
       expect(errChange.message).toMatch(/互斥/)
-      const errTa = await init.execute({ review_scope: scope, recovery: { phase: "task_analysis" } } as any, o).catch((e: Error) => e)
+      const errTa = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, recovery: { phase: "task_analysis" } } as any, o).catch((e: Error) => e)
       expect(errTa.message).toMatch(/仅支持 phase="review"/)
-      const errLayer = await init.execute({ review_scope: scope, recovery: { phase: "review", review_layer: "task" } } as any, o).catch((e: Error) => e)
+      const errLayer = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, recovery: { phase: "review", review_layer: "task" } } as any, o).catch((e: Error) => e)
       expect(errLayer.message).toMatch(/不支持 review_layer/)
-      const errReopen = await init.execute({ review_scope: scope, recovery: { phase: "review", reopenIssues: true } } as any, o).catch((e: Error) => e)
+      const errReopen = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope, recovery: { phase: "review", reopenIssues: true } } as any, o).catch((e: Error) => e)
       expect(errReopen.message).toMatch(/不支持 reopenIssues/)
     } finally { teardown(root) }
   })
@@ -624,7 +624,7 @@ describe("视图适配", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      const out = await init.execute({ review_scope: { scope_type: "full", granularity: "simple", fix: "none" } }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "full", granularity: "simple", fix: "none" } }, o)
       const sessionId = (out.match(/`review-full-main-\d+`/) ?? [""])[0].replace(/`/g, "")
       await set_worktree.execute({ change_id: sessionId }, o)
       const view = await status.execute({ change_id: sessionId }, makeCtx("openspec-reviewer", wt))

@@ -14,7 +14,7 @@ import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
 import {
   loadWorkflowFile, TASK_WORKFLOW_PATH, SIMPLE_WORKFLOW_PATH, resolveWorkflowPath,
 } from "../src/core/workflow/loader"
@@ -67,7 +67,7 @@ describe("opx_orch_init 模式固化", () => {
   test("新建 state：不传 mode 缺省 simple 并写入 mode=simple", async () => {
     const { wt, root } = fresh()
     try {
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
@@ -75,7 +75,7 @@ describe("opx_orch_init 模式固化", () => {
   test("新建 state：mode=simple 写入 mode=simple", async () => {
     const { wt, root } = fresh()
     try {
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
@@ -83,7 +83,7 @@ describe("opx_orch_init 模式固化", () => {
   test("新建 state：mode=full 写入 mode=full", async () => {
     const { wt, root } = fresh()
     try {
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBe("full")
     } finally { teardown(root) }
   })
@@ -92,10 +92,10 @@ describe("opx_orch_init 模式固化", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       expect(stateOf(wt).mode).toBe("simple")
       // 已开始的变更在窗口外（同组重复初始化、无 recovery）传不同 mode：显式报错，不再静默忽略
-      const err = await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o).catch((e: Error) => e)
+      const err = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/mode 参数与已固化的流程模式不一致/)
       expect(stateOf(wt).mode).toBe("simple")
@@ -106,8 +106,8 @@ describe("opx_orch_init 模式固化", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
-      await init.execute({ change_id: CID, task_group_id: "2" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2" }, o)
       expect(stateOf(wt).taskGroupId).toBe("2")
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
@@ -118,7 +118,7 @@ describe("opx_orch_init 模式固化", () => {
     try {
       writeLegacyState(wt)
       // 已存在的 state 不传 mode：mode 保持缺省不写回（窗口外传不同 mode 会显式报错）
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
       expect(stateOf(wt).mode).toBeUndefined()
       expect(stateOf(wt).isolationNamespace).toBe("abc123")
     } finally { teardown(root) }
@@ -128,7 +128,7 @@ describe("opx_orch_init 模式固化", () => {
     const { wt, root } = fresh()
     try {
       const err = await init.execute(
-        { change_id: CID, task_group_id: "1", mode: "banana" } as any,
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "banana" } as any,
         makeOrchCtx(wt)
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
@@ -142,9 +142,9 @@ describe("opx_orch_init 模式固化", () => {
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       const err = await init.execute(
-        { change_id: CID, task_group_id: "1", mode: "banana" } as any,
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "banana" } as any,
         o
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
@@ -160,14 +160,14 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       // 当前组（组 1）标记终态：phase=done + completed_at
       mutateState(wt, (s) => {
         const g1 = itemOf(s, "1")
         g1.phase = "done"
         g1.metadata["completed_at"] = new Date().toISOString()
       })
-      const out = await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "simple" }, o)
       expect(out).toContain("流程模式已从 full 切换为 simple")
       const s = stateOf(wt)
       expect(s.mode).toBe("simple")
@@ -183,13 +183,13 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       // 当前组（组 1，切组后成为其他任务组）注入执行痕迹：analyze 已 passed 但未终态
       mutateState(wt, (s) => {
         itemOf(s, "1").tags["analyze:openspec-architect"] = "passed"
       })
       const before = readFileSync(join(wt, "openspec", "states", `${CID}.json`), "utf-8")
-      const err = await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, o).catch((e: Error) => e)
+      const err = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "simple" }, o).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/mode 参数与已固化的流程模式不一致/)
       expect(err.message).toContain('"full"')
@@ -205,8 +205,8 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     try {
       const o = makeOrchCtx(wt)
       // 组 1 仅初始化未推进（tags 空、task children 全 todo）→ 从未激活
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
-      const out = await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "simple" }, o)
       expect(out).toContain("流程模式已从 full 切换为 simple")
       const s = stateOf(wt)
       expect(s.mode).toBe("simple")
@@ -218,7 +218,7 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       // 注入执行进度：analyze passed、task child 1 进入 review
       mutateState(wt, (s) => {
         const g1 = itemOf(s, "1")
@@ -226,7 +226,7 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
         g1.children.find((c: any) => c.type === "task" && c.id === "1").phase = "review"
       })
       const out = await init.execute(
-        { change_id: CID, task_group_id: "1", mode: "simple", recovery: { phase: "task_analysis" } },
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple", recovery: { phase: "task_analysis" } },
         o
       )
       expect(out).toContain("已恢复到 task_analysis 阶段")
@@ -246,9 +246,9 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       const err = await init.execute(
-        { change_id: CID, task_group_id: "1", mode: "simple", recovery: { phase: "dev_impl" } },
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple", recovery: { phase: "dev_impl" } },
         o
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
@@ -262,9 +262,9 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       const err = await init.execute(
-        { change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } },
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } },
         o
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
@@ -277,16 +277,16 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     const { wt, root } = fresh()
     try {
       const o = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       // 同组重复初始化传相同 mode：无提示
-      const out1 = await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      const out1 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       expect(out1).toBe("编排会话已初始化。")
       // 切组不传 mode：沿用固化模式
-      const out2 = await init.execute({ change_id: CID, task_group_id: "2" }, o)
+      const out2 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2" }, o)
       expect(out2).toBe("编排会话已初始化。")
       expect(stateOf(wt).mode).toBe("simple")
       // 切组传相同 mode：同样无提示
-      const out3 = await init.execute({ change_id: CID, task_group_id: "1", mode: "simple" }, o)
+      const out3 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       expect(out3).toBe("编排会话已初始化。")
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
@@ -298,7 +298,7 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
       const o = makeOrchCtx(wt)
       writeLegacyState(wt)
       // 生效值为兜底 full，传入 full 视为无变更意图：放行且无切换提示
-      const out = await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
       expect(out).toBe("编排会话已初始化。")
       // 不写回：mode 保持缺省（消费端读时兜底 full 的既有语义不变）
       expect(stateOf(wt).mode).toBeUndefined()
@@ -311,7 +311,7 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
       const o = makeOrchCtx(wt)
       writeLegacyState(wt)
       // 旧 state（缺 mode，生效 full）先初始化组 1 物化 workItems
-      await init.execute({ change_id: CID, task_group_id: "1" }, o)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1" }, o)
       expect(stateOf(wt).mode).toBeUndefined()
       // 组 1 标记终态后切组传 simple：属变更意图（simple ≠ 兜底 full），W1 窗口内放行
       mutateState(wt, (s) => {
@@ -319,7 +319,7 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
         g1.phase = "done"
         g1.metadata["completed_at"] = new Date().toISOString()
       })
-      const out = await init.execute({ change_id: CID, task_group_id: "2", mode: "simple" }, o)
+      const out = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "simple" }, o)
       expect(out).toContain("流程模式已从 full 切换为 simple")
       const s = stateOf(wt)
       expect(s.mode).toBe("simple")
@@ -354,7 +354,7 @@ describe("task-simple.yaml 加载与结构", () => {
     expect(qr.step.agents.map((a) => a.id)).toEqual(["openspec-reviewer"])
     // 1.4 验收：capability_tags 为 12 项集合（verify_tool + verify_task + verify_quality 能力并集 + cleanup 清理规范）
     const expectedTags = [
-      "quality-gate", "api-testing", "test-design", "dev-practices", "efficiency", "style", "architecture",
+      "quality-gate", "api-testing", "e2e-testing", "test-design", "dev-practices", "efficiency", "style", "architecture",
       "performance", "security", "maintainability", "tool-improvement", "cleanup",
     ]
     expect([...qr.step.agents[0].capability_tags].sort()).toEqual([...expectedTags].sort())

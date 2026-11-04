@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node
 import { join } from "node:path"
 import { readStateByChangeId, writeState, migrateLegacyStateDir, readContextFromWorktree, writeContextToWorktree } from "../src/core/state"
 import { init } from "../src/adapters/opencode/tools"
-import { setupWithFakeGit, makeCtx, makeOrchCtx, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, setupWithFakeGit, makeCtx, makeOrchCtx, teardown } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "migration-test"
@@ -259,7 +259,7 @@ describe("state.workItems 迁移", () => {
       }))
 
       // 旧 state 无 mode 字段：不传 mode 继续沿用（读取时兜底 full；窗口外传不同 mode 会显式报错）
-      await init.execute({ change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1" }, makeOrchCtx(wt))
 
       // init 写入新布局 openspec/states/（首次写入前已幂等迁移旧数据），读取新路径验证
       const newDir = join(wt, "openspec", "states")

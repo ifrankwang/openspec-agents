@@ -17,6 +17,7 @@ import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
 import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.ts"
+import { knownSkillTags } from "../../skills/stacks.ts"
 
 /** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
 function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
@@ -555,6 +556,7 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
     updatedAt: new Date().toISOString(),
     kind: "review",
     reviewScope: scope,
+    stacks: { project_stacks: args.project_stacks, project_frameworks: args.project_frameworks },
   }
   await writeState(ctx.worktree, state)
   const granularityLabel = scope.granularity === "thorough" ? "三层审查（工具检查 → 回归验证 → 五维度质量审查）" : "单层合并审查"
@@ -608,6 +610,41 @@ async function initReviewRecovery(params: InitParams, state: OrchestrateState, c
   ].join("\n")
 }
 
+/**
+ * 会话项目栈参数（project_stacks / project_frameworks）必传校验与动态标签命中校验：
+ * 两入口（change / review_scope）均必传；非空字符串数组且每个值须命中当前 skill 索引中
+ * 实际存在的标签（knownSkillTags 动态取值，无硬编码值域清单）。不满足即抛错，早于任何状态变更。
+ */
+function assertProjectStacks(args: InitParams): void {
+  for (const [name, raw] of [["project_stacks", args.project_stacks], ["project_frameworks", args.project_frameworks]] as const) {
+    if (!Array.isArray(raw) || raw.length === 0 || raw.some((v) => typeof v !== "string" || v.trim() === "")) {
+      const example = name === "project_stacks" ? '["backend"]、["frontend"]、["backend","frontend"]' : '["java"]、["vue"]'
+      throw new Error(
+        `init 缺少必传参数或不合法：${name} 必须是非空字符串数组（如 ${example}）。` +
+        `两入口（change / review_scope）均必传，存入会话状态作为 skill 加载清单过滤与 must_do 门禁的过滤基准。`
+      )
+    }
+  }
+  const known = knownSkillTags()
+  if (known.size === 0) {
+    throw new Error(
+      "skill 索引为空（未扫描到任何声明 capabilities 的 skill），无法校验 project_stacks / project_frameworks 值域。" +
+      "请确认 skill 目录部署完整后重试。"
+    )
+  }
+  for (const [name, values] of [["project_stacks", args.project_stacks], ["project_frameworks", args.project_frameworks]] as const) {
+    const unknown = values.filter((v) => !known.has(v))
+    if (unknown.length > 0) {
+      const available = Array.from(known).sort()
+      throw new Error(
+        `${name} 中的值未命中当前 skill 索引中实际存在的标签：${unknown.join("、")}。\n` +
+        `当前索引中存在的标签（动态扫描，无硬编码值域）：${available.join("、")}。\n` +
+        `请传入 skill 声明的形态/框架标签（如形态 backend / frontend、框架 java / vue / react）。`
+      )
+    }
+  }
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_init")
 
@@ -623,6 +660,9 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     (args as any).recovery = parsed
   }
   assertValidRecovery(args.recovery)
+
+  // 会话项目栈两入口必传 + 标签动态校验（早于入口分流与任何状态变更/落盘，错误可读）
+  assertProjectStacks(args)
 
   // 入口分流：review_scope（独立审查会话）与 change_id/task_group_id 互斥——同传报错、都不传报错
   if (args.review_scope !== undefined) {
@@ -712,6 +752,8 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       // 新建 state 时固化模式：取 init 参数 mode（缺省 simple）；state 已存在时的 mode 变更
       // 由上方窗口校验统一处理（W1 切组 / W2 重制当前组），旧 state 缺 mode 由消费端读时兜底 full，不写回。
       mode: args.mode ?? "simple",
+      // 会话项目栈固化（两入口必传已校验）；既有 state 不覆盖（同生命周期持久化，recovery 沿用）。
+      stacks: { project_stacks: args.project_stacks, project_frameworks: args.project_frameworks },
     }
   } else {
     state.baseBranch = state.baseBranch || baseBranch

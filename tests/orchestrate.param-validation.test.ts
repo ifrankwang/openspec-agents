@@ -6,12 +6,12 @@
  * C. agent_submit 无效 id / 空字段校验：fixed/exempt 未命中 child 显式拒绝、new_children 空 id/title/description 拒绝
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { writeFileSync, readFileSync } from "node:fs"
+import { existsSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
 import { agentSubmitSchema } from "../src/core/tools/schemas"
-import { FakeGitRunner, setupWithFakeGit, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeOrchCtx, readState, setupWithFakeGit, teardown } from "./helpers"
 import { setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, taskIdsOf, readItem } from "./helpers-workflow"
 
 const CID = "param-validation"
@@ -37,7 +37,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       const err = await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "bogus" } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "bogus" } } as any, ctx.orch),
         /recovery.phase 不合法[\s\S]*task_analysis、dev_impl、review/
       )
       expect(err.message).toContain("bogus")
@@ -49,7 +49,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: {} } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: {} } as any, ctx.orch),
         /recovery.phase 不合法/
       )
     } finally { teardown(root) }
@@ -60,7 +60,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "docs" } } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", review_layer: "docs" } } as any, ctx.orch),
         /recovery.review_layer 不合法[\s\S]*tool、task、quality/
       )
     } finally { teardown(root) }
@@ -71,15 +71,15 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: "null" } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: "null" } as any, ctx.orch),
         /recovery 参数解析失败/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: "42" } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: "42" } as any, ctx.orch),
         /recovery 参数解析失败/
       )
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: "[1]" } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: "[1]" } as any, ctx.orch),
         /recovery 参数解析失败/
       )
     } finally { teardown(root) }
@@ -89,7 +89,7 @@ describe("A. recovery 值域校验", () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: '{"phase":"dev_impl"}' } as any, ctx.orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: '{"phase":"dev_impl"}' } as any, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -101,7 +101,7 @@ describe("A. recovery 值域校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: '{"phase":"bogus"}' } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: '{"phase":"bogus"}' } as any, ctx.orch),
         /recovery.phase 不合法/
       )
     } finally { teardown(root) }
@@ -114,7 +114,7 @@ describe("B. git 分支名校验", () => {
     try {
       const ctx = await setupToAnalyze(wt, CID)
       await expectError(
-        init.execute({ change_id: CID, task_group_id: "1", mode: "full", base_branch: "my branch" } as any, ctx.orch),
+        init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "my branch" } as any, ctx.orch),
         /base_branch 不合法/
       )
     } finally { teardown(root) }
@@ -413,6 +413,116 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
         ctx.dev
       )
       expect(readItem(wt, CID).children.find((c: any) => c.externalId === "99").phase).toBe("review")
+    } finally { teardown(root) }
+  })
+})
+
+/**
+ * D. 会话项目栈（project_stacks / project_frameworks）必传与动态值域校验：
+ * 两入口（change / review_scope）均必传；非空字符串数组 + 每个值须命中当前 skill 索引实际存在的标签。
+ * 测试标签词汇由 helpers.installTestSkillEnv 注入（backend / frontend / java / vue / react）。
+ */
+describe("D. init 会话项目栈必传参数校验", () => {
+  test("缺 project_stacks → 拒绝且错误指明参数名与用法", async () => {
+    const { wt, root } = fresh()
+    try {
+      const err = await expectError(
+        init.execute({ project_frameworks: ["java"], change_id: CID, task_group_id: "1", mode: "full" } as any, makeOrchCtx(wt)),
+        /project_stacks 必须是非空字符串数组/
+      )
+      expect(err.message).toContain("两入口")
+      // 拒绝早于任何状态变更：状态文件未创建
+      expect(existsSync(join(wt, "openspec", "states", `${CID}.json`))).toBe(false)
+    } finally { teardown(root) }
+  })
+
+  test("缺 project_frameworks → 拒绝", async () => {
+    const { wt, root } = fresh()
+    try {
+      await expectError(
+        init.execute({ project_stacks: ["backend"], change_id: CID, task_group_id: "1", mode: "full" } as any, makeOrchCtx(wt)),
+        /project_frameworks 必须是非空字符串数组/
+      )
+    } finally { teardown(root) }
+  })
+
+  test("空数组 / 含空串 / 非字符串元素 → 拒绝", async () => {
+    const { wt, root } = fresh()
+    try {
+      await expectError(
+        init.execute({ project_stacks: [], project_frameworks: ["java"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_stacks 必须是非空字符串数组/
+      )
+      await expectError(
+        init.execute({ project_stacks: ["backend", " "], project_frameworks: ["java"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_stacks 必须是非空字符串数组/
+      )
+      await expectError(
+        init.execute({ project_stacks: [1], project_frameworks: ["java"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_stacks 必须是非空字符串数组/
+      )
+    } finally { teardown(root) }
+  })
+
+  test("标签值未命中当前 skill 索引 → 拒绝并列出未命中值与索引现存标签", async () => {
+    const { wt, root } = fresh()
+    try {
+      const err = await expectError(
+        init.execute({ project_stacks: ["backend"], project_frameworks: ["golang"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_frameworks 中的值未命中当前 skill 索引中实际存在的标签：golang/
+      )
+      // 错误体给出动态扫描到的现存标签（非硬编码值域清单）
+      expect(err.message).toContain("backend")
+      expect(err.message).toContain("java")
+    } finally { teardown(root) }
+  })
+
+  test("review_scope 独立审查入口同样必传", async () => {
+    const { wt, root } = fresh()
+    try {
+      await expectError(
+        init.execute(
+          { review_scope: { scope_type: "full", granularity: "simple", fix: "fix" } } as any,
+          makeOrchCtx(wt),
+        ),
+        /project_stacks 必须是非空字符串数组/
+      )
+    } finally { teardown(root) }
+  })
+
+  test("recovery 路径同样要求带两个参数", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupToAnalyze(wt, CID)
+      await expectError(
+        init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } } as any, makeOrchCtx(wt)),
+        /project_stacks 必须是非空字符串数组/
+      )
+    } finally { teardown(root) }
+  })
+
+  test("合规入参 → 参数持久化进编排状态（视图过滤与门禁共用基准）", async () => {
+    const { wt, root } = fresh()
+    try {
+      await init.execute(
+        { project_stacks: ["backend", "frontend"], project_frameworks: ["java"], change_id: CID, task_group_id: "1", mode: "full" },
+        makeOrchCtx(wt),
+      )
+      const state = readState(wt, CID) as any
+      expect(state.stacks).toEqual({ project_stacks: ["backend", "frontend"], project_frameworks: ["java"] })
+    } finally { teardown(root) }
+  })
+
+  test("同一会话重复 init 不覆盖已固化参数（同生命周期持久化）", async () => {
+    const { wt, root } = fresh()
+    try {
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
+      await init.execute(
+        { project_stacks: ["frontend"], project_frameworks: ["vue"], change_id: CID, task_group_id: "1", mode: "full" },
+        makeOrchCtx(wt),
+      )
+      const state = readState(wt, CID) as any
+      expect(state.stacks).toEqual(INIT_PROJECT_STACKS)
     } finally { teardown(root) }
   })
 })

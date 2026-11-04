@@ -32,7 +32,7 @@ export const OPX_TOOL_SPECS: readonly OpxToolSpec[] = [
   {
     name: "opx_orch_init",
     description:
-      "初始化编排会话。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式：首次新建状态时固化；已开始的变更仅切组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）时可更新，其余场景传不同 mode 报错。",
+      "初始化编排会话。project_stacks 与 project_frameworks 必传（change 入口与 review_scope 独立审查入口均需要）：声明项目形态栈与框架栈，每个值须命中当前 skill 索引中实际存在的标签（动态校验），作为 skill 加载清单过滤与 must_do 门禁的过滤基准，与 change_id 同生命周期持久化（recovery 恢复时同样必传）。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式：首次新建状态时固化；已开始的变更仅切组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）时可更新，其余场景传不同 mode 报错。",
     schema: orchInitSchema,
   },
   {

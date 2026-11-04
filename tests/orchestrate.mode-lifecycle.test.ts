@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, complete_task_group, agent_submit } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
 import { loadWorkflowFile, SIMPLE_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { phaseStepMismatch } from "../src/core/workflow/engine"
 
@@ -105,7 +105,7 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
         item.children.find((c: any) => c.id === "1").phase = "review"
         item.tags["implement:openspec-developer"] = "passed"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "task_analysis" } }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "task_analysis" } }, makeOrchCtx(wt))
       const item = taskItemOf(wt)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -124,7 +124,7 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
       rewriteItem(wt, (item) => {
         item.children.find((c: any) => c.id === "1").phase = "review"
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl" } }, makeOrchCtx(wt))
       const item = taskItemOf(wt)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -148,7 +148,7 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
           "quality_review:openspec-reviewer": "failed",
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, makeOrchCtx(wt))
       const item = taskItemOf(wt)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("quality_review")
@@ -168,7 +168,7 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
         item.currentStep = "quality_review"
         item.tags = { "quality_review:openspec-reviewer": "passed" }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, makeOrchCtx(wt))
       const item = taskItemOf(wt)
       expect(item.tags["implement:openspec-developer"]).toBe("passed")
       expect(item.tags["quality_review:openspec-reviewer"]).toBe("passed")
@@ -185,7 +185,7 @@ describe("3.2 applyRecoveryState 模式感知：三阶段落位", () => {
       rewriteItem(wt, (item) => {
         item.children = item.children.filter((c: any) => c.type !== "task")
       })
-      await init.execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, makeOrchCtx(wt))
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review" } }, makeOrchCtx(wt))
       const tasks = taskItemOf(wt).children.filter((c: any) => c.type === "task")
       expect(tasks.length).toBe(3)
       for (const c of tasks) expect(c.phase).toBe("done")
@@ -206,7 +206,7 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
         item.children.find((c: any) => c.id === "1").phase = "review"
       })
       await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["quality_review"] } },
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["quality_review"] } },
         makeOrchCtx(wt),
       )
       const item = taskItemOf(wt)
@@ -229,12 +229,12 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
     try {
       await initSimpleWorktree(wt, CID)
       const err = await init
-        .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } }, makeOrchCtx(wt))
+        .execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_tool"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/verify_tool.*不属于当前会话形态（simple 模式）的审查 step/)
       const errQuality = await init
-        .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_quality"] } }, makeOrchCtx(wt))
+        .execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["verify_quality"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(errQuality).toBeInstanceOf(Error)
       expect(errQuality.message).toMatch(/verify_quality.*不属于当前会话形态（simple 模式）的审查 step/)
@@ -246,7 +246,7 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
     try {
       await initSimpleWorktree(wt, CID)
       const out = await init.execute(
-        { change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } },
+        { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review", review_layer: "quality" } },
         makeOrchCtx(wt),
       )
       const item = taskItemOf(wt)
@@ -264,7 +264,7 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
     try {
       await initSimpleWorktree(wt, CID)
       const err = await init
-        .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["bogus"] } }, makeOrchCtx(wt))
+        .execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "review", reset_steps: ["bogus"] } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/reset_steps 中的 step "bogus" 不属于当前会话形态（simple 模式）/)
@@ -276,7 +276,7 @@ describe("3.2 reset_steps / review_layer 在 simple 下按模式生效", () => {
     try {
       await initSimpleWorktree(wt, CID)
       const err = await init
-        .execute({ change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl", review_layer: "task" } }, makeOrchCtx(wt))
+        .execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", recovery: { phase: "dev_impl", review_layer: "task" } }, makeOrchCtx(wt))
         .catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/review_layer 参数仅当 recovery.phase 为 review/)

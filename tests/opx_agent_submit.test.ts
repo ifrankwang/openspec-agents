@@ -15,7 +15,7 @@ import { init, agent_submit, set_worktree, complete_task_group } from "../src/ad
 import { loadWorkflow, stepAgentIds } from "../src/core/workflow"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "agent-submit"
@@ -118,7 +118,7 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
 /** init + set_worktree 一次到位：worktree 就绪硬门禁要求提交前 worktree 就绪（opx_orch_set_worktree 后提交）。 */
 async function initWorktree(wt: string): Promise<void> {
   const orch = makeOrchCtx(wt)
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
   await set_worktree.execute({ change_id: CID }, orch)
 }
 

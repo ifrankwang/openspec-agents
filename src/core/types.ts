@@ -1,4 +1,5 @@
 import type { WorkItem } from "./workflow/types.ts"
+import type { SessionStacks } from "../skills/stacks.ts"
 
 export const CODE_DIMENSIONS = ["style", "architecture", "performance", "security", "maintainability"] as const
 export const REVIEW_DIMENSIONS = [...CODE_DIMENSIONS] as const
@@ -171,4 +172,7 @@ export interface OrchestrateState {
   kind?: "review"
   /** kind=review 时的审查范围（granularity 决定 workflow 文件、fix 决定 fail 方向转移策略）。 */
   reviewScope?: ReviewScope
+  /** 会话项目栈（opx_orch_init 两入口必传参数固化）：视图 skill 过滤与 must_do 门禁的过滤基准。
+   *  缺失视为旧版本会话，读时不兜底——所有消费方按未过滤处理（与存量数据兼容，不写回）。 */
+  stacks?: SessionStacks
 }

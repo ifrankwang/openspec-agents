@@ -277,6 +277,8 @@ export async function readStateByChangeId(worktree: string, changeId: string): P
     // 独立审查会话透传：kind/reviewScope 由 init 固化，缺省视为 change 会话（读时兜底，不写回旧 state）
     kind: legacy.kind,
     reviewScope: legacy.reviewScope,
+    // 会话项目栈透传：由 init 固化，视图 skill 过滤与 must_do 门禁共用；旧 state 缺失保持缺省（不兜底、不写回）
+    stacks: legacy.stacks,
   }
   if (needsUpgrade) {
     // 迁移产物一次性落盘固定单轨形态，避免每次读取都重建（首次写新目录前幂等迁移旧数据）

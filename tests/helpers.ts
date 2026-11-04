@@ -1,5 +1,6 @@
 import { __setGitRunner, type GitRunner } from "../src/core/git"
 import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
+import { __setKnownSkillTags } from "../src/skills/stacks"
 import type { ToolContext } from "../src/core/tools/types"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
@@ -411,15 +412,40 @@ export function createFakeGit(): FakeGitRunner {
   return new FakeGitRunner()
 }
 
+// ─── 会话项目栈入参 / skill 标签词汇（测试共享） ───
+
+/**
+ * opx_orch_init 必传的会话项目栈入参（change 与 review_scope 两入口均必传）。
+ * 测试统一取值，避免逐处重复字面量；取值落在 {@link TEST_SKILL_TAGS} 内使动态校验可通过。
+ */
+export const INIT_PROJECT_STACKS: { project_stacks: string[]; project_frameworks: string[] } = {
+  project_stacks: ["backend"],
+  project_frameworks: ["java"],
+}
+
+/**
+ * 测试注入的 skill 标签词汇（opx_orch_init 动态校验的值域）：与真实 skill 索引解耦，
+ * 使用例不依赖 assets/skills 下标签迁移进度。门禁/过滤用例按需覆盖注入验证真实规则。
+ */
+export const TEST_SKILL_TAGS = ["backend", "frontend", "java", "vue", "react"]
+
+/**
+ * 统一安装测试 skill 环境，供各测试文件自建 fixture 复用：空 must_do 索引（存量用例默认豁免
+ * skill 必做清单门禁）+ 标签词汇注入（init 动态校验可通过）。需要真实门禁行为的用例在用例内显式覆盖注入。
+ */
+export function installTestSkillEnv(): void {
+  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+  __setKnownSkillTags(TEST_SKILL_TAGS)
+}
+
 // ─── Workspace Setup ───
 
 export function setupWorkspace(tmpRoot: string, changeId: string): string {
   const dir = join(tmpRoot, "workspace")
   mkdirSync(join(dir, "openspec", "changes", changeId), { recursive: true })
 
-  // 存量测试兼容：默认注入空 skill 索引使 skill 必做清单门禁（gate.ts）豁免（解析不到声明 must_do 的 skill）。
-  // 新增门禁用例在本文件或新测试中显式注入构造索引 / 真实索引（scanSkillTags()）验证门禁行为。
-  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+  // 存量测试兼容：门禁豁免 + init 标签词汇注入（见 installTestSkillEnv）。
+  installTestSkillEnv()
 
   const tasksMd = `## 1. First Task Group
 
@@ -501,6 +527,7 @@ export function setupWithFakeGit(tmpRoot: string, changeId: string): { worktree:
 export function teardown(tmpRoot: string): void {
   __setGitRunner(null)
   __setMustDoIndex(null)
+  __setKnownSkillTags(null)
   if (existsSync(tmpRoot)) {
     for (const entry of readdirSync(tmpRoot)) {
       try { rmSync(join(tmpRoot, entry), { recursive: true, force: true }) } catch {}
@@ -523,6 +550,6 @@ export async function initSimpleWorktree(
 ): Promise<void> {
   const { init, set_worktree } = await import("../src/adapters/opencode/tools")
   const orch = makeOrchCtx(wt)
-  await init.execute({ change_id: changeId, task_group_id: taskGroupId, mode: "simple" }, orch)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: changeId, task_group_id: taskGroupId, mode: "simple" }, orch)
   await set_worktree.execute({ change_id: changeId }, orch)
 }

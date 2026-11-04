@@ -23,7 +23,7 @@ import type { SkillTagIndex } from "../src/skills/resolve"
 import { init, agent_submit, set_worktree, status } from "../src/adapters/opencode/tools"
 import { recommendForItem } from "../src/core/workflow/engine"
 import { loadWorkflowFile, SIMPLE_WORKFLOW_PATH, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
 
 const CID = "task-verify-fix"
 const DEV = "openspec-developer"
@@ -65,7 +65,7 @@ function taskPhasesOf(wt: string): Record<string, string> {
 /** full 模式 init + set_worktree 一次到位。 */
 async function initFullWorktree(wt: string): Promise<void> {
   const orch = makeOrchCtx(wt)
-  await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
   await set_worktree.execute({ change_id: CID }, orch)
 }
 

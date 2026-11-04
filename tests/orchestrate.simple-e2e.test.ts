@@ -27,7 +27,7 @@ import { __setGitRunner } from "../src/core/git"
 import { __setMustDoIndex } from "../src/core/tools/gate"
 import type { SkillTagIndex } from "../src/skills/resolve"
 import { init, set_worktree, status, agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
-import { FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
 
 const CID = "simple-e2e"
 const DEV = "openspec-developer"
@@ -255,7 +255,7 @@ describe("simple 模式端到端：full 模式既有流转不受身份逻辑化�
     const { root, wt } = fresh()
     try {
       const orch = makeOrchCtx(wt)
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full" }, orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
       await set_worktree.execute({ change_id: CID }, orch)
       // 显式 full：旧行为完整保留（analyze step 存在、初始态 todo/analyze）
       expect(stateOf(wt).mode).toBe("full")

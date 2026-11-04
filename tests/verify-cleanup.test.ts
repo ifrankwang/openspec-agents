@@ -16,7 +16,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
-import { setupWithFakeGit, teardown, makeCtx } from "./helpers"
+import { INIT_PROJECT_STACKS, setupWithFakeGit, teardown, makeCtx } from "./helpers"
 import { init, agent_submit, status } from "../src/adapters/opencode/tools"
 import {
   setupToAnalyze, driveToQuality, submitQualityPassed, submitCleanupPassed,
@@ -293,7 +293,7 @@ describe("recovery=review 与 verify_cleanup", () => {
           if (c.type === "task") c.phase = "done"
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_cleanup")
@@ -324,7 +324,7 @@ describe("recovery=review 与 verify_cleanup", () => {
           if (c.type === "task") c.phase = "done"
         }
       })
-      await init.execute({ change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("done")
       expect(item.currentStep).toBeNull()

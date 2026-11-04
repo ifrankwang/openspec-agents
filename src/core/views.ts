@@ -3,11 +3,12 @@ import { derivePortFromNamespace } from "./namespace.ts"
 import { readFileSync } from "node:fs"
 import { findSkillPath } from "../skills/scan.ts"
 import { scanSkillTags, resolveSkillsForCapabilities, getEfficiencySkills } from "../skills/resolve.ts"
+import type { SessionStacks } from "../skills/stacks.ts"
 
-export function renderSkillSuggestions(agent: string, caps: string[]): string[] {
+export function renderSkillSuggestions(agent: string, caps: string[], session?: SessionStacks): string[] {
   if (caps.length === 0) return []
   const index = scanSkillTags()
-  const { skillNames, generic, techStackOnly } = resolveSkillsForCapabilities(caps, index)
+  const { skillNames } = resolveSkillsForCapabilities(caps, session, index)
 
   const lines: string[] = []
   if (skillNames.length === 0) return lines
@@ -15,28 +16,10 @@ export function renderSkillSuggestions(agent: string, caps: string[]): string[] 
   lines.push("## Skill 加载清单", "")
   lines.push("必须加载（逐项用 Skill tool 加载，未找到时跳过）：", "")
 
-  for (const name of generic) {
+  for (const name of skillNames) {
     lines.push(`- \`${name}\``)
   }
   lines.push("")
-  if (techStackOnly.length > 0) {
-    lines.push("仅当技术栈匹配时加载：", "")
-    const byStack = new Map<string, string[]>()
-    for (const name of techStackOnly) {
-      const tags = index.skillTags.get(name) || []
-      const stackTag = tags.find((t) => t.startsWith("tech-stack-"))
-      if (!stackTag) continue
-      const arr = byStack.get(stackTag) || []
-      arr.push(name)
-      byStack.set(stackTag, arr)
-    }
-    for (const names of byStack.values()) {
-      for (const name of names) {
-        lines.push(`- \`${name}\``)
-      }
-    }
-    lines.push("")
-  }
   lines.push("（其他 available_skills 中未列举的相关 skill，按需加载）")
   lines.push("")
 

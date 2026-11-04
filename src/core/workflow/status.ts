@@ -67,7 +67,7 @@ export function renderWorkflowStatusView(
     }
   }
   if (item.metadata["_checkpoint"] === true || rec.status === "checkpoint") {
-    return renderCheckpoint(rec, workflow, item)
+    return renderCheckpoint(rec, workflow, item, options.state)
   }
   if (rec.status === "suspended") {
     return renderSuspended(item)
@@ -121,7 +121,7 @@ function exemptionHintCtx(items: ExemptionRecord[] | undefined): ExemptionHintCt
   return { items, ruleFileLines: buildRuleFileLineMap(items) }
 }
 
-function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, item: WorkItem): string {
+function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, item: WorkItem, state?: OrchestrateState): string {
   const round = rec.checkpoint?.retryCount ?? "?"
   const step = rec.stepId ?? "(无)"
   const lines = [
@@ -135,7 +135,7 @@ function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, i
   // checkpoint_skip_reasons 逐项申报结构化降级理由（操作指引层面，不解释门禁内部实现）。
   const entry = rec.stepId ? workflow.stepMap.get(rec.stepId) : undefined
   const stepCaps = Array.from(new Set((entry?.step.agents ?? []).flatMap((a) => a.capability_tags)))
-  if (resolveMustDoForCaps(stepCaps).length > 0) {
+  if (resolveMustDoForCaps(stepCaps, undefined, state?.stacks).length > 0) {
     lines.push(
       `含必做清单的 step 的 giveup 决策：未覆盖必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），缺理由 giveup 不会被受理。`,
       "",
@@ -684,7 +684,7 @@ function renderAgentWorking(
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx))
-  lines.push(...renderSkillSuggestions(ctxAgent, caps))
+  lines.push(...renderSkillSuggestions(ctxAgent, caps, state.stacks))
   lines.push("## 操作指引", "")
   let n = 0
   lines.push(`${n++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
