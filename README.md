@@ -3,7 +3,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Built for OpenSpec](https://img.shields.io/badge/built%20for-OpenSpec-6b46c1.svg)
 
-`openspec-agents` 是 [OpenSpec](https://openspec.sh) 的配套插件，兼容 Claude Code / Codex / ZCode / DeepSeek Harness / OpenCode：提案阶段把标准钉得更死（澄清在前、改动范围与契约变更逐条确认），实施阶段由多 Agent 分工——写、查、验收、质量审查各由不同 Agent 担任，按生产级标准把控到收口。
+`openspec-agents` 是 [OpenSpec](https://openspec.sh) 的配套插件，兼容 Claude Code / Codex / ZCode / DeepSeek Harness / OpenCode：提案阶段把标准钉得更死（澄清在前、改动范围与契约变更逐条确认），实施阶段写与审查分离——实现由一个 Agent 写，审查由另一个 Agent 独立判定；完整模式下检查、验收、质量审查再拆给不同角色，按生产级标准把控到收口。
 
 前提：项目正在使用 OpenSpec 管理需求。
 
@@ -161,11 +161,13 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 **审查分工**
 
 ```
-完整模式  方案预检 → 实现 → 工具检查 → 独立验收 → 五维质量审查 → 收口
-精简模式  实现 → 合并审查 → 收口
+完整模式  方案预检 → 实现 → 工具检查 → 独立验收 → 五维质量审查 → 收尾验证 → 收口
+精简模式  实现 → 合并审查（工具检查 + 独立验收 + 五维质量审查）→ 收口
 ```
 
-最终判定不由实现者自己作出。完整模式下，检查、验收、质量审查由彼此独立的角色承担；精简模式由开发者执行确定性检查，再由一名审查者独立复核。
+精简模式的「合并审查」是把完整模式的三步审查合并到一名审查者身上，不是跳过：工具复验、独立验收、五维质量审查由同一名审查者一轮内做完。确定性检查由开发者执行并留自检申报；审查者全量重跑分钟级低成本项（环境、编译、格式、架构约束、静态分析、单元测试、配置检查），深度扫描与全量接口测试改为核验开发者申报加核心链路抽样重放，申报缺证据、抽验不符、发现断言放水或修复轮波及接口契约时回退全量重跑。
+
+最终判定不由实现者自己作出。完整模式下，检查、验收、质量审查由彼此独立的角色分步承担；精简模式由一名审查者独立承担这三项。
 
 **工具与 AI 的分工**
 
@@ -185,7 +187,7 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 - **可续跑**：进度记录在仓库中，查询当前状态即可恢复；关闭工具、跨天、更换工具都能从上次位置继续。
 - **规范驱动**：直接消费 OpenSpec 的提案、规格、设计与任务清单，流程与规范一一对应。
 
-初始化编排时选择流程模式，**默认为精简模式**：精简模式下小改动不必走全套流程；完整模式在开头增加一道方案预检，验收也拆得更细。
+初始化编排时选择流程模式，**默认为精简模式**。精简模式省的是流程步骤，不是检查内容：没有开头的方案预检，工具检查、验收与五维质量审查由一名审查者一轮合并完成，收口直接合并、正常路径不做合并后的回归复验；完整模式多一道方案预检，三项审查由独立角色分步执行，收口前还会把基准分支合并进来跑一轮回归复验。
 
 ## 内置的规范库
 
@@ -200,7 +202,7 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 
 **Java 后端配套**：在通用规范之上补齐 Java / Spring 的实现细节 —— Lombok、日志与命名约定、REST 接口的 Java 实现、MyBatisPlus 与 Flyway、DDD 的 Java 实现与 ArchUnit 规则、Maven / Spotless / PMD / 质量扫描平台接入、工具规则改进、Java 开发实践、Java 安全实现、Java 性能与可维护性、Java 技术债形态。
 
-**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、TypeScript 严格度、代码风格与 ESLint / Prettier、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现、前端 e2e（Playwright）与工具规则改进。
+**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、TypeScript 严格度与可维护性、代码风格与 ESLint / Prettier、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现、前端开发实践（pnpm / MSW mock）、前端技术债形态、前端 e2e（Playwright）与工具规则改进。
 
 skill 用「形态标签」（`stacks`：backend / frontend）与「框架标签」（`frameworks`：java / vue / react）声明自己适配哪类项目。初始化编排会话时必传本项目的形态栈与框架栈（`opx_orch_init` 的 `project_stacks` / `project_frameworks`，独立审查入口同样必传），skill 清单与必做清单门禁都按这份声明过滤：skill 声明的标签与会话同通道取值有交集即加载，未声明该通道的 skill 视为通用、始终加载；两个值域分字段校验，跨字段混用或传入未声明的值会被直接拒绝。扩展新框架不需要改工具代码——新增或替换 skill 时在 frontmatter 写 `stacks` / `frameworks` 即可被动态识别。
 
@@ -250,4 +252,4 @@ bun run build:plugins  # 构建各平台的插件包（发布用）
 
 ## 许可证
 
-[MIT](LICENSE) © 2025 ifrankwang
+[MIT](LICENSE) © 2026 ifrankwang
