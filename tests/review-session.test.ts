@@ -9,7 +9,7 @@
  * - 视图：全量锚点渲染、fix=none 报告视图、review_merged 无 dev 申报区块
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, status, complete_task_group, agent_submit } from "../src/adapters/opencode/tools"
@@ -50,6 +50,39 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_tool")
       expect(item.metadata["review_fix_policy"]).toBe("none")
+    } finally { teardown(root) }
+  })
+
+  test("同 scope 重复 init 传不同项目栈 → 拒绝（会话已固化项目栈，变更须新建会话）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const o = makeOrchCtx(wt)
+      const scope = { scope_type: "pr" as const, head_ref: "feature-x", granularity: "thorough" as const, fix: "none" as const }
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope }, o)
+      const err = await init.execute(
+        { project_stacks: ["frontend"], project_frameworks: ["vue"], review_scope: scope },
+        o,
+      ).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toMatch(/会话已固化项目栈，变更请新建会话/)
+      expect(readState(wt, PR_SESSION)!.stacks).toEqual(INIT_PROJECT_STACKS)
+    } finally { teardown(root) }
+  })
+
+  test("旧 review 会话（state 无 stacks）→ 重新 init 补齐项目栈成功", async () => {
+    const { wt, root } = fresh()
+    try {
+      const o = makeOrchCtx(wt)
+      const scope = { scope_type: "pr" as const, head_ref: "feature-x", granularity: "thorough" as const, fix: "none" as const }
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: scope }, o)
+      // 剥离 stacks 模拟旧版本会话
+      const statePath = join(wt, "openspec", "states", `${PR_SESSION}.json`)
+      const legacy = JSON.parse(readFileSync(statePath, "utf-8"))
+      delete legacy.stacks
+      writeFileSync(statePath, JSON.stringify(legacy))
+      const out = await init.execute({ project_stacks: ["frontend"], project_frameworks: ["vue"], review_scope: scope }, o)
+      expect(out).toContain("已为旧会话补齐项目栈")
+      expect(readState(wt, PR_SESSION)!.stacks).toEqual({ project_stacks: ["frontend"], project_frameworks: ["vue"] })
     } finally { teardown(root) }
   })
 

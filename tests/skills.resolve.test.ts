@@ -487,6 +487,16 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
     expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency", "tool-improvement"])
   })
 
+  test("review.yaml / review-simple.yaml 的 implement capability_tags 含 e2e-testing（独立审查 fix 模式 dev 交付 e2e）", () => {
+    const expected = ["efficiency", "api-testing", "e2e-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"]
+    for (const name of ["review.yaml", "review-simple.yaml"]) {
+      const wf = readWf(name)
+      const a = wf.stepMap.get("implement")!.step.agents.find((x) => x.id === "openspec-developer")
+      expect(a?.capability_tags).toEqual(expected)
+      expect(resolveSkillsForCapabilities(a?.capability_tags).skillNames).toContain("frontend-e2e")
+    }
+  })
+
   test("verify_quality 全部 5 个 agent 的 capability_tags 均命中 java-quality-tool-improve", () => {
     const wf = readWf("task.yaml")
     const step = wf.stepMap.get("verify_quality")!.step

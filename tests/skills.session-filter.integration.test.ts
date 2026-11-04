@@ -13,7 +13,7 @@ import { join } from "node:path"
 
 import { init, set_worktree, status, agent_submit } from "../src/adapters/opencode/tools"
 import { makeCtx, makeOrchCtx, readState, setupWithFakeGit, teardown } from "./helpers"
-import { readItem, taskIdsOf } from "./helpers-workflow"
+import { readItem, taskIdsOf, driveToVerifyTask } from "./helpers-workflow"
 import { scanSkillTags, type SkillTagIndex } from "../src/skills/resolve"
 import { resolveMustDoForCaps, __setMustDoIndex } from "../src/core/tools/gate"
 
@@ -189,6 +189,40 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
       expect(restoredSection).toContain("`frontend-quality-gate`")
       expect(restoredSection).not.toContain("`java-")
     } finally {
+      teardown(root)
+    }
+  })
+
+  test("legacy 会话走 verify_task 提交：必做清单只按通用 skill（test-design 三项），不含 api/e2e 项", async () => {
+    const root = tmpRoot("legacy-submit")
+    try {
+      const { worktree: wt } = setupWithFakeGit(root, CID)
+      const { ctx } = await driveToVerifyTask(wt, CID)
+      // 剥离 stacks 模拟升级在途旧会话（state 无项目栈）
+      const statePath = join(wt, "openspec", "states", `${CID}.json`)
+      const legacy = JSON.parse(readFileSync(statePath, "utf-8"))
+      delete legacy.stacks
+      writeFileSync(statePath, JSON.stringify(legacy))
+      // 真实索引驱动门禁：后端会话会解析出 api_script/api_execution（api-test），
+      // legacy（session=null）只解析通用 test-design 三项
+      __setMustDoIndex(scanSkillTags())
+      await agent_submit.execute(
+        {
+          change_id: CID,
+          step_id: "verify_task",
+          verdict: "passed",
+          verified_tasks: ["1", "2", "3"],
+          validation_steps: [
+            { step: "behavior_surface: 行为面清单", completed: true },
+            { step: "case_matrix: 用例矩阵", completed: true },
+            { step: "negative_probe: 探针记录", completed: true },
+          ],
+        },
+        ctx.taskR,
+      )
+      expect(readItem(wt, CID, "1").currentStep).toBe("verify_quality")
+    } finally {
+      __setMustDoIndex(null)
       teardown(root)
     }
   })
