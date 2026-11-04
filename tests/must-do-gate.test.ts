@@ -234,8 +234,8 @@ describe("uncoveredMustDo / resolveMustDoForCaps", () => {
   })
 
   /**
-   * 会话项目栈过滤：同一 capability 命中多个形态/框架 skill 时，必做清单只统计会话栈覆盖的 skill。
-   * 形态/框架标签未被会话覆盖的 skill 不参与覆盖度门禁；未声明形态/框架标签的 skill 恒为通用。
+   * 会话项目栈过滤：同一 capability 命中多个形态/框架 skill 时，必做清单只统计与会话有交集的 skill。
+   * 形态/框架与会话无交集的 skill 不参与覆盖度门禁；未声明形态/框架标签的 skill 恒为通用。
    */
   test("must_do 门禁按会话栈过滤后集合生效（后端会话不计前端 skill 清单）", () => {
     const stackIdx: SkillTagIndex = {

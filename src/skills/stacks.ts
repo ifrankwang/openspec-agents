@@ -9,7 +9,8 @@ import { scanSkillTags, type SkillTagIndex } from "./resolve.ts"
  * - stacks：形态标签，声明 skill 适用的项目形态，未声明 = 通用（所有会话命中）；
  * - frameworks：框架标签，声明 skill 适用的框架，未声明 = 通用（所有会话命中）。
  *
- * 过滤规则：skill 声明的 stacks ⊆ 会话 project_stacks 且 frameworks ⊆ 会话 project_frameworks。
+ * 过滤规则（交集语义）：skill 声明某通道的标签（非空）时，要求该通道与会话同通道取值存在交集
+ * （声明多值表示「支持其中任一」，不要求全部命中）；未声明该通道标签 = 通用，始终命中。
  *
  * 词汇表（当前存在哪些形态/框架）不作为代码常量维护：过滤与 init 值域校验全部来自 skill 索引的
  * 动态声明，新增/删除 skill 或新增框架只改 skill frontmatter，工具代码无需修改。
@@ -25,17 +26,17 @@ export interface SessionStacks {
 }
 
 /**
- * skill 命中规则（过滤层）：skill 声明的形态标签 ⊆ 会话 project_stacks 且框架标签 ⊆ 会话
- * project_frameworks；未声明形态/框架标签的 skill（通用）始终命中。会话未传时由调用方跳过过滤，
- * 不进入本函数。
+ * skill 命中规则（过滤层，交集语义）：skill 声明的形态标签与会话 project_stacks 有交集、且声明的
+ * 框架标签与会话 project_frameworks 有交集才命中；声明多值表示「支持其中任一」形态/框架。
+ * 未声明形态/框架标签的 skill（通用）始终命中。会话未传时由调用方跳过过滤，不进入本函数。
  */
 export function matchesSessionStacks(
   stacks: string[],
   frameworks: string[],
   session: SessionStacks,
 ): boolean {
-  if (stacks.length > 0 && !stacks.every((t) => session.project_stacks.includes(t))) return false
-  if (frameworks.length > 0 && !frameworks.every((t) => session.project_frameworks.includes(t))) return false
+  if (stacks.length > 0 && !stacks.some((t) => session.project_stacks.includes(t))) return false
+  if (frameworks.length > 0 && !frameworks.some((t) => session.project_frameworks.includes(t))) return false
   return true
 }
 

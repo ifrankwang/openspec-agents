@@ -72,6 +72,20 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
     ).not.toContain("api-test")
   })
 
+  test("真实索引：前端 skill 声明 frameworks=[vue,react]——vue / react 会话均命中，混合会话两侧命中", () => {
+    for (const frameworks of [["vue"], ["react"]]) {
+      const r = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["frontend"], project_frameworks: frameworks })
+      expect(r.skillNames).toContain("frontend-quality-gate")
+      expect(r.skillNames).not.toContain("java-quality-gate")
+    }
+    const mixed = resolveSkillsForCapabilities(
+      ["quality-gate"],
+      { project_stacks: ["backend", "frontend"], project_frameworks: ["java", "react"] },
+    )
+    expect(mixed.skillNames).toContain("frontend-quality-gate")
+    expect(mixed.skillNames).toContain("java-quality-gate")
+  })
+
   test("architecture 命中技术债识别 skill（均为通用，不分组）", () => {
     const r = resolveSkillsForCapabilities(["architecture"])
     expect(r.skillNames).toContain("technical-debt")
@@ -115,8 +129,9 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
 
 /**
  * 会话栈过滤（构造索引，不依赖真实 skill 文件）：
- * 命中规则 = 能力维度命中 ∧ skill 声明的 stacks ⊆ 会话 project_stacks ∧ skill 声明的 frameworks ⊆
- * 会话 project_frameworks；未声明 stacks / frameworks 视为通用，始终命中。
+ * 命中规则 = 能力维度命中 ∧ skill 声明的 stacks 与会话 project_stacks 有交集 ∧ skill 声明的
+ * frameworks 与会话 project_frameworks 有交集；声明多值表示「支持其中任一」，不要求全部覆盖。
+ * 未声明 stacks / frameworks 视为通用，始终命中。
  */
 describe("会话项目栈过滤（stacks / frameworks 字段）", () => {
   const stackIndex: SkillTagIndex = {
@@ -150,20 +165,20 @@ describe("会话项目栈过滤（stacks / frameworks 字段）", () => {
     ]),
   }
 
-  test("后端 java 会话只看得到后端与通用 skill，看不到前端 skill", () => {
+  test("后端 java 会话命中后端与通用 skill，不命中纯前端 skill；多形态 skill 命中", () => {
     const r = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["backend"], project_frameworks: ["java"] }, stackIndex)
     expect(r.skillNames).toContain("quality-gate")
     expect(r.skillNames).toContain("java-quality-gate")
+    expect(r.skillNames).toContain("fullstack-quality-gate") // 声明 backend+frontend，与 backend 有交集即命中
     expect(r.skillNames).not.toContain("vue-quality-gate")
-    expect(r.skillNames).not.toContain("fullstack-quality-gate")
   })
 
-  test("前端 vue 会话只看得到前端与通用 skill，看不到后端 skill", () => {
+  test("前端 vue 会话命中前端与通用 skill，不命中纯后端 skill；多形态 skill 命中", () => {
     const r = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["frontend"], project_frameworks: ["vue"] }, stackIndex)
     expect(r.skillNames).toContain("quality-gate")
     expect(r.skillNames).toContain("vue-quality-gate")
+    expect(r.skillNames).toContain("fullstack-quality-gate")
     expect(r.skillNames).not.toContain("java-quality-gate")
-    expect(r.skillNames).not.toContain("fullstack-quality-gate")
   })
 
   test("混合栈会话（前后端 + 多框架）两侧 skill 都可见，多形态 skill 也被覆盖", () => {
@@ -178,7 +193,7 @@ describe("会话项目栈过滤（stacks / frameworks 字段）", () => {
     expect(r.skillNames).toContain("quality-gate")
   })
 
-  test("形态命中但框架不匹配 → 不命中（frameworks 须 ⊆ 会话 frameworks）", () => {
+  test("形态有交集但框架无交集 → 不命中（两通道同时要求交集）", () => {
     const r = resolveSkillsForCapabilities(["quality-gate"], { project_stacks: ["backend"], project_frameworks: ["vue"] }, stackIndex)
     expect(r.skillNames).not.toContain("java-quality-gate")
     expect(r.skillNames).toContain("quality-gate")
@@ -198,6 +213,70 @@ describe("会话项目栈过滤（stacks / frameworks 字段）", () => {
     const r = resolveSkillsForCapabilities(["quality-gate"], undefined, stackIndex)
     expect(r.skillNames).toContain("java-quality-gate")
     expect(r.skillNames).toContain("vue-quality-gate")
+  })
+})
+
+/**
+ * 交集语义（多值声明 = 支持其中任一）：同一通道只要声明非空就要求与会话有交集，
+ * 不要求会话覆盖全部声明值。该语义让框架无关的 skill 可同时声明多个框架。
+ */
+describe("会话栈过滤（交集语义：多值声明支持任一）", () => {
+  // 通道隔离索引：每个 skill 只声明待验证的通道，未声明通道留空（按通用处理）
+  const idx: SkillTagIndex = {
+    tagMap: new Map([["style", ["frontend-only", "multi-framework", "both-forms", "generic-style"]]]),
+    skillTags: new Map([
+      ["frontend-only", ["style"]],
+      ["multi-framework", ["style"]],
+      ["both-forms", ["style"]],
+      ["generic-style", ["style"]],
+    ]),
+    skillMustDo: new Map(),
+    skillStacks: new Map([
+      ["frontend-only", ["frontend"]],
+      ["multi-framework", ["frontend"]],
+      ["both-forms", ["backend", "frontend"]],
+    ]),
+    skillFrameworks: new Map([
+      ["multi-framework", ["vue", "react"]],
+    ]),
+  }
+  const hit = (skill: string, stacks: string[], frameworks: string[]): boolean =>
+    resolveSkillsForCapabilities(["style"], { project_stacks: stacks, project_frameworks: frameworks }, idx).skillNames.includes(skill)
+
+  test("单值形态：会话含该形态即命中（含混合形态会话）", () => {
+    expect(hit("frontend-only", ["frontend"], ["vue"])).toBe(true)
+    expect(hit("frontend-only", ["backend", "frontend"], ["java"])).toBe(true)
+  })
+
+  test("多值形态：会话命中其中任一即命中，不要求全部覆盖", () => {
+    expect(hit("both-forms", ["backend"], ["java"])).toBe(true)
+    expect(hit("both-forms", ["frontend"], ["vue"])).toBe(true)
+    expect(hit("both-forms", ["backend", "frontend"], ["java", "vue"])).toBe(true)
+  })
+
+  test("形态与会话无交集 → 不命中", () => {
+    expect(hit("frontend-only", ["backend"], ["java"])).toBe(false)
+    expect(hit("both-forms", ["mobile"], ["swift"])).toBe(false)
+  })
+
+  test("多值框架：会话任一框架相同即命中（框架无关 skill 可同时服务 Vue / React）", () => {
+    expect(hit("multi-framework", ["frontend"], ["vue"])).toBe(true)
+    expect(hit("multi-framework", ["frontend"], ["react"])).toBe(true)
+    expect(hit("multi-framework", ["frontend"], ["vue", "react"])).toBe(true)
+  })
+
+  test("框架与会话无交集 → 不命中", () => {
+    expect(hit("multi-framework", ["frontend"], ["svelte"])).toBe(false)
+  })
+
+  test("两通道需同时满足：任一通道无交集即不命中", () => {
+    expect(hit("multi-framework", ["backend"], ["vue"])).toBe(false) // 形态无交集
+    expect(hit("multi-framework", ["frontend"], ["svelte"])).toBe(false) // 框架无交集
+  })
+
+  test("未声明某通道的 skill 不受该通道约束（通用）", () => {
+    expect(hit("generic-style", ["backend"], ["java"])).toBe(true)
+    expect(hit("frontend-only", ["frontend"], ["svelte"])).toBe(true) // 未声明 frameworks → 框架通道不拦
   })
 })
 
@@ -496,7 +575,7 @@ phases:
 
 /**
  * opx_status 视图侧：Skill 加载清单渲染。
- * 渲染按会话项目栈过滤（stacks / frameworks ⊆ 会话），旧「仅当技术栈匹配时加载」分区已废弃。
+ * 渲染按会话项目栈过滤（stacks / frameworks 与会话有交集才加载），旧「仅当技术栈匹配时加载」分区已废弃。
  */
 describe("Skill 加载清单视图渲染", () => {
   test("渲染清单且不再出现旧技术栈分区提示", () => {

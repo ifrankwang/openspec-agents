@@ -542,6 +542,24 @@ describe("D. init 会话项目栈必传参数校验", () => {
     }
   })
 
+  test("真实 skill 索引下：前端项目 init（frontend / vue 或 react）通过", async () => {
+    const { wt, root } = fresh()
+    try {
+      __setKnownStackTags(null)
+      // 前端框架无关 skill 声明 frameworks: ["vue","react"]，两框架值均应命中动态值域
+      for (const framework of ["vue", "react"]) {
+        await init.execute(
+          { project_stacks: ["frontend"], project_frameworks: [framework], change_id: CID, task_group_id: "1", mode: "full" },
+          makeOrchCtx(wt),
+        )
+      }
+      expect((readState(wt, CID) as any).stacks).toEqual({ project_stacks: ["frontend"], project_frameworks: ["vue"] })
+    } finally {
+      installTestSkillEnv()
+      teardown(root)
+    }
+  })
+
   test("真实 skill 索引下：传入从未声明过的栈值 → 拒绝（值域 = skill 声明的 stacks 并集）", async () => {
     const { wt, root } = fresh()
     try {
