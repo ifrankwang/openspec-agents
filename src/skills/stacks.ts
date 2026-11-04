@@ -39,26 +39,42 @@ export function matchesSessionStacks(
   return true
 }
 
-// ─── 标签存在性词汇（opx_orch_init 动态校验用） ───
+// ─── 标签存在性词汇（opx_orch_init 分字段动态校验用） ───
 
-let knownTagsOverride: Set<string> | null = null
+/** 测试注入的形态/框架值域（与 init 两参数分字段校验对应，结构保持可读）。 */
+export interface KnownStackTags {
+  stacks: string[]
+  frameworks: string[]
+}
+
+let knownTagsOverride: KnownStackTags | null = null
 
 /**
  * 测试注入：覆盖形态/框架标签存在性词汇（setupWorkspace 注入测试词汇，避免用例依赖真实 skill
  * 文件的声明进度）。null=无注入，词汇取真实 skill 索引的动态并集。
  */
-export function __setKnownStackTags(tags: string[] | null): void {
-  knownTagsOverride = tags ? new Set(tags) : null
+export function __setKnownStackTags(tags: KnownStackTags | null): void {
+  knownTagsOverride = tags ? { stacks: [...tags.stacks], frameworks: [...tags.frameworks] } : null
 }
 
 /**
- * 当前 skill 索引中所有 skill 声明过的 stacks + frameworks 并集（opx_orch_init 的动态值域，
- * 代码内无硬编码清单）。索引来自 skill frontmatter，新增框架只需在 skill 中声明。
+ * 当前 skill 索引中所有 skill 声明过的形态标签（stacks）并集（opx_orch_init 中 project_stacks
+ * 的动态值域，代码内无硬编码清单）。索引来自 skill frontmatter，新增形态只需在 skill 中声明。
  */
-export function knownStackTags(index: SkillTagIndex = scanSkillTags()): Set<string> {
-  if (knownTagsOverride) return knownTagsOverride
+export function knownStacks(index: SkillTagIndex = scanSkillTags()): Set<string> {
+  if (knownTagsOverride) return new Set(knownTagsOverride.stacks)
   const tags = new Set<string>()
   for (const list of index.skillStacks.values()) for (const tag of list) tags.add(tag)
+  return tags
+}
+
+/**
+ * 当前 skill 索引中所有 skill 声明过的框架标签（frameworks）并集（opx_orch_init 中
+ * project_frameworks 的动态值域，代码内无硬编码清单）。与形态值域分字段、不混用。
+ */
+export function knownFrameworks(index: SkillTagIndex = scanSkillTags()): Set<string> {
+  if (knownTagsOverride) return new Set(knownTagsOverride.frameworks)
+  const tags = new Set<string>()
   for (const list of index.skillFrameworks.values()) for (const tag of list) tags.add(tag)
   return tags
 }

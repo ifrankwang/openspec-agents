@@ -19,7 +19,7 @@ import { resolveMustDoForCaps } from "../src/core/tools/gate"
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { renderSkillSuggestions } from "../src/core/views"
 import { stepAgentIds } from "../src/core/workflow/types"
-import { __setKnownStackTags, knownStackTags } from "../src/skills/stacks"
+import { __setKnownStackTags, knownFrameworks, knownStacks } from "../src/skills/stacks"
 
 describe("resolveSkillsForCapabilities tag 匹配", () => {
   test("caps 命中 → skillNames 非空", () => {
@@ -253,25 +253,32 @@ describe("frontmatter stacks / frameworks 解析与动态值域", () => {
     for (const tag of idx.tagMap.keys()) expect(values.has(tag)).toBe(false)
   })
 
-  test("knownStackTags = 索引声明的 stacks ∪ frameworks 并集（动态取值，无硬编码清单）", () => {
+  test("knownStacks / knownFrameworks 分字段取索引并集（动态取值，无硬编码清单）", () => {
     const idx = scanSkillTags()
-    const expected = new Set<string>()
-    for (const list of idx.skillStacks.values()) for (const t of list) expected.add(t)
-    for (const list of idx.skillFrameworks.values()) for (const t of list) expected.add(t)
-    expect(knownStackTags(idx)).toEqual(expected)
-    expect(knownStackTags(idx).has("backend")).toBe(true)
-    expect(knownStackTags(idx).has("java")).toBe(true)
-    expect(knownStackTags(idx).has("quality-gate")).toBe(false)
+    const expectedStacks = new Set<string>()
+    for (const list of idx.skillStacks.values()) for (const t of list) expectedStacks.add(t)
+    const expectedFrameworks = new Set<string>()
+    for (const list of idx.skillFrameworks.values()) for (const t of list) expectedFrameworks.add(t)
+    expect(knownStacks(idx)).toEqual(expectedStacks)
+    expect(knownFrameworks(idx)).toEqual(expectedFrameworks)
+    // 分字段、不混用：框架值不进入形态值域，反之亦然
+    expect(knownStacks(idx).has("backend")).toBe(true)
+    expect(knownStacks(idx).has("java")).toBe(false)
+    expect(knownFrameworks(idx).has("java")).toBe(true)
+    expect(knownFrameworks(idx).has("backend")).toBe(false)
+    expect(knownStacks(idx).has("quality-gate")).toBe(false)
   })
 
-  test("测试注入覆盖值域；null 恢复动态并集", () => {
-    __setKnownStackTags(["x-stack"])
+  test("测试注入覆盖分字段值域；null 恢复动态取值", () => {
+    __setKnownStackTags({ stacks: ["x-stack"], frameworks: ["x-framework"] })
     try {
-      expect(knownStackTags(scanSkillTags())).toEqual(new Set(["x-stack"]))
+      expect(knownStacks(scanSkillTags())).toEqual(new Set(["x-stack"]))
+      expect(knownFrameworks(scanSkillTags())).toEqual(new Set(["x-framework"]))
     } finally {
       __setKnownStackTags(null)
     }
-    expect(knownStackTags(scanSkillTags()).has("backend")).toBe(true)
+    expect(knownStacks(scanSkillTags()).has("backend")).toBe(true)
+    expect(knownFrameworks(scanSkillTags()).has("java")).toBe(true)
   })
 })
 
@@ -344,10 +351,12 @@ describe("must_do 必做清单（机器可读）", () => {
     const design = ["behavior_surface", "case_matrix", "negative_probe"]
     // 合并顺序按 caps 解析顺序（gate.ts resolveMustDoForCaps → resolveSkillsForCapabilities）：
     // 任务验证/合并审查能力集首个命中项为 api-testing → api-test 两项，随后 test-design 三项。
+    // 用例只关心这两类清单的接线与顺序；同一能力集可能命中其它 skill（如 e2e）的必做项，不在此断言。
     const reviewLayerMustDo = ["api_script", "api_execution", ...design]
+    const onlyReviewLayer = (actual: string[]) => actual.filter((x) => reviewLayerMustDo.includes(x))
 
     const taskWf = readWf("task.yaml")
-    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(reviewLayerMustDo)
+    expect(onlyReviewLayer(resolveMustDoForCaps(capsOf(taskWf, "verify_task", "openspec-reviewer-task"), idx))).toEqual(reviewLayerMustDo)
     for (const item of reviewLayerMustDo) {
       expect(resolveMustDoForCaps(capsOf(taskWf, "implement", "openspec-developer"), idx)).toContain(item)
     }
@@ -359,13 +368,17 @@ describe("must_do 必做清单（机器可读）", () => {
     for (const item of reviewLayerMustDo) expect(reviewMustDo).toContain(item)
     expect(reviewMustDo).toContain("compile")
 
-    // verify_cleanup 能力集含 api-testing → 解析出 api-test 两项（该 step 能力集不含 test-design，不要求三项）
-    expect(resolveMustDoForCaps(capsOf(taskWf, "verify_cleanup", "openspec-developer"), idx)).toEqual(["api_script", "api_execution"])
-    expect(resolveMustDoForCaps(capsOf(simpleWf, "verify_cleanup", "openspec-developer"), idx)).toEqual(["api_script", "api_execution"])
+    // verify_cleanup 能力集含 api-testing 与 e2e-testing → 解析出对应 skill 的必做项；
+    // 该 step 能力集不含 test-design，不要求三项（其余能力命中的必做项不在此断言）
+    for (const wf of [taskWf, simpleWf]) {
+      const cleanupMustDo = resolveMustDoForCaps(capsOf(wf, "verify_cleanup", "openspec-developer"), idx)
+      for (const item of ["api_script", "api_execution"]) expect(cleanupMustDo).toContain(item)
+      expect(cleanupMustDo).not.toContain("behavior_surface")
+    }
 
     // 独立审查会话两个 workflow 与 change 会话同口径：dev 与任务验证/合并审查层均挂 test-design
     const reviewWf = readWf("review.yaml")
-    expect(resolveMustDoForCaps(capsOf(reviewWf, "verify_task", "openspec-reviewer-task"), idx)).toEqual(reviewLayerMustDo)
+    expect(onlyReviewLayer(resolveMustDoForCaps(capsOf(reviewWf, "verify_task", "openspec-reviewer-task"), idx))).toEqual(reviewLayerMustDo)
     for (const item of reviewLayerMustDo) {
       expect(resolveMustDoForCaps(capsOf(reviewWf, "implement", "openspec-developer"), idx)).toContain(item)
     }

@@ -12,7 +12,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
 import { agentSubmitSchema } from "../src/core/tools/schemas"
 import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeOrchCtx, readState, setupWithFakeGit, teardown } from "./helpers"
-import { __setKnownStackTags, knownStackTags } from "../src/skills/stacks"
+import { __setKnownStackTags, knownStacks } from "../src/skills/stacks"
 import { scanSkillTags } from "../src/skills/resolve"
 import { setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, taskIdsOf, readItem } from "./helpers-workflow"
 
@@ -420,10 +420,11 @@ describe("C. agent_submit 无效 id / 空字段校验", () => {
 })
 
 /**
- * D. 会话项目栈（project_stacks / project_frameworks）必传与动态值域校验：
- * 两入口（change / review_scope）均必传；非空字符串数组 + 每个值须命中当前 skill 索引声明的
- * stacks / frameworks 动态并集。测试词汇由 helpers.installTestSkillEnv 注入（与真实 skill 声明解耦）；
- * 真实索引用例在用例内显式关闭注入，验证值域确实来自 skill frontmatter。
+ * D. 会话项目栈（project_stacks / project_frameworks）必传与分字段动态值域校验：
+ * 两入口（change / review_scope）均必传；非空字符串数组，project_stacks 每个值须命中 skill
+ * 声明的 stacks 并集，project_frameworks 每个值须命中 frameworks 并集，两者不可混用。
+ * 测试词汇由 helpers.installTestSkillEnv 分字段注入（与真实 skill 声明解耦）；真实索引用例
+ * 在用例内显式关闭注入，验证值域确实来自 skill frontmatter。
  */
 describe("D. init 会话项目栈必传参数校验", () => {
   test("缺 project_stacks → 拒绝且错误指明参数名与用法", async () => {
@@ -472,12 +473,57 @@ describe("D. init 会话项目栈必传参数校验", () => {
     try {
       const err = await expectError(
         init.execute({ project_stacks: ["backend"], project_frameworks: ["golang"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
-        /project_frameworks 中的值未命中当前 skill 索引中实际声明的形态\/框架标签：golang/
+        /project_frameworks 中的值未命中当前 skill 索引中已由 skill 声明的框架标签（frameworks）：golang/
       )
-      // 错误体给出动态扫描到的现存标签（非硬编码值域清单）
+      // 错误体给出动态扫描到的框架值域（非硬编码值域清单），且不含形态值
+      expect(err.message).toContain("java")
+      expect(err.message).toContain("vue")
+      expect(err.message).toContain("react")
+      expect(err.message).not.toContain("backend")
+    } finally { teardown(root) }
+  })
+
+  test("project_stacks 传入框架值 → 拒绝（形态/框架分字段，不可混用）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const err = await expectError(
+        init.execute({ project_stacks: ["java"], project_frameworks: ["java"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_stacks 中的值未命中当前 skill 索引中已由 skill 声明的形态标签（stacks）：java/,
+      )
+      // 错误体列出的可用值只有形态值
       expect(err.message).toContain("backend")
+      expect(err.message).not.toContain("react")
+    } finally { teardown(root) }
+  })
+
+  test("project_frameworks 传入形态值 → 拒绝（形态/框架分字段，不可混用）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const err = await expectError(
+        init.execute({ project_stacks: ["backend"], project_frameworks: ["backend"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_frameworks 中的值未命中当前 skill 索引中已由 skill 声明的框架标签（frameworks）：backend/,
+      )
       expect(err.message).toContain("java")
     } finally { teardown(root) }
+  })
+
+  test("可用值清单过长时只列前 10 个并给出总数（防刷屏）", async () => {
+    const { wt, root } = fresh()
+    try {
+      const stacks = Array.from({ length: 12 }, (_, i) => `stack-${String(i).padStart(2, "0")}`)
+      __setKnownStackTags({ stacks, frameworks: ["java"] })
+      const err = await expectError(
+        init.execute({ project_stacks: ["nope"], project_frameworks: ["java"], change_id: CID, task_group_id: "1" } as any, makeOrchCtx(wt)),
+        /project_stacks 中的值未命中当前 skill 索引中已由 skill 声明的形态标签（stacks）：nope/,
+      )
+      expect(err.message).toContain("共 12 个")
+      expect(err.message).toContain("仅列前 10 个")
+      expect(err.message).toContain("stack-00")
+      expect(err.message).not.toContain("stack-10")
+    } finally {
+      installTestSkillEnv()
+      teardown(root)
+    }
   })
 
   test("真实 skill 索引下：已声明的 stacks / frameworks 值 → 校验通过并固化", async () => {
@@ -496,7 +542,7 @@ describe("D. init 会话项目栈必传参数校验", () => {
     }
   })
 
-  test("真实 skill 索引下：传入从未声明过的栈值 → 拒绝（值域 = skill 声明的 stacks ∪ frameworks）", async () => {
+  test("真实 skill 索引下：传入从未声明过的栈值 → 拒绝（值域 = skill 声明的 stacks 并集）", async () => {
     const { wt, root } = fresh()
     try {
       __setKnownStackTags(null)
@@ -505,12 +551,13 @@ describe("D. init 会话项目栈必传参数校验", () => {
           { project_stacks: ["cobol"], project_frameworks: ["java"], change_id: CID, task_group_id: "1", mode: "full" },
           makeOrchCtx(wt),
         ),
-        /project_stacks 中的值未命中当前 skill 索引中实际声明的形态\/框架标签：cobol/,
+        /project_stacks 中的值未命中当前 skill 索引中已由 skill 声明的形态标签（stacks）：cobol/,
       )
-      // 值域确为动态并集：真实 skill 声明的值出现在可用清单里，能力维度标签不出现
+      // 值域确为动态并集：真实 skill 声明的形态值出现在可用清单里，框架值与能力维度标签不出现
       const idx = scanSkillTags()
-      for (const tag of knownStackTags(idx)) expect(err.message).toContain(tag)
+      for (const tag of knownStacks(idx)) expect(err.message).toContain(tag)
       expect(err.message).not.toContain("quality-gate")
+      expect(err.message).not.toContain("java")
     } finally {
       installTestSkillEnv()
       teardown(root)

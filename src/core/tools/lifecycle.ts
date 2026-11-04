@@ -17,7 +17,7 @@ import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
 import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.ts"
-import { knownStackTags } from "../../skills/stacks.ts"
+import { knownFrameworks, knownStacks } from "../../skills/stacks.ts"
 
 /** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
 function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
@@ -610,11 +610,15 @@ async function initReviewRecovery(params: InitParams, state: OrchestrateState, c
   ].join("\n")
 }
 
+/** 错误信息中最多列出的可选标签数：清单过长时只列前 N 个 + 总数，避免刷屏。 */
+const MAX_LISTED_KNOWN_TAGS = 10
+
 /**
- * 会话项目栈参数（project_stacks / project_frameworks）必传校验与动态标签命中校验：
- * 两入口（change / review_scope）均必传；非空字符串数组且每个值须命中当前 skill 索引中
- * 所有 skill 声明过的 stacks / frameworks 并集（knownStackTags 动态取值，无硬编码值域清单）。
- * 不满足即抛错，早于任何状态变更。
+ * 会话项目栈参数（project_stacks / project_frameworks）必传校验与分字段动态校验：
+ * 两入口（change / review_scope）均必传；非空字符串数组，且 project_stacks 的每个值须命中
+ * 当前 skill 索引声明过的形态标签（stacks）并集、project_frameworks 的每个值须命中框架标签
+ * （frameworks）并集——两个值域分字段、不可混用（knownStacks / knownFrameworks 动态取值，
+ * 无硬编码值域清单）。不满足即抛错，早于任何状态变更。
  */
 function assertProjectStacks(args: InitParams): void {
   for (const [name, raw] of [["project_stacks", args.project_stacks], ["project_frameworks", args.project_frameworks]] as const) {
@@ -625,21 +629,33 @@ function assertProjectStacks(args: InitParams): void {
       )
     }
   }
-  const known = knownStackTags()
-  if (known.size === 0) {
+  const stackValues = knownStacks()
+  const frameworkValues = knownFrameworks()
+  if (stackValues.size === 0) {
     throw new Error(
-      "skill 索引中没有任何 skill 声明 stacks / frameworks 标签，无法校验 project_stacks / project_frameworks 值域。" +
-      "请在 skill frontmatter 声明形态/框架标签，或确认 skill 目录部署完整后重试。"
+      "skill 索引中没有任何 skill 声明 stacks 标签，无法校验 project_stacks 值域。" +
+      "请在 skill frontmatter 声明形态标签，或确认 skill 目录部署完整后重试。"
     )
   }
-  for (const [name, values] of [["project_stacks", args.project_stacks], ["project_frameworks", args.project_frameworks]] as const) {
+  if (frameworkValues.size === 0) {
+    throw new Error(
+      "skill 索引中没有任何 skill 声明 frameworks 标签，无法校验 project_frameworks 值域。" +
+      "请在 skill frontmatter 声明框架标签，或确认 skill 目录部署完整后重试。"
+    )
+  }
+  for (const [name, values, known, label] of [
+    ["project_stacks", args.project_stacks, stackValues, "形态标签（stacks）"],
+    ["project_frameworks", args.project_frameworks, frameworkValues, "框架标签（frameworks）"],
+  ] as const) {
     const unknown = values.filter((v) => !known.has(v))
     if (unknown.length > 0) {
       const available = Array.from(known).sort()
+      const listed = available.slice(0, MAX_LISTED_KNOWN_TAGS)
+      const truncated = available.length > listed.length ? ` 等（仅列前 ${MAX_LISTED_KNOWN_TAGS} 个）` : ""
       throw new Error(
-        `${name} 中的值未命中当前 skill 索引中实际声明的形态/框架标签：${unknown.join("、")}。\n` +
-        `当前索引中声明的标签（动态扫描 skill frontmatter 的 stacks / frameworks 并集，无硬编码值域）：${available.join("、")}。\n` +
-        `请传入任一 skill 的 stacks / frameworks 声明值。`
+        `${name} 中的值未命中当前 skill 索引中已由 skill 声明的${label}：${unknown.join("、")}。\n` +
+        `当前已由 skill 声明且可用的${label}共 ${available.length} 个：${listed.join("、")}${truncated}。\n` +
+        `形态（stacks）与框架（frameworks）分字段校验、不可混用；请传入任一 skill frontmatter 对应字段的声明值。`
       )
     }
   }

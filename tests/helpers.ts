@@ -416,7 +416,8 @@ export function createFakeGit(): FakeGitRunner {
 
 /**
  * opx_orch_init 必传的会话项目栈入参（change 与 review_scope 两入口均必传）。
- * 测试统一取值，避免逐处重复字面量；取值落在 {@link TEST_STACK_TAGS} 内使动态校验可通过。
+ * 测试统一取值，避免逐处重复字面量；取值落在 {@link TEST_STACKS} / {@link TEST_FRAMEWORKS}
+ * 内使分字段动态校验可通过。
  */
 export const INIT_PROJECT_STACKS: { project_stacks: string[]; project_frameworks: string[] } = {
   project_stacks: ["backend"],
@@ -424,18 +425,19 @@ export const INIT_PROJECT_STACKS: { project_stacks: string[]; project_frameworks
 }
 
 /**
- * 测试注入的形态/框架标签词汇（opx_orch_init 动态校验的值域）：与真实 skill 索引解耦，
+ * 测试注入的形态/框架标签词汇（opx_orch_init 分字段动态校验的值域）：与真实 skill 索引解耦，
  * 使用例不依赖 assets/skills 下的标签声明。门禁/过滤用例按需覆盖注入验证真实规则。
  */
-export const TEST_STACK_TAGS = ["backend", "frontend", "java", "vue", "react"]
+export const TEST_STACKS = ["backend", "frontend"]
+export const TEST_FRAMEWORKS = ["java", "vue", "react"]
 
 /**
  * 统一安装测试 skill 环境，供各测试文件自建 fixture 复用：空 must_do 索引（存量用例默认豁免
- * skill 必做清单门禁）+ 标签词汇注入（init 动态校验可通过）。需要真实门禁行为的用例在用例内显式覆盖注入。
+ * skill 必做清单门禁）+ 分字段标签词汇注入（init 动态校验可通过）。需要真实门禁行为的用例在用例内显式覆盖注入。
  */
 export function installTestSkillEnv(): void {
   __setMustDoIndex(EMPTY_MUST_DO_INDEX)
-  __setKnownStackTags(TEST_STACK_TAGS)
+  __setKnownStackTags({ stacks: TEST_STACKS, frameworks: TEST_FRAMEWORKS })
 }
 
 // ─── Workspace Setup ───
