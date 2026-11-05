@@ -22,7 +22,7 @@ import {
 import { jsonSchemaToToolParameters } from "../src/adapters/deepseek-harness/schema-dsl"
 import { statusSchema, agentSubmitSchema, orchInitSchema } from "../src/core/tools/schemas"
 import { getStatePath } from "../src/core/state"
-import { setupWithFakeGit, teardown, readState, deepFreeze } from "./helpers"
+import { setupWithFakeGit, teardown, readState, deepFreeze, fullMustDoChecks } from "./helpers"
 import { driveToQuality, rollbackQuality, taskItemOf, taskIdsOf } from "./helpers-workflow"
 
 /**
@@ -322,6 +322,7 @@ describe("DSH 原生工具插件 · 冻结入参提交", () => {
           verdict: "passed",
           completed_task_ids: taskIdsOf(item0),
           exempt_issue_ids: ["#7"],
+          must_do_checks: fullMustDoChecks(wt, "dsh-frozen", "implement"),
           [AGENT_ARG]: "openspec-developer",
         },
         makeExec({ cwd: wt }),

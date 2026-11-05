@@ -4,7 +4,6 @@ description: 面向 Vue / React 前端项目的 Playwright 端到端测试与业
 capabilities: ["e2e-testing"]
 stacks: ["frontend"]
 frameworks: ["vue", "react"]
-must_do: ["e2e_script", "e2e_run"]
 boundary_hints:
   directories: ["e2e/"]
 ---
@@ -17,8 +16,8 @@ boundary_hints:
 
 | 项 | 要求 |
 |----|------|
-| `e2e_script` | 交付可执行的用例脚本：`e2e/` 目录、Playwright 配置、support 层（reporter / 证据采集 / fixture）、按「scenario + step」组织的用例；脚本能直接按 README 命令跑起来 |
-| `e2e_run` | 实际执行过并产出报告：`playwright-report/index.html` 与 `playwright-report/report-data.json` 均存在，报告满足下文硬要求；只写不跑不算完成 |
+| 用例脚本 | 交付可执行的用例脚本：`e2e/` 目录、Playwright 配置、support 层（reporter / 证据采集 / fixture）、按「scenario + step」组织的用例；脚本能直接按 README 命令跑起来 |
+| 执行报告 | 实际执行过并产出报告：`playwright-report/index.html` 与 `playwright-report/report-data.json` 均存在，报告满足下文硬要求；只写不跑不算完成 |
 
 ## 产出物长什么样
 

@@ -4,10 +4,9 @@ description: 仅限 Vue / React 前端项目场景。前端项目质量门工具
 capabilities: ["quality-gate"]
 stacks: ["frontend"]
 frameworks: ["vue", "react"]
-# 机器可读必做清单：与下方「必做检查清单」表格逐项一一对应（汇总与产出属流程元项，不作为必做申报项）。
-# 第 2-6 行「全量检查」拆分为 compile/format/architecture/static_analysis/unit_test/coverage；
-# 第 7 行「SonarQube 深度扫描」对应 deep_scan（quality-gate 第 6 类深度扫描的前端具体实现）。
-must_do: ["env", "compile", "format", "architecture", "static_analysis", "unit_test", "coverage", "deep_scan", "config_check"]
+# 检查项与下方「必做检查清单」表格逐项一一对应（汇总与产出属流程元项，不作为检查项）。
+# 第 2-6 行「全量检查」含编译/格式/架构/静态分析/单测/覆盖率，第 7 行「SonarQube 深度扫描」
+# 是 quality-gate 第 6 类深度扫描的前端具体实现。
 ---
 
 > **项目规范优先**：本 skill 所列约定为推荐标准。若项目已有明确规范且与本 skill 不一致，以项目规范为准。

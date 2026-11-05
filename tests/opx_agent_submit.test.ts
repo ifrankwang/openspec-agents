@@ -15,7 +15,7 @@ import { init, agent_submit, set_worktree, complete_task_group } from "../src/ad
 import { loadWorkflow, stepAgentIds } from "../src/core/workflow"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
-import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups, fullMustDoChecks } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "agent-submit"
@@ -1055,7 +1055,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
   })
-  test("24. implement completed_task_ids 迁移 open→submitted，metadata.self_check_results 落盘", async () => {
+  test("24. implement completed_task_ids 迁移 open→submitted，必做项申报按 step 落盘", async () => {
     const root = `/tmp/opxsub-24-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -1066,14 +1066,14 @@ describe("opx_agent_submit 通用 step 提交", () => {
         {
           change_id: CID, step_id: "implement", verdict: "passed",
           completed_task_ids: ["1", "2", "3"],
-          self_check_results: "全部用例通过",
+          deployment_notes: ["全部用例通过后需重启服务"],
         },
         makeCtx("openspec-developer", wt)
       )
       const tasks = taskChildrenOf(wt)
       expect(tasks.find((t: any) => t.id === "1").phase).toBe("review")
       expect(tasks.find((t: any) => t.id === "3").phase).toBe("review")
-      expect(taskItemOf(wt).metadata["self_check_results"]).toBe("全部用例通过")
+      expect(taskItemOf(wt).metadata["deployment_notes"]).toEqual(["全部用例通过后需重启服务"])
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -1164,7 +1164,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
   })
-  test("27. verify_task validation_steps：completed=false 必须带 skip_reason", async () => {
+  test("27. verify_task must_do_checks：completed=false 必须带 skip_reason，completed=true 必须带 evidence", async () => {
     const root = `/tmp/opxsub-27-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
@@ -1177,7 +1177,7 @@ describe("opx_agent_submit 通用 step 提交", () => {
         {
           change_id: CID, step_id: "verify_task", verdict: "passed",
           verified_tasks: ["1", "2", "3"],
-          validation_steps: [{ step: "构建", completed: false }],
+          must_do_checks: [{ step: "behavior_surface", completed: false }],
         },
         makeCtx("openspec-reviewer-task", wt)
       ).catch((e: Error) => e)
@@ -1185,19 +1185,17 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(err.message).toMatch(/skip_reason/)
 
       // completed=true + evidence 正常落盘；completed=false 带合法结构化 skip_reason 正常落盘
-      const reason = '{"item":"冒烟","category":"no_ui_change","adjudication":"user_response"}'
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed",
           verified_tasks: ["1", "2", "3"],
-          validation_steps: [{ step: "构建", completed: true, evidence: "BUILD SUCCESS" }, { step: "冒烟", completed: false, skip_reason: reason }],
+          must_do_checks: fullMustDoChecks(wt, CID, "verify_task", "BUILD SUCCESS"),
         },
         makeCtx("openspec-reviewer-task", wt)
       )
-      const steps = taskItemOf(wt).metadata["validation_steps"] as any[]
-      expect(steps).toHaveLength(2)
+      const steps = taskItemOf(wt).metadata["must_do_checks_by_step"]["verify_task"] as any[]
+      expect(steps.length).toBeGreaterThan(0)
       expect(steps[0].evidence).toBe("BUILD SUCCESS")
-      expect(steps[1].skip_reason).toBe(reason)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

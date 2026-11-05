@@ -172,8 +172,8 @@ async function submit(wt: string, sessionId: string, agent: string, params: Reco
 
 /** 走完 thorough 三层（全 passed）到达 done。 */
 async function passThorough(wt: string, sessionId: string): Promise<void> {
-  await submit(wt, sessionId, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
-  await submit(wt, sessionId, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
+  await submit(wt, sessionId, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed" })
+  await submit(wt, sessionId, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed" })
   for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
     await submit(wt, sessionId, `openspec-reviewer-${d}`, { step_id: "verify_quality", verdict: "passed" })
   }
@@ -207,7 +207,7 @@ describe("流转矩阵：审查通过收口", () => {
       const item = itemOf(wt, sessionId)
       expect(item.metadata["base_ref"]).toBeUndefined()
       expect(item.metadata["merge_target"]).toBe("develop")
-      await submit(wt, sessionId, "openspec-reviewer", { step_id: "quality_review", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
+      await submit(wt, sessionId, "openspec-reviewer", { step_id: "quality_review", verdict: "passed" })
       expect(itemOf(wt, sessionId).phase).toBe("done")
       await complete_task_group.execute({ change_id: sessionId }, o)
       // 主仓库检出 develop（当前分支）→ 收尾走真实 merge --no-ff 合回 develop（分支指针由 git merge 自身推进，不经 update-ref CAS）
@@ -277,7 +277,7 @@ describe("流转矩阵：fix 模式失败进 implement 修复后回审查层重�
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
       // dev 修复后回 verify_tool（归因层 tag 已被重置）
-      await submit(wt, PR_SESSION, "openspec-developer", { step_id: "implement", verdict: "passed", fixed_issue_ids: ["i1"], self_check_results: "已修复" })
+      await submit(wt, PR_SESSION, "openspec-developer", { step_id: "implement", verdict: "passed", fixed_issue_ids: ["i1"] })
       const after = itemOf(wt, PR_SESSION)
       expect(after.phase).toBe("review")
       expect(after.currentStep).toBe("verify_tool")
@@ -288,9 +288,8 @@ describe("流转矩阵：fix 模式失败进 implement 修复后回审查层重�
       await submit(wt, PR_SESSION, "openspec-reviewer-tool", {
         step_id: "verify_tool", verdict: "passed",
         recheck_adjudications: [{ issue_id: "i1", verdict: "passed" }],
-        validation_steps: [{ step: "build", completed: true }],
       })
-      await submit(wt, PR_SESSION, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
+      await submit(wt, PR_SESSION, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed" })
       for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
         await submit(wt, PR_SESSION, `openspec-reviewer-${d}`, { step_id: "verify_quality", verdict: "passed" })
       }
@@ -308,10 +307,10 @@ describe("流转矩阵：fix 模式失败进 implement 修复后回审查层重�
         step_id: "quality_review", verdict: "failed",
         new_children: [{ id: "i1", title: "断言放水", description: "测试断言放水", severity: "Low", dimension: "maintainability", file: "tests/b.test.ts", line: 3 }],
       })
-      await submit(wt, PR_SESSION, "openspec-developer", { step_id: "implement", verdict: "passed", fixed_issue_ids: ["i1"], self_check_results: "自检通过" })
-      // review_merged 视图（简单颗粒度）不渲染「开发者自检申报」区块（独立审查无该数据源）
+      await submit(wt, PR_SESSION, "openspec-developer", { step_id: "implement", verdict: "passed", fixed_issue_ids: ["i1"] })
+      // review_merged 视图（简单颗粒度）不渲染「开发者必做项申报」区块（独立审查无该数据源）
       const view = await status.execute({ change_id: PR_SESSION }, makeCtx("openspec-reviewer", wt))
-      expect(view).not.toContain("开发者自检申报")
+      expect(view).not.toContain("开发者必做项申报")
       expect(view).toContain("审查范围")
     } finally { teardown(root) }
   })
@@ -349,7 +348,7 @@ describe("回归验证（thorough 第二层）", () => {
       await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
       // 首轮工具层通过 → 回归验证层报存量失败 issue（进入修复闭环）
-      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
+      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed" })
       await submit(wt, PR_SESSION, "openspec-reviewer-task", {
         step_id: "verify_task", verdict: "failed",
         new_children: [{ id: "r1", title: "存量失败", description: "既有测试存量失败（上轮未登记）", severity: "Medium", dimension: "maintainability", file: "tests/old.test.ts", line: 5 }],
@@ -370,7 +369,7 @@ describe("恢复路径", () => {
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "fix" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
-      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
+      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed" })
       // change_id 入口恢复（task_group_id 缺省，虚拟组 review）
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: PR_SESSION, recovery: { phase: "review" } } as any, o)
       const item = itemOf(wt, PR_SESSION)
@@ -414,7 +413,7 @@ describe("fix=none 中途层失败直达 done（thorough 后置层 / simple）",
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
-      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
+      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed" })
       await submit(wt, PR_SESSION, "openspec-reviewer-task", {
         step_id: "verify_task", verdict: "failed",
         new_children: [{ id: "r1", title: "回归失败", description: "修复引入回归", severity: "High", dimension: "maintainability", file: "tests/c.test.ts", line: 9 }],
@@ -433,8 +432,8 @@ describe("fix=none 中途层失败直达 done（thorough 后置层 / simple）",
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
-      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
-      await submit(wt, PR_SESSION, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
+      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed" })
+      await submit(wt, PR_SESSION, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed" })
       // verify_quality 为 5 维多 agent step：失败回退须等全部维度提交后才触发（单维 failed 不提前回退）
       await submit(wt, PR_SESSION, "openspec-reviewer-style", {
         step_id: "verify_quality", verdict: "failed",
@@ -485,13 +484,12 @@ describe("full + thorough 组合关键路径", () => {
         new_children: [{ id: "i1", title: "格式违规", description: "格式违规", severity: "Low", dimension: "style", file: "src/a.ts", line: 1 }],
       })
       expect(itemOf(wt, sessionId).currentStep).toBe("implement")
-      await submit(wt, sessionId, "openspec-developer", { step_id: "implement", verdict: "passed", fixed_issue_ids: ["i1"], self_check_results: "已修复" })
+      await submit(wt, sessionId, "openspec-developer", { step_id: "implement", verdict: "passed", fixed_issue_ids: ["i1"] })
       await submit(wt, sessionId, "openspec-reviewer-tool", {
         step_id: "verify_tool", verdict: "passed",
         recheck_adjudications: [{ issue_id: "i1", verdict: "passed" }],
-        validation_steps: [{ step: "build", completed: true }],
       })
-      await submit(wt, sessionId, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed", validation_steps: [{ step: "regression", completed: true }] })
+      await submit(wt, sessionId, "openspec-reviewer-task", { step_id: "verify_task", verdict: "passed" })
       for (const d of ["style", "architecture", "performance", "security", "maintainability"]) {
         await submit(wt, sessionId, `openspec-reviewer-${d}`, { step_id: "verify_quality", verdict: "passed" })
       }
@@ -511,7 +509,7 @@ describe("fix=none 经 recovery 重放：fail→done 映射恢复后仍生效", 
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "thorough", fix: "none" } }, o)
       await set_worktree.execute({ change_id: PR_SESSION }, o)
-      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed", validation_steps: [{ step: "build", completed: true }] })
+      await submit(wt, PR_SESSION, "openspec-reviewer-tool", { step_id: "verify_tool", verdict: "passed" })
       await submit(wt, PR_SESSION, "openspec-reviewer-task", {
         step_id: "verify_task", verdict: "failed",
         new_children: [{ id: "r1", title: "回归失败", description: "首轮回归失败", severity: "Medium", dimension: "maintainability", file: "tests/f.test.ts", line: 7 }],

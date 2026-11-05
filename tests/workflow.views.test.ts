@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test"
 
 import { loadWorkflow, loadWorkflowFile, TASK_WORKFLOW_PATH, SIMPLE_WORKFLOW_PATH } from "../src/core/workflow/loader"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
-import { renderDevSelfCheckDeclaration, extractDeploymentNoteLines } from "../src/core/views"
+import { renderDevMustDoDeclaration, extractDeploymentNoteLines } from "../src/core/views"
 
 // ─── 基建 ───
 
@@ -286,105 +286,78 @@ describe("执行视图：baseRef 分支控制「变更范围」指引", () => {
 })
 
 // ═══════════════════════════════════════════════════════════════
-//  7. 开发者自检申报渲染单元（simple 验证分流：quality_review 视图事实输入）
+//  7. 开发者必做项申报渲染单元（simple 验证分流：quality_review 视图证据锚点）
 // ═══════════════════════════════════════════════════════════════
 
-describe("renderDevSelfCheckDeclaration 开发者自检申报渲染", () => {
-  test("两字段皆有 → 渲染自检申报与接口测试结果两段", () => {
-    const out = renderDevSelfCheckDeclaration({
-      self_check_results: "构建：mvn compile 通过；deep_scan 命中 3 项（附命令与结果摘要）",
-      test_results: "API 测试 12/12 通过（附执行顺序与覆盖接口清单）",
-    }).join("\n")
-    expect(out).toContain("## 开发者自检申报")
-    expect(out).toContain("**自检申报（self_check_results）**")
-    expect(out).toContain("构建：mvn compile 通过")
-    expect(out).toContain("**接口测试结果（test_results）**")
-    expect(out).toContain("API 测试 12/12 通过")
+describe("renderDevMustDoDeclaration 开发者必做项申报渲染", () => {
+  const archive = (checks: unknown) => ({ must_do_checks_by_step: { implement: checks } })
+
+  test("多项申报（完成 + 未完成）→ 逐项渲染必做项、状态与证据/降级理由", () => {
+    const out = renderDevMustDoDeclaration(archive([
+      { step: "compile", completed: true, evidence: "mvn compile 通过" },
+      { step: "coverage", completed: false, skip_reason: '{"item":"coverage","category":"env_unavailable","adjudication":"env_unavailable","note":"平台不可用"}' },
+    ])).join("\n")
+    expect(out).toContain("## 开发者必做项申报（implement）")
+    expect(out).toContain("**compile**：已完成 — mvn compile 通过")
+    expect(out).toContain("**coverage**：未完成 — 降级理由：")
+    expect(out).toContain("平台不可用")
   })
 
-  test("仅 self_check_results → 仅渲染自检申报段", () => {
-    const out = renderDevSelfCheckDeclaration({ self_check_results: "构建通过" }).join("\n")
-    expect(out).toContain("## 开发者自检申报")
-    expect(out).toContain("**自检申报（self_check_results）**")
-    expect(out).toContain("构建通过")
-    expect(out).not.toContain("**接口测试结果")
+  test("step 名带说明（compile: ...）按首段 token 渲染", () => {
+    const out = renderDevMustDoDeclaration(archive([
+      { step: "deep_scan: 核验 dev 申报", completed: true, evidence: "抽验 2 条命中项真实存在" },
+    ])).join("\n")
+    expect(out).toContain("**deep_scan**：已完成")
   })
 
-  test("仅 test_results → 仅渲染接口测试结果段", () => {
-    const out = renderDevSelfCheckDeclaration({ test_results: "API 测试通过" }).join("\n")
-    expect(out).toContain("## 开发者自检申报")
-    expect(out).toContain("**接口测试结果（test_results）**")
-    expect(out).not.toContain("**自检申报（self_check_results）**")
+  test("completed=true 但 evidence 缺失 → 标注未附证据（不静默留空）", () => {
+    const out = renderDevMustDoDeclaration(archive([{ step: "compile", completed: true }])).join("\n")
+    expect(out).toContain("(未附证据)")
   })
 
-  test("两字段皆缺失 / 空串 / 非字符串 → 返回空数组（不渲染空区块）", () => {
-    expect(renderDevSelfCheckDeclaration({})).toEqual([])
-    expect(renderDevSelfCheckDeclaration({ self_check_results: "  ", test_results: "" })).toEqual([])
-    expect(renderDevSelfCheckDeclaration({ self_check_results: 42, test_results: null })).toEqual([])
+  test("无存档 / 空数组 / 非法形态 → 返回空数组（不渲染空区块）", () => {
+    expect(renderDevMustDoDeclaration({})).toEqual([])
+    expect(renderDevMustDoDeclaration(archive([]))).toEqual([])
+    expect(renderDevMustDoDeclaration({ must_do_checks_by_step: "bad" })).toEqual([])
+    expect(renderDevMustDoDeclaration({ must_do_checks_by_step: { verify_tool: [{ step: "x", completed: true }] } })).toEqual([])
   })
 })
 
 // ═══════════════════════════════════════════════════════════════
-//  8. 部署注意点行提取（终态视图「部署注意事项」区块的实施补充点数据源）
+//  8. 部署注意点提取（终态视图「部署注意事项」区块的实施补充点数据源）
 // ═══════════════════════════════════════════════════════════════
 
-describe("extractDeploymentNoteLines 部署注意点行提取", () => {
-  test("前缀行命中（含行首空白容错），命中行去除行尾空白后原样保留", () => {
+describe("extractDeploymentNoteLines 部署注意点提取", () => {
+  test("从 metadata.deployment_notes 逐条提取（顺序保持，首尾空白去除）", () => {
     expect(
       extractDeploymentNoteLines({
-        self_check_results: "构建验证通过\n  部署注意点: 新增配置项 deploy.switch 需在部署前开启  \n维度自检通过",
+        deployment_notes: ["  新增配置项 deploy.switch 需在部署前开启  ", "数据结构变更脚本须先于服务发布执行"],
       }),
-    ).toEqual(["部署注意点: 新增配置项 deploy.switch 需在部署前开启"])
+    ).toEqual(["新增配置项 deploy.switch 需在部署前开启", "数据结构变更脚本须先于服务发布执行"])
   })
 
-  test("非前缀行排除（前缀出现在行中/行首非约定前缀均不命中）", () => {
-    expect(
-      extractDeploymentNoteLines({
-        self_check_results: "自检结论提及部署注意点但未置于行首\n部署注意事项: 行首是「事项」而非「点」，非约定前缀",
-      }),
-    ).toEqual([])
+  test("空串 / 非字符串条目跳过（不产生空行）", () => {
+    expect(extractDeploymentNoteLines({ deployment_notes: ["", "   ", 42, "有效条目"] })).toEqual(["有效条目"])
   })
 
-  test("行首为全角冒号「部署注意点：」不命中（约定前缀为半角冒号）", () => {
-    expect(
-      extractDeploymentNoteLines({ self_check_results: "部署注意点：全角冒号行不参与提取" }),
-    ).toEqual([])
+  test("无该字段 / 空数组 / 非数组 → 返回空数组", () => {
+    expect(extractDeploymentNoteLines({})).toEqual([])
+    expect(extractDeploymentNoteLines({ deployment_notes: [] })).toEqual([])
+    expect(extractDeploymentNoteLines({ deployment_notes: "不是数组" })).toEqual([])
+    // 旧字段（self_check_results 行前缀约定）已废弃，不再参与提取
+    expect(extractDeploymentNoteLines({ self_check_results: "部署注意点: 旧约定行" })).toEqual([])
   })
 
-  test("前缀约定防漂移：两种模式 workflow 的 implement instructions 均含「部署注意点:」申报条目", () => {
-    // 申报端（workflow 配置）与提取端（views.ts，由上方单测用例锚定）共用同一前缀字面量，
-    // 任一侧单改前缀未同步另一侧时本用例失败
+  test("申报契约防漂移：两模式 workflow 的 implement instructions 均以 deployment_notes 参数申报部署注意点", () => {
+    // 申报端（workflow 配置）与提取端（views.ts 的 metadata.deployment_notes）同源，任一侧改名会在此失败
     for (const path of [TASK_WORKFLOW_PATH, SIMPLE_WORKFLOW_PATH]) {
       const impl = loadWorkflowFile(path).stepMap.get("implement")
       expect(impl).toBeDefined()
       const declared = (impl!.step.instructions ?? []).filter(
-        (i) => i.includes("部署注意点:") && i.includes("self_check_results"),
+        (i) => i.includes("部署注意点") && i.includes("deployment_notes"),
       )
       expect(declared.length).toBeGreaterThanOrEqual(1)
     }
   })
-
-  test("无 self_check_results / 空串 / 非字符串 → 返回空数组", () => {
-    expect(extractDeploymentNoteLines({})).toEqual([])
-    expect(extractDeploymentNoteLines({ self_check_results: "   " })).toEqual([])
-    expect(extractDeploymentNoteLines({ self_check_results: 42 })).toEqual([])
-  })
-
-  test("多行混合命中：仅收集前缀行且保持出现顺序", () => {
-    expect(
-      extractDeploymentNoteLines({
-        self_check_results:
-          "部署注意点: 数据结构变更脚本须先于服务发布执行\n构建通过\n部署注意点: 新增缓存键前缀需运维同步",
-      }),
-    ).toEqual([
-      "部署注意点: 数据结构变更脚本须先于服务发布执行",
-      "部署注意点: 新增缓存键前缀需运维同步",
-    ])
-  })
-
-  test("命中行保留前缀本身（便于转述端直接输出）", () => {
-    const out = extractDeploymentNoteLines({ self_check_results: "部署注意点: 外部接口契约新增必填字段" })
-    expect(out).toHaveLength(1)
-    expect(out[0].startsWith("部署注意点:")).toBe(true)
-  })
 })
+

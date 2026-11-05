@@ -1,5 +1,5 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.ts"
-import type { WorkItem, StepConfig, WorkflowCommon } from "./types.ts"
+import type { WorkItem, StepConfig, WorkflowCommon, MustDoCatalog } from "./types.ts"
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
 import { EXEMPTED_HIT_KEY } from "../exemptions.ts"
 import type { ExemptionRecord } from "../exemptions.ts"
@@ -12,12 +12,12 @@ import { resolveChildIssueFields } from "./reset.ts"
 import { taskListOf, issueChildrenOf } from "../task-children.ts"
 import {
   renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
-  renderAgentSummaries, renderDevSelfCheckDeclaration, renderTaskItem, formatFilePath, formatSeverity,
+  renderAgentSummaries, renderDevMustDoDeclaration, renderTaskItem, formatFilePath, formatSeverity,
   isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
   extractDeploymentNoteLines,
 } from "../views.ts"
 import { taskGroupFromWorkItem } from "../derive.ts"
-import { resolveMustDoForCaps, SKIP_REASON_FORMAT } from "../tools/gate.ts"
+import { resolveStepMustDo, SKIP_REASON_FORMAT } from "../tools/gate.ts"
 
 export interface WorkflowStatusViewOptions {
   state: OrchestrateState
@@ -113,7 +113,7 @@ function renderWorkflowStatusViewCore(
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, options.toolChanges, options.exemptedHits, exemptionHintCtx(options.exemptionItems))
+    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, workflow.mustDoCatalog, options.toolChanges, options.exemptedHits, exemptionHintCtx(options.exemptionItems))
   }
   return renderGate(rec, item, ctxAgent)
 }
@@ -152,13 +152,21 @@ function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, i
     `唯一动作：调用 \`opx_agent_submit({ step_id: "${step}", checkpoint_decision: "continue" })\`（continue / giveup 二选一）推进。`,
     "",
   ]
-  // 解析出必做清单的 step（各 skill 声明 must_do 即生效，不限质量门类）giveup 时，未覆盖必做项须经
-  // checkpoint_skip_reasons 逐项申报结构化降级理由（操作指引层面，不解释门禁内部实现）。
+  // giveup 指引按当前 step 的生效清单渲染（与门禁共用 resolveStepMustDo 单一解析入口）：
+  // 有清单时列出本 step 必做项与未覆盖项的降级申报要求（操作指引层面，不解释门禁内部实现）。
   const entry = rec.stepId ? workflow.stepMap.get(rec.stepId) : undefined
-  const stepCaps = Array.from(new Set((entry?.step.agents ?? []).flatMap((a) => a.capability_tags)))
-  if (resolveMustDoForCaps(stepCaps, undefined, state?.stacks ?? null).length > 0) {
+  const mustDoItems = resolveStepMustDo(entry?.step, state?.stacks ?? null)
+  if (mustDoItems.length > 0) {
+    lines.push("## 当前 step 的必做清单", "")
+    for (const id of mustDoItems) {
+      const desc = workflow.mustDoCatalog[id]?.description
+      lines.push(`- \`${id}\`${desc ? `：${desc}` : ""}`)
+    }
+    lines.push("")
+    lines.push("## giveup 申报要求", "")
     lines.push(
-      `含必做清单的 step 的 giveup 决策：未覆盖必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），缺理由 giveup 不会被受理。`,
+      `未覆盖的必做项须经 \`checkpoint_skip_reasons\` 逐项申报结构化降级理由（格式：\`${SKIP_REASON_FORMAT}\`），` +
+      `缺理由 giveup 不会被受理；已按 step 存档申报的项不需重复提供。`,
       "",
     )
   }
@@ -250,7 +258,7 @@ function cancelTaskGroupNote(state: OrchestrateState | undefined): string {
 }
 
 /** 终态视图的「部署注意事项」区块（仅编排视角、change 会话渲染）：指引编排者读主仓库规划文档提取
- *  部署要点，并聚合各任务组 self_check_results 申报的「部署注意点:」前缀行（实施补充点，编排者纯转述）。
+ *  部署要点，并聚合各任务组 deployment_notes 申报的实施补充点（编排者纯转述）。
  *  渲染前提：当前组为最后一个收口任务组（isFinalTaskGroup，其余组均终态且渲染到终态时当前组必已
  *  终态），尚有未收口组时不渲染（两形态维持既有文案）。全部组无实施补充点时省略补充点段（不渲染空段）。 */
 function renderDeploymentNotesSection(state: OrchestrateState | undefined, item: WorkItem, caller: StatusViewCaller | undefined): string[] {
@@ -613,6 +621,7 @@ function renderAgentWorking(
   ctxAgent: string,
   state: OrchestrateState,
   tg: TaskGroupState,
+  mustDoCatalog: MustDoCatalog,
   toolChanges?: DetectChangesResult,
   exemptedHits?: number,
   exemptionCtx?: ExemptionHintCtx,
@@ -680,6 +689,10 @@ function renderAgentWorking(
     )
   }
   lines.push(...renderStepSemantics(step, common, stepCtx))
+  // 本 step 必做清单区块：与门禁共用 resolveStepMustDo 单一解析入口（按会话项目栈分组取并集），
+  // 逐项渲染 id + 词表 description + evidence 要求，并给出 must_do_checks 提交示例。
+  const mustDoItems = resolveStepMustDo(step ?? undefined, state.stacks ?? null)
+  lines.push(...renderMustDoChecklist(mustDoItems, mustDoCatalog, rec.stepId))
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   // 证据区块注入：展示检查点增量口径的本次变更证据（文件清单 + 区间 diff 命令），与 Worktree 区块
   // 「变更范围」（baseRef..HEAD 本任务组累计口径）区分，供审查者审查变更内容后按操作指引裁量是否可免
@@ -694,14 +707,14 @@ function renderAgentWorking(
   if (step?.id === "quality_review" && toolChanges) {
     lines.push(...renderToolChangesEvidence(item, tg, toolChanges, "merged_review"))
   }
-  // simple 合并审查（quality_review）证据注入：渲染提交参数存档的自检申报（self_check_results /
-  // test_results），作为分级复验的事实输入——低成本实跑对照、高成本项核验申报+抽样重放均以该申报为
-  // 证据源。仅 quality_review step 渲染（消费方是 reviewer）；implement 视图与其余 step 视图不受影响
-  //（dev 自己刚产出该申报，无需回显）。
-  // 开发者自检申报区块仅 change 会话渲染（simple 模式 quality_review 的分级复验事实输入）；
+  // simple 合并审查（quality_review）证据注入：渲染 implement 阶段按 step 存档的必做项申报
+  // （metadata.must_do_checks_by_step["implement"]），作为分级复验的证据锚点——低成本实跑对照、
+  // 高成本项核验申报+抽样重放均以该申报为证据源。仅 quality_review step 渲染（消费方是 reviewer）；
+  // implement 视图与其余 step 视图不受影响（dev 自己刚产出该申报，无需回显）。
+  // 该区块仅 change 会话渲染（simple 模式 quality_review 的分级复验事实输入）；
   // 独立审查会话无该数据源（无 dev 实施申报语义），不渲染空区块。
   if (step?.id === "quality_review" && state.kind !== "review") {
-    lines.push(...renderDevSelfCheckDeclaration(item.metadata))
+    lines.push(...renderDevMustDoDeclaration(item.metadata))
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
   lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx))
@@ -724,10 +737,59 @@ function renderAgentWorking(
   for (const instruction of step?.instructions ?? []) {
     lines.push(`${n++}. ${interpolateText(instruction, stepCtx)}`)
   }
+  if (mustDoItems.length > 0) {
+    lines.push(`${n++}. 提交前逐项申报「本 step 必做清单」处理结果（\`must_do_checks\`）：completed=true 须附证据，无法执行的项置 completed=false + 结构化 skip_reason`)
+  }
   lines.push(`${n++}. 全部完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed" })\``)
   lines.push(`${n++}. 遇阻塞无法继续 → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "failed" })\``)
   lines.push("")
   return lines.join("\n")
+}
+
+/**
+ * 「本 step 必做清单」区块：逐项渲染必做项 id + 词表 description + evidence 要求，并给出 must_do_checks
+ * 提交示例。清单来源由调用方经 resolveStepMustDo 解析后传入（与门禁单一解析入口同源，禁止各算一遍）。
+ * 清单为空（该 step 无必做项）时不渲染区块。
+ */
+function renderMustDoChecklist(
+  items: string[],
+  catalog: MustDoCatalog,
+  stepId: string | null,
+): string[] {
+  if (items.length === 0) return []
+  const lines = ["## 本 step 必做清单", ""]
+  lines.push("本 step 的必做项由 workflow 声明、按会话项目形态栈过滤；提交时必须逐项申报处理结果。", "")
+  for (const id of items) {
+    const meta = catalog[id]
+    const desc = meta?.description ?? "(词表缺失该条目)"
+    lines.push(`- \`${id}\`：${desc}`)
+    if (meta?.evidence) lines.push(`  - 证据要求：${meta.evidence}`)
+  }
+  lines.push("")
+  lines.push("**提交申报示例**（`must_do_checks`，逐项对齐上方清单）：", "")
+  lines.push("```json")
+  lines.push('"must_do_checks": [')
+  const sample = items.slice(0, 2)
+  sample.forEach((id, i) => {
+    const sep = i === sample.length - 1 && items.length <= sample.length ? "" : ","
+    lines.push(`  { "step": "${id}", "completed": true, "evidence": "<执行命令 + 结果摘要>" }${sep}`)
+  })
+  if (items.length > sample.length) lines.push("  …（其余必做项同上逐项申报）")
+  lines.push("]")
+  lines.push("```")
+  lines.push("")
+  lines.push(
+    `无法执行的必做项置 \`completed=false\` 并附结构化 \`skip_reason\`（格式：\`${SKIP_REASON_FORMAT}\`）；` +
+    `遗漏必做项或缺少证据/降级理由的 passed 提交会被门禁拒绝。`,
+  )
+  if (stepId === "implement") {
+    lines.push(
+      "implement 侧 \`no_change\` 整体豁免仅在本轮确无代码/配置变更时成立，工具会按变更检测核对事实；" +
+      "部署注意点（规划文档未记载、实施时新发现）经 \`deployment_notes\` 逐条申报。",
+    )
+  }
+  lines.push("")
+  return lines
 }
 
 /** step.id → 上下文渲染类型映射：verify_* / review_* / quality_review 语义一一对应，渲染路由由 step.id 推导。 */
@@ -1039,9 +1101,9 @@ function renderToolDirectSubmit(exemptedHits?: number): string {
     "",
     "## 操作指引",
     "",
-    "1. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 validation_steps 条目声明本轮整体豁免必做清单（completed=false，并附结构化 skip_reason 注明判定依据），或按已加载质量门 skill 必做清单逐项申报（completed=true 附执行结果；无法执行项置 completed=false + 结构化 skip_reason）",
+    "1. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 `must_do_checks` 条目声明本轮整体豁免必做清单（completed=false，并附结构化 skip_reason 注明判定依据），或按视图「本 step 必做清单」逐项申报（completed=true 附执行结果；无法执行项置 completed=false + 结构化 skip_reason）",
     `2. 结构化 skip_reason 格式：\`${SKIP_REASON_FORMAT}\``,
-    `3. 调用 \`opx_agent_submit({ step_id: "verify_tool", verdict: "passed", validation_steps: <必做清单申报结果> })\` 提交通过后结束会话。`,
+    `3. 调用 \`opx_agent_submit({ step_id: "verify_tool", verdict: "passed", must_do_checks: <必做清单申报结果> })\` 提交通过后结束会话。`,
     "",
   )
   return lines.join("\n")
@@ -1069,10 +1131,10 @@ function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctx
     "1. 逐项复核/裁定上方各项：待复核 issue 经 `recheck_adjudications` 复核（通过置 done、不通过驳回并附驳回原因）；待裁定豁免经 `exempt_adjudications` 裁定（dismissed/rejected）",
   )
   lines.push(
-    "2. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 validation_steps 条目声明本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据），或按已加载质量门 skill 必做清单逐项申报",
+    "2. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 `must_do_checks` 条目声明本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据），或按视图「本 step 必做清单」逐项申报",
   )
   lines.push(`3. 结构化 skip_reason 格式：\`${SKIP_REASON_FORMAT}\``)
-  lines.push(`4. 全部处理完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed", validation_steps: <必做清单申报结果> })\``)
+  lines.push(`4. 全部处理完成 → commit → \`opx_agent_submit({ step_id: "${rec.stepId}", verdict: "passed", must_do_checks: <必做清单申报结果> })\``)
   lines.push("")
   return lines.join("\n")
 }

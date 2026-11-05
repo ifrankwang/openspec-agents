@@ -81,7 +81,7 @@ export interface AgentSubmitParams {
     reject_reason?: string
   }>
   checkpoint_decision?: "continue" | "giveup"
-  /** giveup 决策配套：对当前 step 已加载 skill 必做清单（must_do）未覆盖项逐项提供的结构化降级理由
+  /** giveup 决策配套：对当前 step 必做清单（workflow step 声明，按会话项目栈过滤）未覆盖项逐项提供的结构化降级理由
    * （giveup 未覆盖项缺理由则拒绝 giveup）。adjudication 取值 user_response / unattended_auto / env_unavailable。 */
   checkpoint_skip_reasons?: Array<{
     item: string
@@ -128,10 +128,12 @@ export interface AgentSubmitParams {
     attempted_actions: string
     options?: string[]
   }
-  self_check_results?: string
+  /** implement step：规划文档未记载的部署注意点（实施时新发现），随收尾汇总转述。 */
+  deployment_notes?: string[]
   completed_task_ids?: string[]
-  test_results?: string
-  validation_steps?: Array<{
+  /** 本 step 必做项申报（implement / review step 通用）：逐项申报生效必做清单的处理结果。
+   *  completed=true 须附 evidence；completed=false 须附结构化 skip_reason。 */
+  must_do_checks?: Array<{
     step: string
     completed: boolean
     evidence?: string

@@ -1,14 +1,14 @@
 /**
  * verify_tool 三分支（无变更直提 / 仅复核）no_change 申报指引端到端测试（复核回环修复问题 1）。
  *
- * 场景：真实 must_do 索引（显式注入声明 must_do 的 quality-gate skill，非空索引豁免）下，
+ * 场景：显式注入非空 step 必做清单（与 must-do-gate.test 一致的三项）下，
  * 评审者按 opx_status 渲染的更新后视图指引提交：
- * - 分支①（直提）：无代码/配置变更且本层无待复核/待裁定 → 视图指引以 validation_steps 含
+ * - 分支①（直提）：无代码/配置变更且本层无待复核/待裁定 → 视图指引以 must_do_checks 含
  *   step=no_change（配合结构化 skip_reason）申报整体豁免必做清单 → 通过覆盖度门禁并推进。
  * - 分支②（仅复核/裁定）：无代码/配置变更但有本层待复核项 → 先复核再以 no_change 申报整体豁免 → 通过门禁。
- * - 对照：视图指引缺失时评审者裸提交 passed（无 validation_steps）会被门禁拒绝（复现生产破口）。
+ * - 对照：视图指引缺失时评审者裸提交 passed（无 must_do_checks）会被门禁拒绝（复现生产破口）。
  *
- * 基建对齐 tests/must-do-gate.test.ts：FakeGitRunner + setupWorkspace + 显式注入构造索引；
+ * 基建对齐 tests/must-do-gate.test.ts：FakeGitRunner + setupWorkspace + 显式注入 step 必做清单；
  * 变更检测结果经 FakeGitRunner.diffNameOnlyDefault 置空（无已提交代码变更）驱动分支①②。
  */
 import { describe, expect, test, afterAll } from "bun:test"
@@ -16,29 +16,14 @@ import { rmSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { status, agent_submit } from "../src/adapters/opencode/tools"
-import type { SkillTagIndex } from "../src/skills/resolve"
-import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
+import { __setMustDoOverride, EXEMPT_ALL_MUST_DO } from "../src/core/tools/gate"
 import { makeCtx, FakeGitRunner, setupWorkspace } from "./helpers"
 import { driveToVerifyTool } from "./helpers-workflow"
 
 const CID = "tool-nochange"
 
-/** 声明 must_do 的 quality-gate skill 索引（简化必做清单 3 项，与 must-do-gate.test 一致）。 */
-const QUALITY_GATE_INDEX: SkillTagIndex = {
-  tagMap: new Map([
-    ["quality-gate", ["quality-gate"]],
-    ["efficiency", ["code-efficiency"]],
-    ["api-testing", ["api-test"]],
-  ]),
-  skillTags: new Map([
-    ["quality-gate", ["quality-gate"]],
-    ["code-efficiency", ["efficiency"]],
-    ["api-test", ["api-testing"]],
-  ]),
-  skillMustDo: new Map([["quality-gate", ["compile", "static_analysis", "deep_scan"]]]),
-  skillStacks: new Map(),
-  skillFrameworks: new Map(),
-}
+/** 注入三必做项的 step 清单（与 must-do-gate.test 一致）。 */
+const QUALITY_GATE_MUST_DO = () => ({ always: ["compile", "static_analysis", "deep_scan"] })
 
 function readItem(wt: string): any {
   const state = JSON.parse(readFileSync(join(wt, "openspec", "states", `${CID}.json`), "utf-8"))
@@ -89,14 +74,14 @@ async function freshAtToolNoChange(root: string): Promise<string> {
 
 afterAll(() => {
   __setGitRunner(null)
-  __setMustDoIndex(null)
+  __setMustDoOverride(null)
 })
 
 describe("verify_tool 无变更直提分支（分支①）no_change 申报端到端", () => {
   test("视图含 no_change 申报指引；裸提交被门禁拒绝，按指引申报整体豁免后通过并推进", async () => {
     const root = `/tmp/tnc-b1-${Date.now()}`
     const wt = await freshAtToolNoChange(root)
-    __setMustDoIndex(QUALITY_GATE_INDEX)
+    __setMustDoOverride(QUALITY_GATE_MUST_DO)
     try {
       const toolR = makeCtx("openspec-reviewer-tool", wt)
 
@@ -104,12 +89,12 @@ describe("verify_tool 无变更直提分支（分支①）no_change 申报端到
       const view = await status.execute({ change_id: CID }, toolR)
       expect(view).toContain("无需运行全量工具检查")
       expect(view).toContain("no_change")
-      expect(view).toContain("validation_steps")
+      expect(view).toContain("must_do_checks")
       expect(view).toContain("结构化 skip_reason 格式")
 
-      // 视图指引缺失时评审者裸提交 passed（无 validation_steps）→ 门禁拒绝（复现生产破口）
+      // 视图指引缺失时评审者裸提交 passed（显式空申报关闭测试基建自动补申）→ 门禁拒绝（复现生产破口）
       const bareErr = await agent_submit.execute(
-        { change_id: CID, step_id: "verify_tool", verdict: "passed" },
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", must_do_checks: [] },
         toolR,
       ).catch((e: Error) => e)
       expect(bareErr).toBeInstanceOf(Error)
@@ -118,7 +103,7 @@ describe("verify_tool 无变更直提分支（分支①）no_change 申报端到
 
       // 按视图指引提交：no_change 整体豁免 + 结构化 skip_reason → 通过门禁并推进
       await agent_submit.execute(
-        { change_id: CID, step_id: "verify_tool", verdict: "passed", validation_steps: noChangeSteps() },
+        { change_id: CID, step_id: "verify_tool", verdict: "passed", must_do_checks: noChangeSteps() },
         toolR,
       )
       expect(readItem(wt).currentStep).toBe("verify_task")
@@ -131,7 +116,7 @@ describe("verify_tool 仅复核分支（分支②）no_change 申报端到端", 
     const root = `/tmp/tnc-b2-${Date.now()}`
     const wt = await freshAtToolNoChange(root)
     injectToolReviewIssue(wt, { id: "9", description: "tool 层已修复待复核 issue" })
-    __setMustDoIndex(QUALITY_GATE_INDEX)
+    __setMustDoOverride(QUALITY_GATE_MUST_DO)
     try {
       const toolR = makeCtx("openspec-reviewer-tool", wt)
 
@@ -140,7 +125,7 @@ describe("verify_tool 仅复核分支（分支②）no_change 申报端到端", 
       expect(view).toContain("仅处理以下本层待复核 / 待裁定项")
       expect(view).toContain("Issue (待复核)")
       expect(view).toContain("no_change")
-      expect(view).toContain("validation_steps")
+      expect(view).toContain("must_do_checks")
       expect(view).toContain("recheck_adjudications")
 
       // 按视图指引：复核待复核项（passed）+ no_change 申报整体豁免 → 通过门禁并推进
@@ -148,7 +133,7 @@ describe("verify_tool 仅复核分支（分支②）no_change 申报端到端", 
         {
           change_id: CID, step_id: "verify_tool", verdict: "passed",
           recheck_adjudications: [{ issue_id: "9", verdict: "passed" }],
-          validation_steps: noChangeSteps(),
+          must_do_checks: noChangeSteps(),
         },
         toolR,
       )
@@ -169,14 +154,14 @@ describe("checkpoint 视图 giveup 申报指引（复核回环修复问题 2）"
     writeFileSync(statePath, JSON.stringify(state, null, 2))
     const toolR = makeCtx("openspec-reviewer-tool", wt)
     try {
-      // 真实 must_do 索引：含必做清单的 step 检查点视图渲染 giveup 的 checkpoint_skip_reasons 申报指引
-      __setMustDoIndex(QUALITY_GATE_INDEX)
+      // 注入非空必做清单：含必做清单的 step 检查点视图渲染 giveup 的 checkpoint_skip_reasons 申报指引
+      __setMustDoOverride(QUALITY_GATE_MUST_DO)
       const view = await status.execute({ change_id: CID }, toolR)
       expect(view).toContain("检查点")
       expect(view).toContain("checkpoint_skip_reasons")
       expect(view).toContain("giveup")
-      // 空索引豁免（解析不到声明 must_do 的 skill）：不渲染该指引，避免误伤无必做清单的 step 的检查点视图
-      __setMustDoIndex(EMPTY_MUST_DO_INDEX)
+      // 整体豁免（生效清单为空）：不渲染该指引，避免误伤无必做清单的 step 的检查点视图
+      __setMustDoOverride(EXEMPT_ALL_MUST_DO)
       const emptyView = await status.execute({ change_id: CID }, toolR)
       expect(emptyView).not.toContain("checkpoint_skip_reasons")
     } finally { rmSync(root, { recursive: true, force: true }) }

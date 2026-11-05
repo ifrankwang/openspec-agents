@@ -53,7 +53,7 @@ describe("tool review 检查点增量端到端", () => {
       fakeGit.diffNameOnlyByRange.set("cp-1..HEAD", "openspec/changes/cid/design.md")
       const docView = await status.execute({ change_id: CID }, ctx.toolR)
       expect(docView).toContain("无需运行全量工具检查")
-      expect(docView).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed", validation_steps: <必做清单申报结果> })')
+      expect(docView).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed", must_do_checks: <必做清单申报结果> })')
       expect(docView).toContain("no_change")
       expect(docView).not.toContain("全部确定性工具检查")
       expect(docView).not.toContain("## Worktree")

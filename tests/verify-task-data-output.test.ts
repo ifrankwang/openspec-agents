@@ -37,9 +37,9 @@ describe("数据产出断言落位（task.yaml）", () => {
     expect(ins).toContain("识别『流程正常但数据缺失/落错位置』类缺陷")
   })
 
-  test("纯测试代码豁免句升级为⑤⑥", () => {
+  test("纯测试代码豁免句升级为⑤⑥⑦", () => {
     const ins = stepInstructions(TASK_WORKFLOW_PATH, "verify_task")
-    expect(ins).toContain("⑤⑥的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量")
+    expect(ins).toContain("⑤⑥⑦的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量")
   })
 })
 
@@ -58,9 +58,9 @@ describe("数据产出断言落位（task-simple.yaml）", () => {
     expect(ins).toContain("识别『流程正常但数据缺失/落错位置』类缺陷")
   })
 
-  test("纯测试代码豁免句升级为⑤⑥", () => {
+  test("纯测试代码豁免句升级为⑤⑥⑦", () => {
     const ins = stepInstructions(SIMPLE_WORKFLOW_PATH, "quality_review")
-    expect(ins).toContain("⑤⑥的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量")
+    expect(ins).toContain("⑤⑥⑦的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量")
   })
 })
 

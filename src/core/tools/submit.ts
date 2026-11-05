@@ -15,14 +15,18 @@ import { agentToReviewDimension, agentToReviewLayer, isReviewerFamily, readIssue
 import { REVIEW_DIMENSIONS } from "../types.ts"
 import type { Dimension } from "../types.ts"
 import { taskChildrenOf, taskChildById, normalizeTaskChildIds, taskListOf, issueChildrenOf } from "../task-children.ts"
-import { autoCommitWorktreeChanges, listDirtyNonDocFiles, reconcileMainPollution, getCurrentHead, isWorktreeClean } from "../git.ts"
+import {
+  autoCommitWorktreeChanges, listDirtyNonDocFiles, reconcileMainPollution, getCurrentHead, isWorktreeClean,
+  detectChanges, isDocLikePath,
+} from "../git.ts"
 import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
 } from "../state.ts"
 import { readExemptions, applyExemptionDowngrade, writeDismissedExemption } from "../exemptions.ts"
 import {
-  assertStructuredSkipReasons, uncoveredMustDo, isValidSkipData, SKIP_REASON_FORMAT,
+  assertMustDoCoverage, uncoveredMustDo, resolveStepMustDo, hasNoChangeDeclaration,
+  mustDoChecksOfStep, isValidSkipData, SKIP_REASON_FORMAT,
 } from "./gate.ts"
 
 /** 按 state.mode 读取 workflow 配置（simple → task-simple.yaml，否则 task.yaml），进程内按路径缓存。 */
@@ -52,8 +56,7 @@ function isSupplementOnly(params: AgentSubmitParams): boolean {
     (params.verified_tasks?.length ?? 0) === 0 &&
     (params.failed_tasks?.length ?? 0) === 0 &&
     !params.boundary_expansion &&
-    (params.validation_steps?.length ?? 0) === 0 &&
-    params.test_results === undefined
+    (params.must_do_checks?.length ?? 0) === 0
   )
 }
 
@@ -75,8 +78,7 @@ function isTaskVerificationSupplement(params: AgentSubmitParams): boolean {
     (params.exempt_adjudications?.length ?? 0) === 0 &&
     (params.recheck_adjudications?.length ?? 0) === 0 &&
     !params.boundary_expansion &&
-    (params.validation_steps?.length ?? 0) === 0 &&
-    params.test_results === undefined
+    (params.must_do_checks?.length ?? 0) === 0
   )
 }
 
@@ -146,6 +148,12 @@ function resolveTaskWorkItem(state: OrchestrateState): WorkItem {
     throw new Error(`工作项 "${taskId}" 缺失，请重新调用 opx_orch_init 初始化。`)
   }
   return item
+}
+
+/** implement 端必做清单门禁上下文：生效清单由调用方按「当前 step 声明 + 会话项目栈」解析后传入
+ *  （与视图/checkpoint 共用 resolveStepMustDo 单一解析入口，禁止各算一遍）。 */
+interface MustDoGateContext {
+  requiredItems: string[]
 }
 
 /** 正常提交路径的固定返回体：提交状态与推进详情对子代理无意义，仅告知提交成功并结束会话。 */
@@ -310,8 +318,8 @@ function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
 }
 
 /** implement step 参数处理：blocker（on_fail）、blocker_updates 消费闭环 + 无未解决 blocker 门禁、
- *  completed_task_ids + 覆盖门禁、self_check_results / test_results 申报存档。 */
-function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void {
+ *  completed_task_ids + 覆盖门禁、must_do_checks 门禁与存档、deployment_notes 存档。 */
+function handleImplementParams(item: WorkItem, params: AgentSubmitParams, mustDoContext?: MustDoGateContext): void {
   if (params.blocker) {
     // 同轮组合显式拒绝（置于分支最前，先于一切写入）：blocker 分支在下方 return，同轮携带的
     // blocker_updates 会被静默丢弃（丢失申报）。校验放行面只有分两轮：先 failed+blocker 上报新
@@ -381,13 +389,71 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams): void 
     )
   }
 
-  if (params.self_check_results) {
-    item.metadata["self_check_results"] = params.self_check_results
+  // 必做清单门禁（implement 端）：只读本轮提交参数，不回落 metadata 存档——上一轮的申报不等于本轮通过。
+  // blocker 分支已在上方 return，故 failed+blocker / blocker_updates 路径不进入本门禁。
+  if (params.verdict === "passed" && mustDoContext) {
+    assertMustDoCoverage(mustDoContext.requiredItems, params.must_do_checks)
+  } else if (params.must_do_checks) {
+    // 非 passed 路径不查覆盖度，但显式申报仍受格式约束（与 review 端同口径）。
+    assertMustDoCoverage([], params.must_do_checks)
   }
-  // test_results 为 dev 申报的接口测试执行结果存档（simple 模式 quality_review 视图「开发者自检申报」
-  // 区块渲染源），与 self_check_results 同为跨角色可见的正式提交参数存档。
-  if (params.test_results) {
-    item.metadata["test_results"] = params.test_results
+  if (params.must_do_checks) {
+    archiveMustDoChecks(item, "implement", params.must_do_checks)
+  }
+  // deployment_notes：规划文档未记载、实施时新发现的部署注意点，收尾汇总时原样转述。
+  if (params.deployment_notes?.length) {
+    item.metadata["deployment_notes"] = params.deployment_notes.filter((n) => n.trim() !== "")
+  }
+}
+
+// ─── 必做清单申报存档与门禁（implement / review 双端共用） ───
+
+/** 按 step 存档必做项申报：metadata.must_do_checks_by_step[stepId]（各 step 分档，互不覆盖）。 */
+function archiveMustDoChecks(item: WorkItem, stepId: string, checks: NonNullable<AgentSubmitParams["must_do_checks"]>): void {
+  const raw = item.metadata["must_do_checks_by_step"]
+  const byStep = typeof raw === "object" && raw !== null && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {}
+  byStep[stepId] = checks
+  item.metadata["must_do_checks_by_step"] = byStep
+}
+
+/**
+ * implement 侧 no_change 豁免的事实核对：声明「本轮无代码/配置变更」时，用变更检测
+ * （baseRef..HEAD 已提交区间 + 工作区未提交改动）核对确实不存在非文档类变更，拒绝仅凭自述豁免。
+ * 无 base_ref（无法界定区间）时不放行豁免——豁免理由无法核对即视为未成立。
+ */
+async function assertImplementNoChangeFact(item: WorkItem, params: AgentSubmitParams, wtPath: string): Promise<void> {
+  if (params.verdict !== "passed") return
+  if (!hasNoChangeDeclaration(params.must_do_checks)) return
+  const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : null
+  if (!baseRef) {
+    throw new Error(
+      "implement 提交声明了 no_change（本轮无代码/配置变更）整体豁免，但当前无法界定变更区间（缺少 base_ref），豁免理由无法核对。\n" +
+      "请按必做清单逐项执行并申报结果；确属无变更的轮次也须逐项附执行证据（如构建/格式检查的空跑输出）。"
+    )
+  }
+  const changes = await detectChanges(wtPath, { baseRef })
+  // 判定口径统一走 isDocLikePath（与视图/自动提交的文档类白名单同源）：openspec/ 与 .md 都属文档类。
+  // 不用 DetectChangesResult.hasNonDocChange 作放行依据——它只把 openspec/ 当文档，根目录或 docs/ 下的
+  // .md 会被判为代码变更，使「仅改文档」这条合法路径恒被拒绝。
+  const nonDoc = changes.files.filter((f) => !isDocLikePath(f))
+  if (nonDoc.length > 0) {
+    throw new Error(
+      "implement 提交的 no_change 豁免被拒绝：no_change 仅适用于本轮确无代码/配置变更的情形，" +
+      "且须经变更检测核对成立；检测结果显示本轮存在代码/配置变更。" +
+      `\n检出非文档类改动文件：\n${nonDoc.map((f) => `  - ${f}`).join("\n")}` +
+      "\n请按本 step 必做清单逐项执行并附证据申报；确无法执行的必做项以 completed=false + 结构化 skip_reason 申报降级理由。"
+    )
+  }
+  // 无文件可列却带变更标记：hasNonDocChange 在 git 查询失败时恒为 true 且 files 为空，
+  // 「确实无变更」与「读不到变更」无法区分，按无法核对处理（安全侧），不放行豁免。
+  if (changes.files.length === 0 && changes.hasNonDocChange) {
+    throw new Error(
+      "implement 提交的 no_change 豁免被拒绝：变更检测未能产出可核对的文件清单（git 查询失败），" +
+      "无法确认「无代码/配置变更」，豁免理由无法核对。" +
+      "\n请按本 step 必做清单逐项执行并附证据申报；确属无变更的轮次也须逐项附执行证据（如构建/格式检查的空跑输出）。"
+    )
   }
 }
 
@@ -483,7 +549,7 @@ function handleReviewParams(
   params: AgentSubmitParams,
   newChildren: WorkItem[],
   stepId: string,
-  opts: { capabilityTags: string[]; skipMustDoGate: boolean; session?: OrchestrateState["stacks"] | null },
+  opts: { step: StepConfig; skipMustDoGate: boolean; session?: OrchestrateState["stacks"] | null },
 ): void {
   // passed=true 与 Low+ 新报一致性：passed 只能带 Info 新报
   if (params.verdict === "passed" && newChildren.some((c) => isBlockingSeverity(c.severity))) {
@@ -499,35 +565,22 @@ function handleReviewParams(
     mergeBoundaryInto(item, params.boundary_expansion)
   }
 
-  // test_results 透传：full 模式 verify_tool 的 UT 摘要写入不受影响；simple 模式 quality_review 下
-  // test_results 是 dev 申报的接口测试结果存档（quality_review 视图「开发者自检申报」区块渲染源），
-  // 合并审查者提交不得覆盖 dev 申报（spec 契约：申报区块语义为 dev 产出）。
-  if (params.test_results && stepId !== "quality_review") item.metadata["test_results"] = params.test_results
-
-  if (params.validation_steps) {
-    // 结构化 skip_reason 校验（升级既有「非空即可」）：未完成项必须带合法结构化降级声明
-    assertStructuredSkipReasons(params.validation_steps)
-    item.metadata["validation_steps"] = params.validation_steps
+  if (params.must_do_checks) {
+    archiveMustDoChecks(item, stepId, params.must_do_checks)
   }
 
-  // 必做清单覆盖度门禁：verdict=passed 且非补交豁免（仅裁定参数）时，validation_steps 须逐项覆盖
-  // 当前 agent 能力集解析出的已加载 skill 必做清单（must_do）。遗漏必做项且无有效降级证据 → 拒绝提交。
-  // 门禁按各 skill 声明的 must_do 通用生效，不限质量门类；未声明 must_do 的 skill / 解析不到声明
-  // must_do 的 skill 的 step 自动跳过（不误伤无必做清单的 step）。
-  // 覆盖口径：核验申报（completed=true + 描述注明核验方式与抽验样本，step 名首段 token 命中必做项）是
-  // 高成本必做项的合法覆盖形态，仅限 workflow 指令白名单限定的高成本必做项（deep_scan）；低成本必做项
-  // 必须实跑后申报（机制层只认 token 命中不区分形态，白名单口径在错误提示中明示）。
+  // 必做清单覆盖度门禁（review 端）：verdict=passed 且非补交豁免（仅裁定参数 / 任务验证补交）时，
+  // must_do_checks 须逐项覆盖本 step 的生效必做清单（按会话项目栈分组取并集，与视图/checkpoint
+  // 共用 resolveStepMustDo 单一解析入口）。遗漏必做项且无有效降级证据 → 拒绝提交。
+  // 无必做清单的 step（生效清单为空）只校验申报格式，不设覆盖门槛（不误伤）。
+  // 覆盖口径：核验申报（completed=true + evidence 含核验方式与抽验样本，step 名首段 token 命中必做项）
+  // 是高成本必做项的合法覆盖形态，仅限 workflow 指令白名单限定的高成本必做项（deep_scan）；低成本
+  // 必做项必须实跑后申报（机制层只认 token 命中不区分形态，白名单口径在错误提示中明示）。
   if (params.verdict === "passed" && !opts.skipMustDoGate) {
-    const uncovered = uncoveredMustDo(opts.capabilityTags, params.validation_steps, undefined, opts.session)
-    if (uncovered.length > 0) {
-      throw new Error(
-        `提交的验证步骤未覆盖已加载 skill 的必做清单，缺少以下必做项：${uncovered.join("、")}。\n` +
-        `请按已加载 skill 的必做清单逐项执行并逐项申报结果（completed=true）；` +
-        `确实无法执行的必做项须以结构化 skip_reason 申报降级理由` +
-        `（格式：${SKIP_REASON_FORMAT}）。` +
-        `低成本必做项必须实跑后申报；核验申报仅限 workflow 指令白名单限定的高成本必做项。`
-      )
-    }
+    assertMustDoCoverage(resolveStepMustDo(opts.step, opts.session), params.must_do_checks)
+  } else if (params.must_do_checks) {
+    // 非 passed / 补交豁免路径：不查覆盖度，但显式申报仍受格式约束（不留「申报了但无证据」的空转）。
+    assertMustDoCoverage([], params.must_do_checks)
   }
 
   // 任务验证覆盖门禁（兜底）：verify_task / quality_review（任务验证归属 step）以 passed 提交时，
@@ -817,15 +870,13 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
           )
         }
       }
-      // 必做清单覆盖度门禁取「当前提交 agent 的能力集」：各 agent 只按自身 capability_tags 解析 skill。
-      // verify_quality 多 agent 各自解析不出声明 must_do 的 skill（自动跳过），verify_tool 按 quality-gate
-      // 能力集、verify_task 按 test-design 能力集分别校验各自的必做清单。
+      // 必做清单覆盖度门禁以「当前 step 的 must_do 声明」为准（按会话项目栈分组取并集），与视图/checkpoint
+      // 共用 gate.resolveStepMustDo 单一解析入口。
       const stepCfg = workflow.stepMap.get(params.step_id)!.step
-      const agentCfg = stepCfg.agents.find((a) => a.id === ctx.agent)
       handleReviewParams(item, params, newChildren, params.step_id, {
-        capabilityTags: agentCfg?.capability_tags ?? [],
-        // 会话项目栈过滤：must_do 门禁只统计按会话栈过滤后命中的 skill（与视图加载清单同口径）；
-        // 旧会话无 stacks → null（只统计通用 skill）
+        step: stepCfg,
+        // 会话项目栈过滤：生效清单只并入会话命中的栈分组（与视图 skill 过滤同口径）；
+        // 旧会话无 stacks → null（只取 always 分组）
         session: state.stacks ?? null,
         // 补交豁免（仅裁定参数 / 仅 verified_tasks 的任务验证补交，均无实质审查内容）不重复校验
         // 必做清单覆盖度——完整审查在首次 passed 时已做过。任务验证补交的跳过与守卫放宽同源
@@ -856,7 +907,13 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
           )
         }
       }
-      handleImplementParams(item, params)
+      // implement 端必做清单门禁：生效清单按当前 step 声明 + 会话项目栈解析（旧会话无 stacks → null，只取 always）。
+      // no_change 豁免先经 diff 事实核对（声明「本轮无代码/配置变更」不能仅凭自述）。
+      const implStep = workflow.stepMap.get(params.step_id)!.step
+      await assertImplementNoChangeFact(item, params, wtPath)
+      handleImplementParams(item, params, {
+        requiredItems: resolveStepMustDo(implStep, state.stacks ?? null),
+      })
     }
 
     const { accepted } = dedupeNewChildren(item, newChildren)
@@ -993,13 +1050,12 @@ async function applyCheckpointDecision(
   if (decision === "continue") {
     applyCheckpointContinue(item, step)
   } else {
-    // giveup 必做清单核对（堵 giveup 侧门）：当前 step 若解析出已加载 skill 必做清单（must_do），
-    // 未覆盖项必须有结构化降级理由（checkpoint_skip_reasons），否则拒绝 giveup——
-    // 杜绝「放弃审查 → 自动推进 → 收尾合码」的无痕绕过通道。未声明 must_do 的 skill 环境下
-    // uncovered 为空，giveup 行为不受影响（与「编排改动须评估全流程连锁影响」一致）。
-    const stepCaps = Array.from(new Set(step.agents.flatMap((a) => a.capability_tags)))
-    const prevSteps = (item.metadata["validation_steps"] as Array<{ step: string; completed: boolean }> | undefined)
-    const uncovered = uncoveredMustDo(stepCaps, prevSteps, undefined, state.stacks ?? null)
+    // giveup 必做清单核对（堵 giveup 侧门）：当前 step 若无必做清单则 uncovered 为空、行为不受影响；
+    // 有清单时未覆盖项必须有结构化降级理由（checkpoint_skip_reasons），否则拒绝 giveup——
+    // 杜绝「放弃审查 → 自动推进 → 收尾合码」的无痕绕过通道。
+    // 申报依据取「当前 step 的按 step 存档」（must_do_checks_by_step[stepId]），不取其他 step 的存档。
+    const prevChecks = mustDoChecksOfStep(item.metadata, stepId)
+    const uncovered = uncoveredMustDo(step, prevChecks, state.stacks ?? null)
     if (uncovered.length > 0) {
       const provided = new Map<string, unknown>()
       for (const r of params.checkpoint_skip_reasons ?? []) {
@@ -1008,7 +1064,7 @@ async function applyCheckpointDecision(
       const missing = uncovered.filter((m) => !provided.has(m))
       if (missing.length > 0) {
         throw new Error(
-          `giveup 无法应用：当前 step 的已加载 skill 必做清单存在未覆盖项，须逐项提供结构化降级理由。\n` +
+          `giveup 无法应用：当前 step 的必做清单存在未覆盖项，须逐项提供结构化降级理由。\n` +
           `缺少降级理由的必做项：${missing.join("、")}\n` +
           `请通过 checkpoint_skip_reasons 逐项提供（giveup 未覆盖项不可跳过申报）：\n` +
           `[${SKIP_REASON_FORMAT}]`

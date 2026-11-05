@@ -8,16 +8,22 @@ import type {
   StepConfig,
   StepAgent,
   StepTransitions,
+  StepMustDoGroups,
+  MustDoCatalog,
+  MustDoCatalogItem,
   WorkItemPhase,
   WorkflowCommon,
 } from "./types.ts"
 import { WORK_ITEM_PHASES, stepAgentIds } from "./types.ts"
 import { DIMENSION_AGENT_MAP } from "../constants.ts"
+import { knownStacks } from "../../skills/stacks.ts"
 import type { OrchestrateState } from "../types.ts"
 
 const SPECIAL_TRANSITIONS = ["done", "halt"] as const
 const PHASE_NAMES = new Set<string>(WORK_ITEM_PHASES)
 const QUALITY_REVIEW_STEP_ID = "verify_quality"
+/** must_do 分组的通用键（对全部会话生效），其余键为项目形态栈名。 */
+export const MUST_DO_ALWAYS_KEY = "always"
 
 export interface LoadedWorkflow extends WorkflowConfig {
   stepMap: Map<string, { step: StepConfig; phase: PhaseConfig }>
@@ -49,6 +55,11 @@ export function resolveTaskWorkflowPath(moduleUrl: string): string {
   return resolveWorkflowFilePath(moduleUrl, "task.yaml")
 }
 
+/** must-do 词表路径：与 workflow 同目录，复用同一套上溯探测。 */
+function resolveMustDoCatalogPath(moduleUrl: string): string {
+  return resolveWorkflowFilePath(moduleUrl, "must-do.yaml")
+}
+
 // 模块加载期求值，workflow 缺失即启动抛错（fail-fast）：opx_* 工具全部依赖 workflow，缺失时
 // server 无可用性，启动即抛比首次调用才报错更早且可读（可读错误替代原生 ENOENT）。
 export const TASK_WORKFLOW_PATH = resolveTaskWorkflowPath(import.meta.url)
@@ -59,6 +70,13 @@ export const REVIEW_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "re
 /** 独立审查会话（simple 颗粒度）流程文件：单层合并审查 + implement 修复闭环。 */
 export const REVIEW_SIMPLE_WORKFLOW_PATH = resolveWorkflowFilePath(import.meta.url, "review-simple.yaml")
 
+/**
+ * must-do 词表（必做项 id → 要求与证据口径）。模块加载期求值：词表缺失或结构非法即启动抛错，
+ * 与 workflow 文件缺失同属 fail-fast——opx_* 工具全部依赖必做清单判定，缺失时无可用性。
+ */
+export const MUST_DO_CATALOG: MustDoCatalog = loadMustDoCatalog(
+  readFileSync(resolveMustDoCatalogPath(import.meta.url), "utf-8"),
+)
 /**
  * 选择 workflow 文件：kind 优先于 mode——
  * - kind=review（独立审查会话，无 mode 字段）：按 reviewScope.granularity 选 review.yaml / review-simple.yaml；
@@ -77,11 +95,107 @@ const workflowFileCache = new Map<string, LoadedWorkflow>()
 /** 读取 workflow YAML 文件并解析，进程内按路径缓存（submit / status 共用）。 */
 export function loadWorkflowFile(filePath: string): LoadedWorkflow {
   let wf = workflowFileCache.get(filePath)
-  if (!wf) {
-    wf = loadWorkflow(readFileSync(filePath, "utf-8"))
+  if (!wf) {    wf = loadWorkflow(readFileSync(filePath, "utf-8"))
     workflowFileCache.set(filePath, wf)
   }
   return wf
+}
+
+interface RawCatalogItem {
+  description?: unknown
+  evidence?: unknown
+}
+
+/** 解析 must-do 词表 YAML：顶层 items 为 id → { description, evidence }，两字段均必填非空。 */
+export function loadMustDoCatalog(yamlText: string): MustDoCatalog {
+  let raw: unknown
+  try {
+    raw = yaml.load(yamlText)
+  } catch (err) {
+    fail(`must-do 词表 YAML 解析失败：${(err as Error).message}`)
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail("must-do 词表非法：顶层必须是 YAML 映射对象")
+  }
+  const items = (raw as { items?: unknown }).items
+  if (typeof items !== "object" || items === null || Array.isArray(items)) {
+    fail("must-do 词表非法：items 必须是 id → { description, evidence } 的映射对象")
+  }
+  const catalog: MustDoCatalog = {}
+  for (const [id, value] of Object.entries(items as Record<string, RawCatalogItem>)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      fail(`must-do 词表非法：条目 "${id}" 必须是 { description, evidence } 对象`)
+    }
+    catalog[id] = {
+      description: expectString(value.description, `items.${id}.description`),
+      evidence: expectString(value.evidence, `items.${id}.evidence`),
+    }
+  }
+  if (Object.keys(catalog).length === 0) fail("must-do 词表非法：items 不得为空（必做项词表至少一条）")
+  return catalog
+}
+
+/**
+ * step.must_do 分组解析：always 与各栈键的值必须是非空字符串数组（always 允许空数组=该 step 无通用项），
+ * 分组键须为 always 或命中当前形态标签词表（栈名值域来自 skill frontmatter 声明，代码内无硬编码清单）。
+ * 引用 id 须在词表内——分组按 id 逐项校验，词表是 id 语义与证据口径的单一事实源。
+ */
+function parseStepMustDo(
+  raw: unknown,
+  stepId: string,
+  catalog: MustDoCatalog,
+  stacks: Set<string>,
+): StepMustDoGroups | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail(`workflow 配置非法：step "${stepId}" 的 must_do 必须是分组对象（always + 可选栈分组）`)
+  }
+  const groups: StepMustDoGroups = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || v.trim() === "")) {
+      fail(
+        `workflow 配置非法：step "${stepId}" 的 must_do.${key} 必须是字符串数组（可为空数组），收到 ${JSON.stringify(value)}`
+      )
+    }
+    if (key !== MUST_DO_ALWAYS_KEY && !stacks.has(key)) {
+      fail(
+        `workflow 配置非法：step "${stepId}" 的 must_do 分组键 "${key}" 不是合法项目形态栈` +
+        `（合法值：${MUST_DO_ALWAYS_KEY} 或 skill 声明的形态标签 ${JSON.stringify([...stacks].sort())}）`
+      )
+    }
+    for (const id of value as string[]) {
+      if (!(id in catalog)) {
+        fail(
+          `workflow 配置非法：step "${stepId}" 的 must_do.${key} 引用了词表外必做项 "${id}"` +
+          `（must-do.yaml 词表中不存在该 id）`
+        )
+      }
+    }
+    groups[key] = value as string[]
+  }
+  return groups
+}
+
+/**
+ * 词表无孤儿项校验：每个 id 至少被一份 workflow 的某个 step 引用（删除 step 引用后词表须同步收缩，
+ * 避免词表堆积无主条目）。在 workflow 全集上校验，单份 workflow 无法判定。
+ */
+export function assertMustDoCatalogReferenced(catalog: MustDoCatalog, workflows: LoadedWorkflow[]): void {
+  const referenced = new Set<string>()
+  for (const wf of workflows) {
+    for (const { step } of wf.stepMap.values()) {
+      for (const ids of Object.values(step.must_do ?? {})) {
+        for (const id of ids ?? []) referenced.add(id)
+      }
+    }
+  }
+  const orphans = Object.keys(catalog).filter((id) => !referenced.has(id))
+  if (orphans.length > 0) {
+    fail(
+      `must-do 词表存在孤儿项（无任何 workflow step 引用）：${orphans.join("、")}。` +
+      `词表与 step 声明须保持同步：删除 step 引用时同步删除词表条目，或为条目补上引用它的 step。`
+    )
+  }
 }
 
 interface RawStep {
@@ -91,6 +205,7 @@ interface RawStep {
   max_retries?: unknown
   instructions?: unknown
   constraints?: unknown
+  must_do?: unknown
   transitions?: unknown
 }
 
@@ -209,7 +324,7 @@ function parseTransitions(raw: unknown, stepId: string, validStepIds: Set<string
   return out as StepTransitions
 }
 
-export function loadWorkflow(yamlText: string): LoadedWorkflow {
+export function loadWorkflow(yamlText: string, catalog: MustDoCatalog = MUST_DO_CATALOG): LoadedWorkflow {
   let raw: unknown
   try {
     raw = yaml.load(yamlText)
@@ -228,6 +343,8 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
     fail(`workflow "${id}" 配置非法：phases 必须是非空数组`)
   }
 
+  // 分组键值域：always + 当前 skill frontmatter 声明的形态标签并集（代码内无硬编码栈名清单）
+  const stackTags = knownStacks()
   const phases: PhaseConfig[] = []
   const stepMap = new Map<string, { step: StepConfig; phase: PhaseConfig }>()
   const rawTransitions = new Map<string, unknown>()
@@ -273,6 +390,7 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
         max_retries: expectOptionalPositiveInt(rs.max_retries, `step "${stepId}" 的 max_retries`),
         instructions: expectOptionalNonEmptyStringArray(rs.instructions, `step "${stepId}" 的 instructions`),
         constraints: expectOptionalNonEmptyStringArray(rs.constraints, `step "${stepId}" 的 constraints`),
+        must_do: parseStepMustDo(rs.must_do, stepId, catalog, stackTags),
         transitions: { on_pass: "done", on_fail: "halt" },
       }
       phase.steps.push(step)
@@ -287,7 +405,11 @@ export function loadWorkflow(yamlText: string): LoadedWorkflow {
 
   assertQualityAgentsConsistent(id, stepMap)
 
-  return { id, name, max_retries: maxRetries, phases, stepMap, common: parseCommon(wf.common, id) }
+  return {
+    id, name, max_retries: maxRetries, phases, stepMap,
+    common: parseCommon(wf.common, id),
+    mustDoCatalog: catalog,
+  }
 }
 
 export function findStepByWorkItemPhase(
@@ -299,3 +421,16 @@ export function findStepByWorkItemPhase(
   }
   return null
 }
+
+// 模块加载期交叉核对：词表与全部 workflow 的 step 声明须双向一致（引用 id ⊆ 词表由 loadWorkflow 校验，
+// 词表无孤儿项在此校验）。孤儿项说明删了 step 引用却没同步收缩词表，属配置漂移；缺失则启动即抛错
+// （fail-fast，避免词表堆积无主条目后语义失焦）。四份 workflow 均按路径缓存复用，此校验不额外产生读取。
+assertMustDoCatalogReferenced(
+  MUST_DO_CATALOG,
+  [
+    TASK_WORKFLOW_PATH,
+    SIMPLE_WORKFLOW_PATH,
+    REVIEW_WORKFLOW_PATH,
+    REVIEW_SIMPLE_WORKFLOW_PATH,
+  ].map((p) => loadWorkflowFile(p)),
+)

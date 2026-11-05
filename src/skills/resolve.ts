@@ -6,8 +6,6 @@ import { matchesSessionStacks, type SessionStacks } from "./stacks.ts"
 export interface SkillTagIndex {
   tagMap: Map<string, string[]>
   skillTags: Map<string, string[]>
-  /** skill 名 → frontmatter 声明的机器可读必做清单（must_do），未声明则无键。 */
-  skillMustDo: Map<string, string[]>
   /** skill 名 → frontmatter 声明的形态标签（stacks），未声明则无键（视为通用形态，所有会话命中）。 */
   skillStacks: Map<string, string[]>
   /** skill 名 → frontmatter 声明的框架标签（frameworks），未声明则无键（视为通用框架，所有会话命中）。 */
@@ -17,10 +15,10 @@ export interface SkillTagIndex {
 let cacheKey: string | null = null
 let cacheIndex: SkillTagIndex | null = null
 
-type FrontmatterListField = "capabilities" | "must_do" | "stacks" | "frameworks"
+type FrontmatterListField = "capabilities" | "stacks" | "frameworks"
 
 /**
- * 解析 frontmatter 中的单行数组字段（`field: ["a", "b"]`），与既有 capabilities / must_do 解析同风格；
+ * 解析 frontmatter 中的单行数组字段（`field: ["a", "b"]`），各字段同风格；
  * 字段未声明返回 null（与「声明了空数组」同按未声明处理）。
  */
 function parseFrontmatterList(raw: string, field: FrontmatterListField): string[] | null {
@@ -31,7 +29,7 @@ function parseFrontmatterList(raw: string, field: FrontmatterListField): string[
 
 /**
  * 扫描 skill 目录的 frontmatter，建立 tag → skill 名 与 skill 名 → tags 双向索引，
- * 并分别索引 must_do（必做清单）、stacks（形态标签）、frameworks（框架标签）。
+ * 并分别索引 stacks（形态标签）、frameworks（框架标签）。
  * 进程内缓存：roots 不变时返回同一实例，roots 变化时重建。
  */
 export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex {
@@ -39,7 +37,6 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
   if (cacheKey === key && cacheIndex) return cacheIndex
   const tagMap = new Map<string, string[]>()
   const skillTags = new Map<string, string[]>()
-  const skillMustDo = new Map<string, string[]>()
   const skillStacks = new Map<string, string[]>()
   const skillFrameworks = new Map<string, string[]>()
   const seen = new Set<string>()
@@ -60,10 +57,6 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
           arr.push(entry.name)
           tagMap.set(tag, arr)
         }
-        // 可选约定：must_do 必做清单（机器可读）。未声明的 skill 不参与必做清单覆盖度门禁
-        // （优雅降级，缺失不报错）。
-        const items = parseFrontmatterList(raw, "must_do")
-        if (items && items.length > 0) skillMustDo.set(entry.name, items)
         // 可选约定：stacks（形态标签）/ frameworks（框架标签）。未声明 = 通用，所有会话命中；
         // 词汇表不维护在代码里，新形态/框架只需在 skill frontmatter 声明。
         const stacks = parseFrontmatterList(raw, "stacks")
@@ -75,7 +68,7 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
     }
   }
   cacheKey = key
-  cacheIndex = { tagMap, skillTags, skillMustDo, skillStacks, skillFrameworks }
+  cacheIndex = { tagMap, skillTags, skillStacks, skillFrameworks }
   return cacheIndex
 }
 
@@ -85,7 +78,7 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
  * session 三种取值：
  * - 传对象：按会话项目栈做交集过滤；
  * - 传 null：旧会话未固化项目栈（无 stacks）——只保留未声明 stacks/frameworks 的通用 skill，
- *   技术栈配套 skill 一律不列（避免升级在途会话被要求加载错误技术栈的 skill 与必做项）；
+ *   技术栈配套 skill 一律不列（避免升级在途会话被要求加载错误技术栈的 skill）；
  * - 不传（undefined）：无会话上下文（如 workflow 静态校验、单测），不过滤。
  * caps 为空/undefined 返回空。
  */
@@ -117,9 +110,4 @@ export function resolveSkillsForCapabilities(
 /** efficiency tag 命中的效率类 skill 名 */
 export function getEfficiencySkills(index: SkillTagIndex = scanSkillTags()): string[] {
   return index.tagMap.get("efficiency") || []
-}
-
-/** 取 skill 声明的机器可读必做清单（must_do）；未声明返回 null（该 skill 不参与覆盖度门禁）。 */
-export function getSkillMustDo(name: string, index: SkillTagIndex = scanSkillTags()): string[] | null {
-  return index.skillMustDo.get(name) ?? null
 }

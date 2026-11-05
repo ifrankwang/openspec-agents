@@ -1,0 +1,57 @@
+# must-do 词表：必做项的单一事实源。
+# 归属：必做清单由 workflow step 声明（step.must_do 按项目栈分组），item id 的语义与证据口径在此定义。
+# skill 不再声明必做清单，只描述自身领域规范（交付物与质量标准）。
+# 校验：step.must_do 引用的 id 必须在本表内；本表每个 id 至少被一份 workflow 的某个 step 引用（防孤儿项）。
+# 术语：id 为机器可读标识（提交申报时以 step 名首段回填）；description 是一句话要求；evidence 是该填什么证据。
+items:
+  env:
+    description: 准备验证所需环境（依赖安装、构建工具链可用、隔离基础设施就绪）
+    evidence: 环境准备命令 + 版本/可用性输出摘要
+  compile:
+    description: 编译或构建通过
+    evidence: 构建命令 + 成功输出摘要（失败项与报错原文）
+  format:
+    description: 代码格式检查通过
+    evidence: 格式检查命令 + 无差异输出摘要
+  architecture:
+    description: 架构约束检查通过（分层职责与依赖方向）
+    evidence: 架构检查命令 + 通过结论或违规清单
+  static_analysis:
+    description: 静态代码分析执行完成并处置命中项
+    evidence: 分析命令 + 命中计数与处置结论
+  unit_test:
+    description: 单元测试编译并执行通过
+    evidence: 执行命令 + 通过/失败用例计数
+  coverage:
+    description: 覆盖率门禁达标
+    evidence: 覆盖率报告关键数值 + 门禁阈值对比
+  deep_scan:
+    description: 深度扫描（平台级全量扫描）执行完成或按核验口径处置
+    evidence: 扫描任务/报告标识 + 命中摘要；核验形态另附核验方式与抽验样本
+  config_check:
+    description: 质量工具配置检查（规则集、阈值、排除项与规范一致）
+    evidence: 配置项核对结论 + 涉及配置文件路径
+  api_script:
+    description: 变更接口对应的接口测试脚本与前置数据脚本就绪
+    evidence: 脚本路径清单 + 与变更接口的对应关系
+  api_execution:
+    description: 接口测试脚本按规范顺序实跑完成
+    evidence: 执行命令 + 执行顺序 + 覆盖接口清单与结果
+  chain_map:
+    description: 业务链路到测试脚本/块的映射（逐条链路给出承载它的脚本与块；无跨接口链路时显式声明并写明依据）
+    evidence: 链路清单 → 脚本路径与块名 + 每条链路尾部的字段级断言位置；无链路的声明 + 依据
+  behavior_surface:
+    description: 从 spec 与契约独立推导的行为面清单
+    evidence: 行为面条目 + 对应验收标准 + 每条规则的来源
+  case_matrix:
+    description: 行为面 × 类别的用例矩阵
+    evidence: 矩阵格（行为面 × 正常/边界/异常）→ 用例名或脚本名 + 断言点
+  negative_probe:
+    description: 反向探针验证用例具备对抗力
+    evidence: 改坏点 + 变红用例 + 还原确认（工作区干净）
+  e2e_script:
+    description: 端到端用例脚本就绪（目录、配置、按场景组织的用例）
+    evidence: 脚本路径清单 + 按文档命令可运行的入口
+  e2e_run:
+    description: 端到端用例实跑并产出报告
+    evidence: 执行命令 + 报告产物路径（HTML 与机器可读报告）

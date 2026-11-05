@@ -162,6 +162,16 @@ agent 核心行为约束统一为：遵循所有已加载 skill 的全部规范�
 Skill 对编排概念无感知——描述中不含 Phase 编号、agent 名、工具名、编排动作（submit/issue/exempt 等）。
 Skill 之间的职责边界由各自规范定义。
 
+### 必做清单契约归属 workflow 层
+
+必做清单（must_do）的唯一事实源在 workflow 层，由三部分配合产生：`assets/workflows/must-do.yaml` 词表定义 item id 的语义与证据口径；各 workflow 的 `step.must_do` 按分组声明本 step 引用哪些 item；会话 `project_stacks` 决定技术栈分组是否并入生效清单；会话未固化项目栈（旧会话 stacks=null）时只取 always 分组，技术栈分组不并入。三者均在加载期双向校验（引用 id ⊆ 词表、分组键 ⊆ 已知形态标签、词表无孤儿项）。skill 不声明必做清单，只描述自身领域规范。
+
+解析入口唯一：`gate.resolveStepMustDo` 产出 step 生效清单，门禁、`opx_status` 视图与检查点指引全部复用它，禁止各算一遍。
+
+提交参数统一为 `must_do_checks`（逐项：step / completed / evidence / skip_reason），实现与审查两端同口径门禁：completed=true 必须附非空 evidence，completed=false 必须附结构化 skip_reason。implement 另有 `deployment_notes` 承载规划文档未记载的部署注意点。申报按 step 分档存档在 `metadata.must_do_checks_by_step[stepId]`，各 step 互不覆盖；implement 侧门禁只读本轮提交参数，不回落存档，其 `no_change` 整体豁免须经实际变更检测核对成立。
+
+视图侧（`opx_status`）注入「本 step 必做清单」区块：逐项 id + 词表描述 + 证据要求 + 提交示例，审查视图另渲染 implement 阶段的申报作为复验证据锚点。
+
 ## 测试
 
 ```bash

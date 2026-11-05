@@ -55,10 +55,10 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     })
     expect(out).toContain("# ✅ 当前轮到你执行")
     expect(out).toContain("无需运行全量工具检查")
-    // 直提须以 no_change 声明整体豁免必做清单（或逐项申报），提交参数带 validation_steps
+    // 直提须以 no_change 声明整体豁免必做清单（或逐项申报），提交参数带 must_do_checks
     expect(out).toContain("no_change")
-    expect(out).toContain("validation_steps")
-    expect(out).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed", validation_steps: <必做清单申报结果> })')
+    expect(out).toContain("must_do_checks")
+    expect(out).toContain('opx_agent_submit({ step_id: "verify_tool", verdict: "passed", must_do_checks: <必做清单申报结果> })')
     // 替换式最小视图：不渲染 worktree/变更范围区块（避免与既有 baseRef..HEAD 累计口径提示冲突）
     expect(out).not.toContain("## Worktree")
     expect(out).not.toContain("diff --name-only")
@@ -95,7 +95,7 @@ describe("verify_tool reviewer-tool 三分支渲染", () => {
     expect(out).toContain("exempt_adjudications")
     // 仅复核分支同样须申报必做清单处理结果（no_change 整体豁免或逐项申报）
     expect(out).toContain("no_change")
-    expect(out).toContain("validation_steps")
+    expect(out).toContain("must_do_checks")
     expect(out).not.toContain("全部确定性工具检查")
     // 分支③证据区块不注入（口径正确性：仅分支③渲染）
     expect(out).not.toContain("本次变更证据（自上次工具检查）")

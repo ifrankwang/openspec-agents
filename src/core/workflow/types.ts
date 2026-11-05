@@ -60,6 +60,16 @@ export interface StepAgent {
   capability_tags: string[]
 }
 
+/**
+ * step 必做清单（按项目形态栈分组）：always 对所有会话生效；其余键为栈名（值域来自 skill frontmatter
+ * 声明的 stacks 并集，见 knownStacks()），仅当会话 project_stacks 命中该键时并入生效清单。
+ * always 可声明为空数组（该 step 无通用必做项），缺省视同空。
+ */
+export interface StepMustDoGroups {
+  always?: string[]
+  [stack: string]: string[] | undefined
+}
+
 export interface StepConfig {
   id: string
   agents: StepAgent[]
@@ -67,8 +77,19 @@ export interface StepConfig {
   max_retries?: number
   instructions?: string[]
   constraints?: string[]
+  /** 本 step 的必做清单分组（缺省 = 该 step 无必做清单，不设门禁）。 */
+  must_do?: StepMustDoGroups
   transitions: StepTransitions
 }
+
+/** 词表条目：item id 的一句话要求与该填什么证据（证据口径的单一事实源）。 */
+export interface MustDoCatalogItem {
+  description: string
+  evidence: string
+}
+
+/** must-do 词表：item id → 条目（workflow step 只能引用表内 id）。 */
+export type MustDoCatalog = Record<string, MustDoCatalogItem>
 
 /** step.agents 的 id 投影：状态机/视图消费点统一从对象数组归一化为 id 字符串数组。 */
 export function stepAgentIds(step: { agents: StepAgent[] }): string[] {
@@ -95,6 +116,8 @@ export interface WorkflowConfig {
   phases: PhaseConfig[]
   /** 跨 step 共享的通用语义（step 自动继承），缺省 undefined。 */
   common?: WorkflowCommon
+  /** must-do 词表（item id → 要求与证据口径），每份 workflow 加载后同一份实例。 */
+  mustDoCatalog: MustDoCatalog
 }
 
 export type StepAdjudication = "passed" | "failed" | "pending"

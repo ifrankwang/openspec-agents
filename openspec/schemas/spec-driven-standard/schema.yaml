@@ -430,6 +430,25 @@ artifacts:
         counter-examples), and allowed on equivalent execution paths (one
         Scenario per path). Conclusions that do not apply are stated with a
         reason. A spec with only blocked-side scenarios is incomplete.
+      - The scenario taxonomy has four kinds in total: the three rule-boundary
+        kinds above (for rule-type changes) plus the cross-interface business
+        chain below (for changes that span more than one interface). The fourth
+        kind applies independently of the first three - a change can be
+        rule-free and still need a chain scenario.
+      - Cross-interface business chains (跨接口业务链路): when the change touches
+        a business chain that spans more than one interface - several endpoints,
+        an import entry feeding a later save/update, a job followed by a query -
+        the chain itself is a mandatory scenario kind and must be written as one
+        testable full chain: WHEN states the order of operations (entry point,
+        then each subsequent step in sequence, with the precondition the data
+        must already be in), THEN states the field contents the later query
+        returns, field by field (defaults, derived values, status markers
+        included). Splitting the chain into one scenario per endpoint does not
+        satisfy this: it hides the ordering effect between interfaces.
+      - When the same data has more than one write path (import, save, update,
+        batch sync), the ordering effect between those paths is a chain scenario
+        too: run path A then path B on the same data and assert what the later
+        read-back returns for each field.
 
       New capabilities only: start the delta spec with a `## Purpose` section -
       one or two sentences (50+ characters, or `openspec validate --strict`

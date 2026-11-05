@@ -2,8 +2,8 @@
  * 会话项目栈过滤的端到端有效断言（防「传参被删仍全绿」的假覆盖）：
  * 1. 真实 init 前端会话（frontend + vue）→ opx_status 的 Skill 加载清单不含 java-*、含 frontend-*（含 e2e）
  * 2. 真实 init 后端会话（backend + java）→ 反向：含 java-*、不含 frontend-*
- * 3. 检查点提示按过滤后必做集合判定（后端有 Java 独有必做项才提示，前端会话不提示）
- * 4. 旧会话（state 无 stacks）→ 清单只含通用 skill、must_do 不含技术栈项；重新 init 补齐后恢复
+ * 3. 检查点提示按过滤后必做集合判定（后端有后端独有必做项才提示，前端会话不提示）
+ * 4. 旧会话（state 无 stacks）→ 清单只含通用 skill、必做清单不含技术栈分组；重新 init 补齐后恢复
  *
  * 依赖真实 skill 索引（assets/skills），用于验证 status 渲染确实把 state.stacks 传给过滤层。
  */
@@ -14,8 +14,7 @@ import { join } from "node:path"
 import { init, set_worktree, status, agent_submit } from "../src/adapters/opencode/tools"
 import { makeCtx, makeOrchCtx, readState, setupWithFakeGit, teardown } from "./helpers"
 import { readItem, taskIdsOf, driveToVerifyTask } from "./helpers-workflow"
-import { scanSkillTags, type SkillTagIndex } from "../src/skills/resolve"
-import { resolveMustDoForCaps, __setMustDoIndex } from "../src/core/tools/gate"
+import { resolveStepMustDo, __setMustDoOverride } from "../src/core/tools/gate"
 
 const CID = "session-filter"
 
@@ -110,19 +109,8 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(readItem(wt, CID, "1")) },
         d,
       )
-      // 注入「仅 Java 技术栈 skill 声明 must_do」的索引：后端会话解析出必做项，前端会话解析为空
-      const idx: SkillTagIndex = {
-        tagMap: new Map([["quality-gate", ["quality-gate", "java-quality-gate"]], ["efficiency", ["code-efficiency"]]]),
-        skillTags: new Map([
-          ["quality-gate", ["quality-gate"]],
-          ["java-quality-gate", ["quality-gate"]],
-          ["code-efficiency", ["efficiency"]],
-        ]),
-        skillMustDo: new Map([["java-quality-gate", ["compile"]]]),
-        skillStacks: new Map([["java-quality-gate", ["backend"]]]),
-        skillFrameworks: new Map([["java-quality-gate", ["java"]]]),
-      }
-      __setMustDoIndex(idx)
+      // 注入「只有 backend 分组」的 step 必做清单：后端会话生效集合非空，前端会话为空
+      __setMustDoOverride(() => ({ always: [], backend: ["compile"] }))
 
       const statePath = join(wt, "openspec", "states", `${CID}.json`)
       const state = readState(wt, CID) as any
@@ -142,7 +130,7 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
       expect(frontendOut).toContain("检查点")
       expect(frontendOut).not.toContain("checkpoint_skip_reasons")
     } finally {
-      __setMustDoIndex(null)
+      __setMustDoOverride(null)
       teardown(root)
     }
   })
@@ -166,16 +154,15 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
       expect(section).not.toContain("`java-")
       expect(section).not.toContain("`frontend-")
 
-      // 2) must_do 同口径：旧会话（null）只统计通用 skill，技术栈必做项不参与
-      const idx = scanSkillTags()
-      expect(resolveMustDoForCaps(["api-testing", "e2e-testing"], idx, null)).toEqual([])
-      expect(resolveMustDoForCaps(["api-testing", "e2e-testing"], idx)).toContain("api_script") // 无会话上下文不过滤
-      const backendMust = resolveMustDoForCaps(["api-testing", "e2e-testing"], idx, {
-        project_stacks: ["backend"],
-        project_frameworks: ["java"],
-      })
-      expect(backendMust).toContain("api_script")
-      expect(backendMust).not.toContain("e2e_script")
+      // 2) 必做清单同口径：旧会话（null）只取 always 分组，技术栈分组不参与
+      // 纯函数语义校验需先摘掉用例环境的整体豁免注入
+      __setMustDoOverride(null)
+      const stepDecl = { must_do: { always: ["compile"], backend: ["api_script"], frontend: ["e2e_script"] } }
+      expect(resolveStepMustDo(stepDecl, null)).toEqual(["compile"])
+      expect(resolveStepMustDo(stepDecl)).toEqual(["compile", "api_script", "e2e_script"]) // 无会话上下文不过滤
+      expect(resolveStepMustDo(stepDecl, { project_stacks: ["backend"], project_frameworks: ["java"] })).toEqual([
+        "compile", "api_script",
+      ])
 
       // 3) 重新 init 带会话栈（旧会话无 stacks → 补齐），视图恢复按新声明过滤
       const initOut = await init.execute(
@@ -193,7 +180,7 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
     }
   })
 
-  test("legacy 会话走 verify_task 提交：必做清单只按通用 skill（test-design 三项），不含 api/e2e 项", async () => {
+  test("legacy 会话走 verify_task 提交：必做清单只取 always 分组（三项），不含 api/e2e 项", async () => {
     const root = tmpRoot("legacy-submit")
     try {
       const { worktree: wt } = setupWithFakeGit(root, CID)
@@ -203,26 +190,26 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
       const legacy = JSON.parse(readFileSync(statePath, "utf-8"))
       delete legacy.stacks
       writeFileSync(statePath, JSON.stringify(legacy))
-      // 真实索引驱动门禁：后端会话会解析出 api_script/api_execution（api-test），
-      // legacy（session=null）只解析通用 test-design 三项
-      __setMustDoIndex(scanSkillTags())
+      // 真实 workflow 声明驱动门禁：后端会话另需 api_script/api_execution，
+      // legacy（session=null）只取 always 三项
+      __setMustDoOverride(null)
       await agent_submit.execute(
         {
           change_id: CID,
           step_id: "verify_task",
           verdict: "passed",
           verified_tasks: ["1", "2", "3"],
-          validation_steps: [
-            { step: "behavior_surface: 行为面清单", completed: true },
-            { step: "case_matrix: 用例矩阵", completed: true },
-            { step: "negative_probe: 探针记录", completed: true },
+          must_do_checks: [
+            { step: "behavior_surface: 行为面清单", completed: true, evidence: "测试证据" },
+            { step: "case_matrix: 用例矩阵", completed: true, evidence: "测试证据" },
+            { step: "negative_probe: 探针记录", completed: true, evidence: "测试证据" },
           ],
         },
         ctx.taskR,
       )
       expect(readItem(wt, CID, "1").currentStep).toBe("verify_quality")
     } finally {
-      __setMustDoIndex(null)
+      __setMustDoOverride(null)
       teardown(root)
     }
   })

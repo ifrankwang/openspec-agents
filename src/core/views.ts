@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 import { findSkillPath } from "../skills/scan.ts"
 import { scanSkillTags, resolveSkillsForCapabilities, getEfficiencySkills } from "../skills/resolve.ts"
 import type { SessionStacks } from "../skills/stacks.ts"
+import { mustDoChecksOfStep, stepToken } from "./tools/gate.ts"
 
 export function renderSkillSuggestions(agent: string, caps: string[], session?: SessionStacks | null): string[] {
   if (caps.length === 0) return []
@@ -161,44 +162,44 @@ export function renderAgentSummaries(agentSummaries: Record<string, string> | un
   return lines
 }
 
-/** 开发者自检申报渲染。数据源为 workItem metadata 的 self_check_results / test_results（提交参数的存档），
- *  分「自检申报（self_check_results）」与「接口测试结果（test_results）」两段渲染，两者皆缺失/为空时
- *  返回空数组（不渲染空区块）。
- *  与 renderAgentSummaries 的语义区分：会话摘要按角色隔离（辅助记忆，不跨 agent 传递）；自检申报是
- *  正式提交参数的存档，跨角色可见是设计意图——reviewer 分级复验以 dev 申报为事实输入（低成本实跑对照、
- *  高成本项核验申报+抽样重放），不违反「子代理上下文不得转述」：该条约束的是编排者在分派 prompt 中
- *  转述动态上下文，视图渲染动态上下文本就是 opx_status 工具本职。 */
-export function renderDevSelfCheckDeclaration(metadata: Record<string, unknown>): string[] {
-  const selfCheck = typeof metadata["self_check_results"] === "string" ? metadata["self_check_results"].trim() : ""
-  const testResults = typeof metadata["test_results"] === "string" ? metadata["test_results"].trim() : ""
-  if (selfCheck === "" && testResults === "") return []
-  const lines: string[] = ["## 开发者自检申报", ""]
-  if (selfCheck !== "") {
-    lines.push("**自检申报（self_check_results）**：", "", selfCheck, "")
+/** 开发者必做项申报渲染（审查者的证据锚点）。数据源为 metadata.must_do_checks_by_step["implement"]
+ *  （implement 提交参数 must_do_checks 的按 step 存档）：逐项渲染必做项、完成状态与证据/降级理由，
+ *  reviewer 分级复验据此对照（低成本实跑证据核对、高成本项核验申报 + 抽样重放）。无存档时返回空数组
+ *  （不渲染空区块）。
+ *  与 renderAgentSummaries 的语义区分：会话摘要按角色隔离（辅助记忆，不跨 agent 传递）；必做项申报是
+ *  正式提交参数的存档，跨角色可见是设计意图，不违反「子代理上下文不得转述」：该条约束的是编排者在
+ *  分派 prompt 中转述动态上下文，视图渲染动态上下文本就是 opx_status 工具本职。 */
+export function renderDevMustDoDeclaration(metadata: Record<string, unknown>): string[] {
+  const checks = mustDoChecksOfStep(metadata, "implement")
+  if (checks.length === 0) return []
+  const lines: string[] = ["## 开发者必做项申报（implement）", ""]
+  for (const c of checks) {
+    const token = stepToken(c.step)
+    if (c.completed) {
+      const evidence = typeof c.evidence === "string" && c.evidence.trim() !== "" ? c.evidence.trim() : "(未附证据)"
+      lines.push(`- **${token}**：已完成 — ${evidence}`)
+    } else {
+      lines.push(`- **${token}**：未完成 — 降级理由：${c.skip_reason ?? "(未申报)"}`)
+    }
   }
-  if (testResults !== "") {
-    lines.push("**接口测试结果（test_results）**：", "", testResults, "")
-  }
+  lines.push("")
   return lines
 }
 
 // ─── 部署注意点提取 ───
 
-/** self_check_results 申报中实施补充点的行前缀（与 workflow 配置 implement instructions 的申报格式约定一致）。 */
-const DEPLOYMENT_NOTE_PREFIX = "部署注意点:"
-
-/** 从任务组 WorkItem 的 self_check_results 申报中提取「部署注意点:」前缀行（实施补充点，
- *  规划文档未记载、开发者实施时申报）；无命中返回空数组。命中行去除行首尾空白后原样保留
- * （含前缀本身，便于转述端直接输出）。 */
+/** 从任务组 WorkItem 的 metadata.deployment_notes（implement 提交参数存档）提取实施补充点：
+ *  规划文档未记载、开发者实施时申报的部署注意点；无命中返回空数组。逐条去除首尾空白，空条目忽略。 */
 export function extractDeploymentNoteLines(metadata: Record<string, unknown>): string[] {
-  const raw = metadata["self_check_results"]
-  if (typeof raw !== "string" || raw.trim() === "") return []
-  const hits: string[] = []
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith(DEPLOYMENT_NOTE_PREFIX)) hits.push(trimmed)
+  const raw = metadata["deployment_notes"]
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item !== "string") continue
+    const trimmed = item.trim()
+    if (trimmed !== "") out.push(trimmed)
   }
-  return hits
+  return out
 }
 
 // ─── 占位符插值层 ───

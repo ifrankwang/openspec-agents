@@ -18,7 +18,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { loadWorkflow } from "../src/core/workflow/loader"
-import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeCtx, makeOrchCtx } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeCtx, makeOrchCtx, fullMustDoChecks } from "./helpers"
 
 const CID = "wf-status"
 
@@ -812,7 +812,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const item = taskItemOf(state)
     item.phase = "done"
     item.currentStep = null
-    item.metadata["self_check_results"] = "构建验证通过\n部署注意点: 新增配置项需在部署前开启功能开关\n维度自检通过"
+    item.metadata["deployment_notes"] = ["新增配置项需在部署前开启功能开关"]
     writeStateSync(wt, state)
 
     const o = makeOrchCtx(wt)
@@ -823,7 +823,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     expect(output).toContain(`openspec/changes/${CID}/`)
     // 实施补充点行（含分组标识与原样前缀行）
     expect(output).toContain("G1(1):")
-    expect(output).toContain("部署注意点: 新增配置项需在部署前开启功能开关")
+    expect(output).toContain("新增配置项需在部署前开启功能开关")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -839,14 +839,14 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     item.phase = "done"
     item.currentStep = null
     item.metadata["completed_at"] = new Date().toISOString()
-    item.metadata["self_check_results"] = "自检通过\n部署注意点: 数据结构变更脚本须先于服务发布执行"
+    item.metadata["deployment_notes"] = ["数据结构变更脚本须先于服务发布执行"]
     writeStateSync(wt, state)
 
     const o = makeOrchCtx(wt)
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("编排已完成并收尾")
     expect(output).toContain("## 部署注意事项汇报")
-    expect(output).toContain("部署注意点: 数据结构变更脚本须先于服务发布执行")
+    expect(output).toContain("数据结构变更脚本须先于服务发布执行")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -861,7 +861,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const item = taskItemOf(state)
     item.phase = "done"
     item.currentStep = null
-    item.metadata["self_check_results"] = "构建验证通过，无部署相关变更"
+    item.metadata["deployment_notes"] = []
     writeStateSync(wt, state)
 
     const o = makeOrchCtx(wt)
@@ -911,14 +911,14 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const item = taskItemOf(state)
     item.phase = "done"
     item.currentStep = null
-    item.metadata["self_check_results"] = "自检通过\n部署注意点: 中间件配置需同步调整"
+    item.metadata["deployment_notes"] = ["中间件配置需同步调整"]
     writeStateSync(wt, state)
 
     const d = makeCtx("openspec-developer", wt)
     const output = await status.execute({ change_id: CID }, d)
     expect(output).toContain("任务组已完成，待收尾")
     expect(output).not.toContain("## 部署注意事项汇报")
-    expect(output).not.toContain("部署注意点: 中间件配置需同步调整")
+    expect(output).not.toContain("中间件配置需同步调整")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -933,18 +933,18 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const item = taskItemOf(state)
     item.phase = "done"
     item.currentStep = null
-    item.metadata["self_check_results"] = "自检通过\n部署注意点: 第一组的部署注意点"
+    item.metadata["deployment_notes"] = ["第一组的部署注意点"]
     // 第二组：done 终态（settled），自带命中行
-    state.workItems.push(makeGroupItem("2", "G2", { self_check_results: "构建通过\n部署注意点: 第二组的部署注意点" }))
+    state.workItems.push(makeGroupItem("2", "G2", { deployment_notes: ["第二组的部署注意点"] }))
     writeStateSync(wt, state)
 
     const o = makeOrchCtx(wt)
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("## 部署注意事项汇报")
     expect(output).toContain("G1(1):")
-    expect(output).toContain("部署注意点: 第一组的部署注意点")
+    expect(output).toContain("第一组的部署注意点")
     expect(output).toContain("G2(2):")
-    expect(output).toContain("部署注意点: 第二组的部署注意点")
+    expect(output).toContain("第二组的部署注意点")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1063,65 +1063,62 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
   })
 })
 
-describe("simple 模式 quality_review：开发者自检申报区块渲染（验证分流事实输入）", () => {
+describe("simple 模式 quality_review：开发者必做项申报区块渲染（验证分流事实输入）", () => {
   const REVIEWER = "openspec-reviewer"
 
-  /** simple 模式推进到 quality_review（implement passed 可携带 self_check_results）。 */
+  /** simple 模式推进到 quality_review（implement 提交必做项申报）。
+   *  extra.must_do_checks 支持传函数 (wt, cid) => 申报：清单须在 init/set_worktree 之后才能解析。 */
   async function driveToQualityReviewSimple(wt: string, extra: Record<string, unknown> = {}): Promise<void> {
     const o = makeOrchCtx(wt)
     await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
     await set_worktree.execute({ change_id: CID }, o)
+    const resolved: Record<string, unknown> = { ...extra }
+    if (typeof resolved["must_do_checks"] === "function") {
+      resolved["must_do_checks"] = (resolved["must_do_checks"] as (w: string, c: string) => unknown)(wt, CID)
+    }
     await agent_submit.execute(
-      { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"], ...extra },
+      { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"], ...resolved },
       makeCtx("openspec-developer", wt),
     )
     expect(taskItemOf(readStateSync(wt)).currentStep).toBe("quality_review")
   }
 
-  test("self_check_results 与 test_results 皆存在 → 渲染两段申报", async () => {
+  test("implement 必做项申报存档 → quality_review 渲染证据锚点（必做项 + 证据）", async () => {
     const root = `/tmp/wf-simple-decl-a-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
-    await driveToQualityReviewSimple(wt, { self_check_results: "构建：mvn compile 通过；deep_scan 命中 3 项（附命令与结果摘要）" })
-    // test_results 为 review 提交参数的 metadata 存档（跨轮次残留），直接注入模拟该形态
-    const state = readStateSync(wt)
-    taskItemOf(state).metadata["test_results"] = "API 测试 12/12 通过（附执行顺序与覆盖接口清单）"
-    writeStateSync(wt, state)
+    await driveToQualityReviewSimple(wt, {
+      must_do_checks: (w: string, c: string) => [
+        { step: "compile", completed: true, evidence: "mvn compile 通过" },
+        { step: "coverage", completed: false, skip_reason: '{"item":"coverage","category":"env_unavailable","adjudication":"env_unavailable","note":"覆盖率平台不可用"}' },
+        ...fullMustDoChecks(w, c, "implement").filter((x) => x.step !== "compile" && x.step !== "coverage"),
+      ],
+    })
 
     const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).toContain("## 开发者自检申报")
-    expect(output).toContain("**自检申报（self_check_results）**")
-    expect(output).toContain("构建：mvn compile 通过")
-    expect(output).toContain("**接口测试结果（test_results）**")
-    expect(output).toContain("API 测试 12/12 通过")
+    expect(output).toContain("## 开发者必做项申报（implement）")
+    expect(output).toContain("**compile**：已完成 — mvn compile 通过")
+    expect(output).toContain("**coverage**：未完成 — 降级理由：")
+    expect(output).toContain("覆盖率平台不可用")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("仅 self_check_results → 仅渲染自检申报段（无空接口测试段）", async () => {
-    const root = `/tmp/wf-simple-decl-b-${Date.now()}`
-    const wt = freshWt(root)
-    __setGitRunner(new FakeGitRunner())
-    await driveToQualityReviewSimple(wt, { self_check_results: "构建通过；deep_scan 命中 3 项" })
-
-    const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
-    expect(output).toContain("## 开发者自检申报")
-    expect(output).toContain("**自检申报（self_check_results）**")
-    expect(output).not.toContain("**接口测试结果")
-
-    try { rmSync(root, { recursive: true, force: true }) } catch {}
-  })
-
-  test("两字段皆缺失 → 不渲染空区块", async () => {
+  test("implement 无必做项申报存档 → 不渲染空区块", async () => {
     const root = `/tmp/wf-simple-decl-c-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
     await driveToQualityReviewSimple(wt)
 
+    // 清空存档：模拟无申报的历史会话形态
+    const state = readStateSync(wt)
+    delete taskItemOf(state).metadata["must_do_checks_by_step"]
+    writeStateSync(wt, state)
+
     const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).not.toContain("## 开发者自检申报")
+    expect(output).not.toContain("## 开发者必做项申报")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1130,7 +1127,7 @@ describe("simple 模式 quality_review：开发者自检申报区块渲染（验
     const root = `/tmp/wf-simple-decl-d-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
-    await driveToQualityReviewSimple(wt, { self_check_results: "构建通过" })
+    await driveToQualityReviewSimple(wt)
     // reviewer failed 报 issue（显式 dimension）→ 回 implement，metadata 仍存有申报
     await agent_submit.execute(
       {
@@ -1143,7 +1140,7 @@ describe("simple 模式 quality_review：开发者自检申报区块渲染（验
 
     const output = await status.execute({ change_id: CID }, makeCtx("openspec-developer", wt))
     expect(output).toContain("# ✅ 当前轮到你执行")
-    expect(output).not.toContain("## 开发者自检申报")
+    expect(output).not.toContain("## 开发者必做项申报")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -1285,70 +1282,75 @@ describe("simple 模式 quality_review：本次变更证据区块（检查点增
   })
 })
 
-describe("test_results 提交通道：implement 申报存档 + quality_review 防覆盖 + full verify_tool 回归", () => {
+describe("must_do_checks 按 step 分档存档：implement 申报 + quality_review 互不覆盖 + full verify_tool 独立档", () => {
   const REVIEWER = "openspec-reviewer"
 
-  /** simple 模式推进到 quality_review，dev 提交时携带 test_results 申报。 */
-  async function driveToQualityReviewWithTestResults(wt: string, testResults: string): Promise<void> {
+  /** simple 模式推进到 quality_review（implement 提交必做项申报，证据带可辨识标记）。 */
+  async function driveToQualityReviewWithChecks(wt: string, evidence: string): Promise<void> {
     const o = makeOrchCtx(wt)
     await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
     await set_worktree.execute({ change_id: CID }, o)
     await agent_submit.execute(
       {
         change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"],
-        test_results: testResults,
+        must_do_checks: fullMustDoChecks(wt, CID, "implement", evidence),
       },
       makeCtx("openspec-developer", wt),
     )
     expect(taskItemOf(readStateSync(wt)).currentStep).toBe("quality_review")
   }
 
-  test("simple implement 提交 test_results → metadata 存档 → quality_review 视图渲染「接口测试结果」段", async () => {
-    const root = `/tmp/wf-tr-channel-a-${Date.now()}`
+  test("simple implement 申报 → metadata.must_do_checks_by_step.implement 存档 → quality_review 视图渲染证据锚点", async () => {
+    const root = `/tmp/wf-md-channel-a-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
-    const DECL = "API 测试 3/3 通过（执行顺序：SQL 前置 → 隔离启动 → .http 执行；覆盖接口：POST /a、GET /b）"
-    await driveToQualityReviewWithTestResults(wt, DECL)
+    const EVIDENCE = "构建命令 mvn -q compile 通过；覆盖率 82%（门禁 80%）"
+    await driveToQualityReviewWithChecks(wt, EVIDENCE)
 
-    // implement 通道写入 metadata（dev 申报存档）
-    expect(taskItemOf(readStateSync(wt)).metadata["test_results"]).toBe(DECL)
+    const archived = taskItemOf(readStateSync(wt)).metadata["must_do_checks_by_step"]["implement"] as any[]
+    expect(archived[0].evidence).toBe(EVIDENCE)
 
-    // quality_review 视图「开发者自检申报」区块渲染「接口测试结果」段（真实提交通道闭环）
     const output = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
-    expect(output).toContain("## 开发者自检申报")
-    expect(output).toContain("**接口测试结果（test_results）**")
-    expect(output).toContain("API 测试 3/3 通过")
+    expect(output).toContain("## 开发者必做项申报（implement）")
+    expect(output).toContain("覆盖率 82%")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("quality_review 合并审查者提交 test_results 不覆盖 dev 申报（dev 专属防护）", async () => {
-    const root = `/tmp/wf-tr-channel-b-${Date.now()}`
+  test("quality_review 审查者申报落自己的 step 档，不覆盖 implement 档", async () => {
+    const root = `/tmp/wf-md-channel-b-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
-    await driveToQualityReviewWithTestResults(wt, "dev 申报的接口测试结果")
+    await driveToQualityReviewWithChecks(wt, "dev 申报证据")
 
     await agent_submit.execute(
-      { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2"], test_results: "reviewer 试图覆盖申报" },
+      { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2"] },
       makeCtx(REVIEWER, wt),
     )
-    // dev 申报保持原值，reviewer 提交的 test_results 不落入 metadata
-    expect(taskItemOf(readStateSync(wt)).metadata["test_results"]).toBe("dev 申报的接口测试结果")
+    const byStep = taskItemOf(readStateSync(wt)).metadata["must_do_checks_by_step"] as any
+    expect(byStep["implement"][0].evidence).toBe("dev 申报证据")
+    expect(byStep["quality_review"].length).toBeGreaterThan(0)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("full verify_tool reviewer 提交 test_results 仍写入 metadata（回归）", async () => {
-    const root = `/tmp/wf-tr-channel-c-${Date.now()}`
+  test("full verify_tool 申报存入独立 step 档（不与 implement 档混）", async () => {
+    const root = `/tmp/wf-md-channel-c-${Date.now()}`
     const wt = freshWt(root)
     __setGitRunner(new FakeGitRunner())
     await driveToReview(wt)
 
     await agent_submit.execute(
-      { change_id: CID, step_id: "verify_tool", verdict: "passed", test_results: "UT 42/42 通过" },
+      {
+        change_id: CID, step_id: "verify_tool", verdict: "passed",
+        must_do_checks: fullMustDoChecks(wt, CID, "verify_tool", "UT 42/42 通过"),
+      },
       makeCtx("openspec-reviewer-tool", wt),
     )
-    expect(taskItemOf(readStateSync(wt)).metadata["test_results"]).toBe("UT 42/42 通过")
+    const byStep = taskItemOf(readStateSync(wt)).metadata["must_do_checks_by_step"] as any
+    expect(byStep["verify_tool"][0].evidence).toBe("UT 42/42 通过")
+    // 两个 step 各自成档：implement 档保留自己的证据，不被本 step 申报覆盖
+    expect(byStep["implement"][0].evidence).not.toBe("UT 42/42 通过")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })

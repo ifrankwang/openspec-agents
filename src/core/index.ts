@@ -23,7 +23,7 @@ export { agentSubmitExecute } from "./tools/submit.ts"
 
 // tool 参数 schema（纯 JSON Schema）
 export {
-  executionBoundarySchema, boundaryExpansionSchema, taskVerifyItem, validationStepSchema,
+  executionBoundarySchema, boundaryExpansionSchema, taskVerifyItem, mustDoCheckSchema,
   blockerItem, exemptAdjudicationItem, recheckAdjudicationItem, checkpointSkipReasonItem,
   newChildIssueItem, recoverySchema,
   orchInitSchema, setWorktreeSchema, statusSchema, completeTaskGroupSchema,

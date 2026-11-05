@@ -14,8 +14,8 @@
  *   exempt_adjudications 裁定 dismissed → passed 进 done → 收尾遇合并冲突返回 blocked（worktree/分支
  *   保留）→ dev 解决冲突后重调 complete 直接收尾（无额外验证）
  *
- * 用例 3（验证分流：spec:verification-split）：dev 自检申报经 quality_review 视图「开发者自检申报」
- *   区块渲染 → quality_review passed 携带 deep_scan 核验申报形态 validation_steps（step 名首段命中 +
+ * 用例 3（验证分流：spec:verification-split）：dev 必做项申报经 quality_review 视图「开发者必做项申报」
+ *   区块渲染 → quality_review passed 携带 deep_scan 核验申报形态 must_do_checks（step 名首段命中 +
  *   completed=true）通过必做清单门禁 → done；低成本项遗漏仍被门禁拦截（白名单不放宽逐项覆盖）
  *
  * 附：tasks.md 复选框在任务组收尾（opx_orch_complete_task_group）时统一勾选，full/simple 一致，见 README「simple 模式」。
@@ -24,8 +24,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
-import { __setMustDoIndex } from "../src/core/tools/gate"
-import type { SkillTagIndex } from "../src/skills/resolve"
+import { __setMustDoOverride } from "../src/core/tools/gate"
 import { init, set_worktree, status, agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree, settleOtherGroups } from "./helpers"
 
@@ -274,42 +273,34 @@ describe("simple 模式端到端：full 模式既有流转不受身份逻辑化�
   })
 })
 
-describe("simple 模式端到端：验证分流（自检申报视图化 + deep_scan 核验申报通过必做清单门禁）", () => {
-  /** 构造声明 must_do 的 quality-gate skill 索引（与 must-do-gate 测试同款注入方式）。 */
-  function makeQualityGateIndex(items: string[] = ["compile", "static_analysis", "deep_scan"]): SkillTagIndex {
-    return {
-      tagMap: new Map([
-        ["quality-gate", ["quality-gate"]],
-        ["efficiency", ["code-efficiency"]],
-        ["api-testing", ["api-test"]],
-      ]),
-      skillTags: new Map([
-        ["quality-gate", ["quality-gate"]],
-        ["code-efficiency", ["efficiency"]],
-        ["api-test", ["api-testing"]],
-      ]),
-      skillMustDo: new Map([["quality-gate", items]]),
-      skillStacks: new Map(),
-      skillFrameworks: new Map(),
-    }
+describe("simple 模式端到端：验证分流（必做项申报视图化 + deep_scan 核验申报通过必做清单门禁）", () => {
+  /** 注入三必做项的 step 清单（与 must-do-gate 测试同款注入方式）。 */
+  function useMustDoItems(items: string[] = ["compile", "static_analysis", "deep_scan"]): void {
+    __setMustDoOverride(() => ({ always: items }))
   }
 
   test("dev 申报视图化 → quality_review 以 deep_scan 核验申报形态 passed 提交过门禁 → done", async () => {
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      __setMustDoIndex(makeQualityGateIndex())
+      useMustDoItems()
 
-      // ① dev implement passed 携带自检申报（含 deep_scan 命中摘要——reviewer 核验申报的事实输入）
+      // ① dev implement passed 携带必做项申报（deep_scan 证据即 reviewer 核验申报的事实输入）
       await submitImplement(wt, {
-        self_check_results: "构建：mvn compile 通过；deep_scan：命中 3 项（命令与结果摘要附后）",
+        must_do_checks: [
+          { step: "compile", completed: true, evidence: "mvn -q compile 通过" },
+          { step: "static_analysis", completed: true, evidence: "命中 0 项" },
+          { step: "deep_scan", completed: true, evidence: "deep_scan：命中 3 项（命令与结果摘要附后）" },
+        ],
       })
-      expect(taskItemOf(wt).metadata["self_check_results"]).toContain("deep_scan")
+      expect(
+        JSON.stringify(taskItemOf(wt).metadata["must_do_checks_by_step"]["implement"]),
+      ).toContain("deep_scan")
 
-      // ② reviewer 视图渲染「开发者自检申报」区块（分级复验事实输入）
+      // ② reviewer 视图渲染「开发者必做项申报」区块（分级复验证据锚点）
       const view = await status.execute({ change_id: CID }, makeCtx(REVIEWER, wt))
-      expect(view).toContain("## 开发者自检申报")
-      expect(view).toContain("**自检申报（self_check_results）**")
+      expect(view).toContain("## 开发者必做项申报（implement）")
+      expect(view).toContain("deep_scan")
 
       // ③ quality_review passed：低成本项实跑申报 + deep_scan 核验申报形态
       //   （step 名首段命中 + completed=true + 描述注明核验方式与抽验样本）→ 通过必做清单门禁推进 done
@@ -317,7 +308,7 @@ describe("simple 模式端到端：验证分流（自检申报视图化 + deep_s
         {
           change_id: CID, step_id: "quality_review", verdict: "passed",
           verified_tasks: ["1", "2", "3"],
-          validation_steps: [
+          must_do_checks: [
             { step: "compile", completed: true, evidence: "BUILD SUCCESS" },
             { step: "static_analysis", completed: true, evidence: "0 violations" },
             { step: "deep_scan: 核验 dev 申报并抽验命中项", completed: true, evidence: "核验申报证据完整；本地复跑单规则静态分析抽验 2 条命中项真实存在" },
@@ -328,7 +319,7 @@ describe("simple 模式端到端：验证分流（自检申报视图化 + deep_s
       const done = taskItemOf(wt)
       expect(done.phase).toBe("done")
       expect(done.currentStep).toBeNull()
-      expect(done.metadata["validation_steps"]).toHaveLength(3)
+      expect(done.metadata["must_do_checks_by_step"]["quality_review"]).toHaveLength(3)
     } finally { teardown(root) }
   })
 
@@ -336,8 +327,14 @@ describe("simple 模式端到端：验证分流（自检申报视图化 + deep_s
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
-      __setMustDoIndex(makeQualityGateIndex())
-      await submitImplement(wt, { self_check_results: "构建通过；deep_scan 命中 3 项" })
+      useMustDoItems()
+      await submitImplement(wt, {
+        must_do_checks: [
+          { step: "compile", completed: true, evidence: "构建通过" },
+          { step: "static_analysis", completed: true, evidence: "命中 0 项" },
+          { step: "deep_scan", completed: true, evidence: "命中 3 项" },
+        ],
+      })
 
       // 仅申报 deep_scan 核验形态、遗漏低成本项 compile/static_analysis → 门禁拒绝（零状态变更）
       const err = await agent_submit
@@ -345,7 +342,7 @@ describe("simple 模式端到端：验证分流（自检申报视图化 + deep_s
           {
             change_id: CID, step_id: "quality_review", verdict: "passed",
             verified_tasks: ["1", "2", "3"],
-            validation_steps: [
+            must_do_checks: [
               { step: "deep_scan: 核验 dev 申报并抽验命中项", completed: true, evidence: "核验申报+抽验通过" },
             ],
           },

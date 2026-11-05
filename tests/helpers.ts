@@ -1,6 +1,8 @@
 import { __setGitRunner, type GitRunner } from "../src/core/git"
-import { __setMustDoIndex, EMPTY_MUST_DO_INDEX } from "../src/core/tools/gate"
+import { __setMustDoOverride, resolveStepMustDo } from "../src/core/tools/gate"
 import { __setKnownStackTags } from "../src/skills/stacks"
+import { loadWorkflowFile, resolveWorkflowPath } from "../src/core/workflow/loader"
+import { agent_submit } from "../src/adapters/opencode/tools"
 import type { ToolContext } from "../src/core/tools/types"
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, cpSync } from "node:fs"
 import { join } from "node:path"
@@ -432,12 +434,128 @@ export const TEST_STACKS = ["backend", "frontend"]
 export const TEST_FRAMEWORKS = ["java", "vue", "react"]
 
 /**
- * 统一安装测试 skill 环境，供各测试文件自建 fixture 复用：空 must_do 索引（存量用例默认豁免
- * skill 必做清单门禁）+ 分字段标签词汇注入（init 动态校验可通过）。需要真实门禁行为的用例在用例内显式覆盖注入。
+ * 统一安装测试环境，供各测试文件自建 fixture 复用：分字段标签词汇注入（init 动态校验可通过）
+ * + 必做项申报自动补申（见 installAutoMustDoChecks）。需要真实门禁拒绝行为的用例显式构造申报。
  */
 export function installTestSkillEnv(): void {
-  __setMustDoIndex(EMPTY_MUST_DO_INDEX)
   __setKnownStackTags({ stacks: TEST_STACKS, frameworks: TEST_FRAMEWORKS })
+  installAutoMustDoChecks()
+}
+
+// ─── 必做项申报自动补申（存量用例免逐处构造） ───
+
+/** 自动补申的固定证据文案（值本身不被断言，只用于满足 completed=true 的证据非空要求）。 */
+export const AUTO_MUST_DO_EVIDENCE = "测试自动申报：按本 step 必做清单逐项执行完成（拒绝路径用例显式构造申报）"
+
+/** 补申豁免形态：提交内容只有单一「补交类」参数（只带 verified_tasks 或只带裁定参数），且该 agent
+ *  在该 step 已经 passed。这类严格补交靠「无其他实质参数」成立（isSupplementOnly /
+ *  isTaskVerificationSupplement 要求 must_do_checks 为空），自动补申会破坏其形态判定，
+ *  故跳过补申交回用例显式控制；首次提交（step 尚未 passed）不属补交，照常补申。 */
+const SUPPLEMENT_KEYS = ["verified_tasks", "recheck_adjudications", "exempt_adjudications"] as const
+const NON_CONTENT_KEYS = new Set(["change_id", "step_id", "verdict", "_agent", "checkpoint_decision"])
+
+function isStrictSupplement(params: Record<string, any>, state: Record<string, unknown>): boolean {
+  const contentKeys = Object.keys(params).filter((k) => !NON_CONTENT_KEYS.has(k))
+  if (contentKeys.length !== 1 || !(SUPPLEMENT_KEYS as readonly string[]).includes(contentKeys[0])) return false
+  const workItems = Array.isArray(state["workItems"]) ? (state["workItems"] as any[]) : []
+  const item = workItems.find((w) => w.id === `task:${state["taskGroupId"] ?? "1"}`)
+  const tag = item?.tags?.[`${params.step_id}:${params._agent ?? ""}`]
+  return tag === "passed"
+}
+
+/** ctx.agent 落到 params._agent 供补交判定使用（工具真实入参不要求，仅测试装饰器内部判定）。 */
+function supplementProbeParam(params: Record<string, any>, ctx: ToolContext): Record<string, any> {
+  return { ...params, _agent: ctx.agent }
+}
+
+/**
+ * 按「当前 step 的生效必做清单 + 会话项目栈」自动补申 must_do_checks（completed=true + 固定证据），
+ * 让存量用例不必逐处构造申报；门禁仍走真实 workflow 声明（不再依赖整体豁免）。
+ * 不补申的三种情况：显式携带 must_do_checks（含空数组——拒绝路径用例用它构造遗漏）、
+ * 严格补交形态（见 isStrictSupplement）、检查点决策（giveup/continue 不走申报）。
+ */
+function withAutoMustDoChecks<T extends Record<string, any>>(params: T, ctx: ToolContext): T {
+  if (params === null || typeof params !== "object") return params
+  if (Object.prototype.hasOwnProperty.call(params, "must_do_checks")) return params
+  if (params.checkpoint_decision !== undefined) return withAutoGiveupReasons(params, ctx)
+  if (typeof params.change_id !== "string" || typeof params.step_id !== "string") return params
+  const state = readState(ctx.worktree, params.change_id)
+  if (!state) return params
+  if (isStrictSupplement(supplementProbeParam(params, ctx), state)) return params
+  let items: string[] = []
+  try {
+    const workflow = loadWorkflowFile(resolveWorkflowPath(state as never))
+    const step = workflow.stepMap.get(params.step_id)?.step
+    items = resolveStepMustDo(step, (state.stacks as never) ?? null)
+  } catch {
+    return params
+  }
+  if (items.length === 0) return params
+  return {
+    ...params,
+    must_do_checks: items.map((id) => ({ step: id, completed: true, evidence: AUTO_MUST_DO_EVIDENCE })),
+  }
+}
+
+/**
+ * giveup 决策的降级理由自动补申：giveup 须对当前 step 生效清单的未覆盖项逐项提供结构化理由，
+ * 存量用例不逐处构造；门禁逻辑本身不变（本函数只是替用例填齐材料）。
+ * 显式携带 checkpoint_skip_reasons（含空数组）时不补，供拒绝路径用例构造缺理由场景。
+ */
+function withAutoGiveupReasons<T extends Record<string, any>>(params: T, ctx: ToolContext): T {
+  if (params.checkpoint_decision !== "giveup") return params
+  if (Object.prototype.hasOwnProperty.call(params, "checkpoint_skip_reasons")) return params
+  if (typeof params.change_id !== "string") return params
+  const state = readState(ctx.worktree, params.change_id)
+  if (!state) return params
+  try {
+    const workflow = loadWorkflowFile(resolveWorkflowPath(state as never))
+    const workItems = Array.isArray(state["workItems"]) ? (state["workItems"] as any[]) : []
+    const item = workItems.find((w) => w.id === `task:${state["taskGroupId"] ?? "1"}`)
+    const stepId = item?.currentStep
+    if (typeof stepId !== "string") return params
+    const items = resolveStepMustDo(workflow.stepMap.get(stepId)?.step, (state.stacks as never) ?? null)
+    if (items.length === 0) return params
+    return {
+      ...params,
+      checkpoint_skip_reasons: items.map((id) => ({
+        item: id, category: "env_unavailable", adjudication: "env_unavailable",
+        note: "测试自动补申：giveup 降级材料",
+      })),
+    }
+  } catch {
+    return params
+  }
+}
+
+/** 按当前 step 生效清单生成完整申报（completed=true + 指定证据），供用例在完整申报上做局部改写
+ *  （如把某一项置 completed=false + skip_reason）而不用手抄清单。 */
+export function fullMustDoChecks(
+  wt: string,
+  changeId: string,
+  stepId: string,
+  evidence = AUTO_MUST_DO_EVIDENCE,
+): Array<{ step: string; completed: boolean; evidence: string }> {
+  const state = readState(wt, changeId)
+  if (!state) return []
+  const workflow = loadWorkflowFile(resolveWorkflowPath(state as never))
+  const items = resolveStepMustDo(workflow.stepMap.get(stepId)?.step, (state.stacks as never) ?? null)
+  return items.map((id) => ({ step: id, completed: true, evidence }))
+}
+
+let autoMustDoInstalled = false
+
+/** 在 agent_submit.execute 入口安装自动补申装饰器（进程内幂等；fixture 每次 setup 调用亦不重复包装）。 */
+export function installAutoMustDoChecks(): void {
+  if (autoMustDoInstalled) return
+  autoMustDoInstalled = true
+  const original = agent_submit.execute as (p: any, c: ToolContext) => Promise<string>
+  agent_submit.execute = ((params: any, ctx: ToolContext) => {
+    const enriched = withAutoMustDoChecks(params, ctx)
+    // _agent 仅测试装饰器内部判定用：落库前剥离，避免污染真实参数面
+    if (enriched && typeof enriched === "object" && "_agent" in enriched) delete (enriched as any)._agent
+    return original(enriched, ctx)
+  }) as never
 }
 
 // ─── Workspace Setup ───
@@ -446,7 +564,7 @@ export function setupWorkspace(tmpRoot: string, changeId: string): string {
   const dir = join(tmpRoot, "workspace")
   mkdirSync(join(dir, "openspec", "changes", changeId), { recursive: true })
 
-  // 存量测试兼容：门禁豁免 + init 标签词汇注入（见 installTestSkillEnv）。
+  // 标签词汇注入 + 必做项自动补申（见 installTestSkillEnv）。
   installTestSkillEnv()
 
   const tasksMd = `## 1. First Task Group
@@ -528,7 +646,7 @@ export function setupWithFakeGit(tmpRoot: string, changeId: string): { worktree:
 
 export function teardown(tmpRoot: string): void {
   __setGitRunner(null)
-  __setMustDoIndex(null)
+  __setMustDoOverride(null)
   __setKnownStackTags(null)
   if (existsSync(tmpRoot)) {
     for (const entry of readdirSync(tmpRoot)) {

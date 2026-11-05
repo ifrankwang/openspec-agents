@@ -65,17 +65,24 @@ export const taskVerifyItem: JSONSchema = {
   additionalProperties: false,
 }
 
-export const validationStepSchema: JSONSchema = {
+export const mustDoCheckSchema: JSONSchema = {
   type: "object",
-  description: "验证步骤执行摘要",
+  description: "本 step 必做项的单条申报结果（必做清单由 workflow step 声明，见视图「本 step 必做清单」区块）",
   properties: {
-    step: { type: "string", minLength: 1, description: "验证步骤名称，对应 opx_status 操作指引中的步骤描述" },
+    step: {
+      type: "string",
+      minLength: 1,
+      description: "必做项 id，对应视图「本 step 必做清单」区块的条目（首段 id 后可附冒号说明，如 `deep_scan: 核验申报`）",
+    },
     completed: { type: "boolean", description: "是否完成" },
-    evidence: { type: "string", description: "执行结果摘要或证据，含关键输出指标" },
+    evidence: {
+      type: "string",
+      description: "完成时必须提供：执行命令/方式 + 结果摘要（含关键输出指标），供审查者分级复验对照",
+    },
     skip_reason: {
       type: "string",
       description:
-        `结构化降级理由 JSON（仅 completed=false 时必填），格式：${SKIP_REASON_FORMAT}；` +
+        `未完成时必填：结构化降级理由 JSON，格式：${SKIP_REASON_FORMAT}；` +
         `adjudication 取值：user_response=用户答复 / unattended_auto=无人值守自动降级 / env_unavailable=环境不可用（须附尝试记录）`,
     },
   },
@@ -134,7 +141,7 @@ export const checkpointSkipReasonItem: JSONSchema = {
   type: "object",
   description: "giveup 决策的必做项结构化降级理由",
   properties: {
-    item: { type: "string", minLength: 1, description: "对应的必做项（已加载 skill 的 must_do 清单项）" },
+    item: { type: "string", minLength: 1, description: "对应的必做项（workflow step 声明的必做清单项，见视图区块）" },
     category: { type: "string", minLength: 1, description: "降级类别，如环境不可用 / 用户裁定豁免 / 无人值守自动降级" },
     adjudication: {
       type: "string",
@@ -343,7 +350,7 @@ export const agentSubmitSchema: JSONSchema = {
     },
     checkpoint_skip_reasons: {
       type: "array",
-      description: "giveup 决策配套：对当前 step 已加载 skill 必做清单未覆盖项的结构化降级理由（未覆盖项缺理由则拒绝 giveup）",
+      description: "giveup 决策配套：对当前 step 必做清单未覆盖项的结构化降级理由（未覆盖项缺理由则拒绝 giveup）",
       items: checkpointSkipReasonItem,
     },
     new_children: {
@@ -373,21 +380,22 @@ export const agentSubmitSchema: JSONSchema = {
       ...blockerItem,
       description: "implement step：outcome=blocked 等价，须配合 verdict=failed",
     },
-    self_check_results: { type: "string", description: "implement step：提交前自检结果汇总" },
+    deployment_notes: {
+      type: "array",
+      description:
+        "implement step：规划文档未记载、实施时新发现的部署注意点（数据/结构变更脚本执行、中间件配置调整、新增配置项或功能开关、外部接口契约变化、依赖清单/构建配置变更）；无则省略",
+      items: { type: "string", minLength: 1 },
+    },
     completed_task_ids: {
       type: "array",
       description: "implement step：已完成的 task id（覆盖门禁：全部 open/rejected task 必须被覆盖）",
       items: { type: "string" },
     },
-    test_results: {
-      type: "string",
-      description:
-        "implement / verify_tool step：测试运行结果摘要（implement 为接口测试执行结果——附执行顺序与覆盖接口清单；verify_tool 为 UT 运行结果摘要）；quality_review（simple 合并审查）下由开发者在 implement 申报，审查者提交时不生效",
-    },
-    validation_steps: {
+    must_do_checks: {
       type: "array",
-      description: "review step：验证步骤执行摘要",
-      items: validationStepSchema,
+      description:
+        "本 step 必做项申报（implement / review step 通用）：按视图「本 step 必做清单」区块的生效清单逐项申报，passed 提交时遗漏必做项会被门禁拒绝",
+      items: mustDoCheckSchema,
     },
     boundary_expansion: {
       ...boundaryExpansionSchema,

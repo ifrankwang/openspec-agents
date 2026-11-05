@@ -15,7 +15,7 @@ import { writeFileSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
-import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, fullMustDoChecks } from "./helpers"
 import {
   setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
   taskItemOf, taskListOf, metaOf, readItem, taskIdsOf, rollbackQuality,
@@ -294,9 +294,9 @@ describe("G5. 非法 task id 守卫", () => {
   })
 })
 
-// ── G6: verify_task 覆盖门禁 + validation_steps ──
+// ── G6: verify_task 覆盖门禁 + must_do_checks ──
 
-describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
+describe("G6. verify_task 覆盖门禁与 must_do_checks 申报", () => {
   test("verified_tasks 未覆盖全部 submitted → 抛错", async () => {
     const { wt, root } = fresh()
     try {
@@ -311,24 +311,24 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
     } finally { teardown(root) }
   })
 
-  test("validation_steps 全 completed → 写入 metadata", async () => {
+  test("must_do_checks 全 completed → 写入 metadata", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
-          validation_steps: [{ step: "构建", completed: true, evidence: "BUILD SUCCESS" }],
+          must_do_checks: fullMustDoChecks(wt, CID, "verify_task", "BUILD SUCCESS"),
         },
         makeCtx("openspec-reviewer-task", wt)
       )
-      const steps = metaOf(readItem(wt, CID), "validation_steps")
-      expect(steps).toHaveLength(1)
+      const steps = metaOf(readItem(wt, CID), "must_do_checks_by_step")["verify_task"]
+      expect(steps.length).toBeGreaterThan(0)
       expect(steps[0].evidence).toBe("BUILD SUCCESS")
     } finally { teardown(root) }
   })
 
-  test("validation_steps skipped 缺 skip_reason → 抛错", async () => {
+  test("must_do_checks skipped 缺 skip_reason → 抛错", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
@@ -336,7 +336,10 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
         agent_submit.execute(
           {
             change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
-            validation_steps: [{ step: "冒烟", completed: false }],
+            must_do_checks: [
+              { step: "behavior_surface", completed: false },
+              ...fullMustDoChecks(wt, CID, "verify_task").filter((c) => c.step !== "behavior_surface"),
+            ],
           },
           makeCtx("openspec-reviewer-task", wt)
         ),
@@ -345,7 +348,7 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
     } finally { teardown(root) }
   })
 
-  test("validation_steps skipped + 结构化 skip_reason → 接受并落盘", async () => {
+  test("must_do_checks skipped + 结构化 skip_reason → 接受并落盘", async () => {
     const { wt, root } = fresh()
     try {
       await driveToVerifyTask(wt, CID)
@@ -353,11 +356,14 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
-          validation_steps: [{ step: "冒烟", completed: false, skip_reason: reason }],
+          must_do_checks: [
+            { step: "behavior_surface", completed: false, skip_reason: reason },
+            ...fullMustDoChecks(wt, CID, "verify_task").filter((c) => c.step !== "behavior_surface"),
+          ],
         },
         makeCtx("openspec-reviewer-task", wt)
       )
-      expect(metaOf(readItem(wt, CID), "validation_steps")[0].skip_reason).toBe(reason)
+      expect(metaOf(readItem(wt, CID), "must_do_checks_by_step")["verify_task"][0].skip_reason).toBe(reason)
     } finally { teardown(root) }
   })
 
@@ -369,20 +375,20 @@ describe("G6. verify_task 覆盖门禁与 validation_steps", () => {
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: taskIdsOf(readItem(wt, CID)),
-          validation_steps: [
-            { step: "①task 产出完整性", completed: true, evidence: "全部 task 验证通过" },
-            { step: "②启动服务并检查健康", completed: false, skip_reason: reason },
-            { step: "③独立执行全量 API 测试", completed: false, skip_reason: reason },
-            { step: "④审查测试代码质量", completed: true, evidence: "测试代码质量审查通过" },
+          must_do_checks: [
+            { step: "api_script", completed: true, evidence: "变更行为无新增脚本，既有脚本已覆盖" },
+            { step: "api_execution", completed: false, skip_reason: reason },
+            ...fullMustDoChecks(wt, CID, "verify_task").filter(
+              (c) => c.step !== "api_script" && c.step !== "api_execution",
+            ),
           ],
         },
         makeCtx("openspec-reviewer-task", wt)
       )
       const item = readItem(wt, CID)
-      const steps = metaOf(item, "validation_steps")
-      expect(steps).toHaveLength(4)
-      expect(steps[1]).toMatchObject({ completed: false, skip_reason: reason })
-      expect(steps[2]).toMatchObject({ completed: false, skip_reason: reason })
+      const steps = metaOf(item, "must_do_checks_by_step")["verify_task"]
+      expect(steps.length).toBeGreaterThan(3)
+      expect(steps.find((c: any) => c.step === "api_execution")).toMatchObject({ completed: false, skip_reason: reason })
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_quality")
     } finally { teardown(root) }
@@ -844,18 +850,23 @@ describe("G17. rejectReason 存储", () => {
   })
 })
 
-// ── G18: verify_tool test_results 参数 ──
+// ── G18: verify_tool 必做项申报存档（按 step 分档） ──
 
-describe("G18. verify_tool test_results 参数", () => {
-  test("提交 verify_tool 携带 test_results → 写入 metadata", async () => {
+describe("G18. verify_tool must_do_checks 申报存档", () => {
+  test("提交 verify_tool 携带 must_do_checks → 按 step 写入 must_do_checks_by_step", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID)
       await agent_submit.execute(
-        { change_id: CID, step_id: "verify_tool", verdict: "passed", test_results: "Tests run: 42, Passed: 42, Failed: 0" },
+        {
+          change_id: CID, step_id: "verify_tool", verdict: "passed",
+          must_do_checks: fullMustDoChecks(wt, CID, "verify_tool", "UT 42/42 通过"),
+        },
         ctx.toolR
       )
-      expect(metaOf(readItem(wt, CID), "test_results")).toBe("Tests run: 42, Passed: 42, Failed: 0")
+      const archived = metaOf(readItem(wt, CID), "must_do_checks_by_step")["verify_tool"]
+      expect(archived.length).toBeGreaterThan(0)
+      expect(archived[0].evidence).toBe("UT 42/42 通过")
     } finally { teardown(root) }
   })
 })
@@ -1062,15 +1073,20 @@ describe("G21. implement completed_task_ids 校验", () => {
     } finally { teardown(root) }
   })
 
-  test("implement 携带 self_check_results → 写入 metadata", async () => {
+  test("implement 携带 deployment_notes → 写入 metadata", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToImplement(wt, CID)
       await agent_submit.execute(
-        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"], self_check_results: "lint: pass, tests: 42/42" },
+        {
+          change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"],
+          deployment_notes: ["新增功能开关需在部署前开启", "数据结构变更脚本须先于服务发布执行"],
+        },
         ctx.dev
       )
-      expect(metaOf(readItem(wt, CID), "self_check_results")).toBe("lint: pass, tests: 42/42")
+      expect(metaOf(readItem(wt, CID), "deployment_notes")).toEqual([
+        "新增功能开关需在部署前开启", "数据结构变更脚本须先于服务发布执行",
+      ])
     } finally { teardown(root) }
   })
 })

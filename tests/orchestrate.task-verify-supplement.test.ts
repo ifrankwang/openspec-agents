@@ -18,8 +18,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
-import { __setMustDoIndex } from "../src/core/tools/gate"
-import type { SkillTagIndex } from "../src/skills/resolve"
+import { __setMustDoOverride } from "../src/core/tools/gate"
 import { init, agent_submit, set_worktree, status } from "../src/adapters/opencode/tools"
 import { recommendForItem } from "../src/core/workflow/engine"
 import { loadWorkflowFile, SIMPLE_WORKFLOW_PATH, TASK_WORKFLOW_PATH } from "../src/core/workflow/loader"
@@ -500,15 +499,9 @@ describe("E. 端到端回归", () => {
 //  F. 独立复核返工回归
 // ════════════════════════════════════════════════════════════════
 
-/** 构造声明 must_do 的 quality-gate skill 索引（必做清单 3 项），供必做门禁用例显式注入。 */
-function makeQualityGateIndex(items = ["compile", "static_analysis", "deep_scan"]): SkillTagIndex {
-  return {
-    tagMap: new Map([["quality-gate", ["quality-gate"]]]),
-    skillTags: new Map([["quality-gate", ["quality-gate"]]]),
-    skillMustDo: new Map([["quality-gate", items]]),
-    skillStacks: new Map(),
-    skillFrameworks: new Map(),
-  }
+/** 注入三必做项的 step 清单，供必做门禁用例显式覆盖。 */
+function useMustDoItems(items = ["compile", "static_analysis", "deep_scan"]): void {
+  __setMustDoOverride(() => ({ always: items }))
 }
 
 describe("F. 独立复核返工回归", () => {
@@ -586,15 +579,15 @@ describe("F. 独立复核返工回归", () => {
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx(DEV, wt),
       )
-      // 注入必做清单索引（quality-gate 声明 must_do）后，首次提交仅带 verified_tasks、缺
-      // validation_steps → 补交形态不得跳过必做门禁（完整审查首次尚未做过）
-      __setMustDoIndex(makeQualityGateIndex())
+      // 注入必做清单后，首次提交仅带 verified_tasks、缺 must_do_checks（显式空数组关闭测试基建的自动补申）
+      // → 补交形态不得跳过必做门禁（完整审查首次尚未做过）
+      useMustDoItems()
       const err = await agent_submit.execute(
-        { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2", "3"] },
+        { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2", "3"], must_do_checks: [] },
         makeCtx(REVIEWER, wt),
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/未覆盖已加载 skill 的必做清单/)
+      expect(err.message).toMatch(/未覆盖本 step 的必做清单/)
       expect(err.message).toContain("compile")
       // 拒绝零状态变更：tag 未写、task 仍 review、step 未推进
       const item = taskItemOf(wt)
@@ -610,7 +603,7 @@ describe("F. 独立复核返工回归", () => {
       await initSimpleWorktree(wt, CID)
       await buildSimpleDeadlock(wt)
       // 同一必做清单索引下，严格补交形态（已 passed + 待验证任务存在）仍免必做清单校验
-      __setMustDoIndex(makeQualityGateIndex())
+      useMustDoItems()
       await agent_submit.execute(
         { change_id: CID, step_id: "quality_review", verdict: "passed", verified_tasks: ["1", "2", "3"] },
         makeCtx(REVIEWER, wt),
