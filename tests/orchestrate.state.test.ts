@@ -1,15 +1,18 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readStateByChangeId, writeState } from "../src/core/state"
 import { generateIsolationNamespace } from "../src/core/namespace"
 import type { OrchestrateState } from "../src/core/types"
 
 const CID = "legacy-state"
+const STATE_TEST_ROOT = mkdtempSync(join(tmpdir(), "orchestrate-state-test-"))
+const WRITESTATE_TEST_ROOT = mkdtempSync(join(tmpdir(), "orchestrate-writestate-test-"))
 
 afterAll(() => {
-  rmSync("/tmp/orchestrate-state-test", { recursive: true, force: true })
-  rmSync("/tmp/orchestrate-writestate-test", { recursive: true, force: true })
+  rmSync(STATE_TEST_ROOT, { recursive: true, force: true })
+  rmSync(WRITESTATE_TEST_ROOT, { recursive: true, force: true })
 })
 
 function statePath(root: string): string {
@@ -20,21 +23,21 @@ function statePath(root: string): string {
 
 describe("state 兼容性", () => {
   test("旧 state 缺 tasks 时保留不兼容错误", async () => {
-    const root = `/tmp/orchestrate-state-test/${Date.now()}`
+    const root = join(STATE_TEST_ROOT, "legacy")
     writeFileSync(statePath(root), JSON.stringify({ changeId: CID, taskGroups: [{ id: "1" }] }))
 
     await expect(readStateByChangeId(root, CID)).rejects.toThrow(/旧版本格式，不兼容当前版本/)
   })
 
   test("JSON 无法读取时返回空状态", async () => {
-    const root = `/tmp/orchestrate-state-test/${Date.now()}-invalid`
+    const root = join(STATE_TEST_ROOT, "invalid")
     writeFileSync(statePath(root), "{")
 
     await expect(readStateByChangeId(root, CID)).resolves.toBeNull()
   })
 
   test("旧 state 缺 isolationNamespace 时自动补全", async () => {
-    const root = `/tmp/orchestrate-state-test/${Date.now()}-ns`
+    const root = join(STATE_TEST_ROOT, "ns")
     writeFileSync(
       statePath(root),
       JSON.stringify({
@@ -54,7 +57,7 @@ describe("state 兼容性", () => {
 })
 
 describe("writeState worktree 回写", () => {
-  const base = `/tmp/orchestrate-writestate-test/writestate-${Date.now()}`
+  const base = join(WRITESTATE_TEST_ROOT, "writestate")
   const mainRepo = join(base, "main")
   const worktreeDir = join(base, "worktree")
 

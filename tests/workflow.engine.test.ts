@@ -29,7 +29,7 @@ phases:
       - id: implement
         agents:
           - id: developer
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         transitions:
           on_pass: verify
           on_fail: analyze
@@ -64,7 +64,7 @@ phases:
       - id: implement
         agents:
           - id: developer
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         transitions:
           on_pass: verify_tool
           on_fail: analyze
@@ -221,7 +221,7 @@ phases:
       - id: implement
         agents:
           - id: dev
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         instructions:
           - 提交时须带 completed_task_ids 必传参数
         constraints:

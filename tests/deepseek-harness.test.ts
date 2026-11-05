@@ -4,12 +4,13 @@
  * 原生工具插件 bundle 与 skills。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { rmSync, existsSync, readFileSync, readdirSync } from "node:fs"
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import * as yaml from "js-yaml"
 
-const TMP_ROOT = "/tmp/deepseek-harness-test"
+const TMP_ROOT = mkdtempSync(join(tmpdir(), "deepseek-harness-test-"))
 
 afterAll(() => {
   rmSync(TMP_ROOT, { recursive: true, force: true })

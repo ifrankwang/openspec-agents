@@ -101,7 +101,7 @@ describe("S3: implement step", () => {
 // ═══════════════════════════════════════════════════
 
 describe("S4: verify_tool step", () => {
-  test("reviewer-tool 视角输出 ✅ 视图 + skill 名（quality-gate/code-efficiency）", async () => {
+  test("reviewer-tool 视角输出 ✅ 视图 + skill 名（quality-gate）", async () => {
     const { wt, root } = fresh()
     try {
       // 检查点增量检测下 reviewer-tool 视图会按「检查点→HEAD」变更分流；配置代码变更使该用例走全量分支
@@ -112,8 +112,8 @@ describe("S4: verify_tool step", () => {
       const out = await status.execute({ change_id: CID }, ctx.toolR)
       expect(out).toContain("# ✅ 当前轮到你执行")
       expect(out).toContain("## Skill 加载清单")
-      expect(out).toContain("`code-efficiency`")
       expect(out).toContain("`quality-gate`")
+      expect(out).not.toContain("`code-efficiency`")
       expect(out).toContain(`opx_agent_submit({ step_id: "verify_tool"`)
       // 不泄露旧流专属提交工具
       expect(out).not.toContain("opx_tool_review_submit")

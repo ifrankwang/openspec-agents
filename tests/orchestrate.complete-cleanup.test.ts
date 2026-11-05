@@ -745,7 +745,7 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
   test("其它 linked worktree 检出目标分支 → blockedMessage 带该工作树路径、零 git 变更命令", async () => {
     const { root, wt, fakeGit } = fresh()
     try {
-      const userWt = "/tmp/user-owned-wt-checkout"
+      const userWt = `/tmp/user-owned-wt-checkout-${Date.now()}`
       fakeGit.currentBranch = "develop"
       fakeGit.worktrees.set(userWt, { branch: "main", path: userWt })
 

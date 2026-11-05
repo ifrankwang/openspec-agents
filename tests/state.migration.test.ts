@@ -3,7 +3,8 @@
  * 自动升级为 workItems 并落盘；幂等、空 taskGroups、磁盘写入。
  */
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readStateByChangeId, writeState, migrateLegacyStateDir, readContextFromWorktree, writeContextToWorktree } from "../src/core/state"
 import { init } from "../src/adapters/opencode/tools"
@@ -11,9 +12,10 @@ import { INIT_PROJECT_STACKS, setupWithFakeGit, makeCtx, makeOrchCtx, teardown }
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "migration-test"
+const TMP_ROOT = mkdtempSync(join(tmpdir(), "state-migration-test-"))
 
 afterAll(() => {
-  rmSync("/tmp/state-migration-test", { recursive: true, force: true })
+  rmSync(TMP_ROOT, { recursive: true, force: true })
 })
 
 /** 旧布局 .opencode/.orchestrate_state 下的状态文件路径（构造旧数据用）。 */

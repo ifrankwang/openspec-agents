@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
-import { SKILL_SCAN_ROOTS } from "./scan.ts"
+import { effectiveSkillScanRoots, __setSkillScanRoots } from "./scan.ts"
 import { matchesSessionStacks, type SessionStacks } from "./stacks.ts"
 
 export interface SkillTagIndex {
@@ -30,9 +30,10 @@ function parseFrontmatterList(raw: string, field: FrontmatterListField): string[
 /**
  * 扫描 skill 目录的 frontmatter，建立 tag → skill 名 与 skill 名 → tags 双向索引，
  * 并分别索引 stacks（形态标签）、frameworks（框架标签）。
+ * 默认 roots 取 effectiveSkillScanRoots()（生产含用户级目录，测试可经 __setSkillScanRoots 钉死）。
  * 进程内缓存：roots 不变时返回同一实例，roots 变化时重建。
  */
-export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex {
+export function scanSkillTags(roots: string[] = effectiveSkillScanRoots()): SkillTagIndex {
   const key = roots.join("\u0000")
   if (cacheKey === key && cacheIndex) return cacheIndex
   const tagMap = new Map<string, string[]>()
@@ -73,6 +74,22 @@ export function scanSkillTags(roots: string[] = SKILL_SCAN_ROOTS): SkillTagIndex
 }
 
 /**
+ * 测试注入：把默认扫描根钉死并清空进程内索引缓存（与 __setKnownStackTags 同范式）。
+ * 传 REPO_SKILL_SCAN_ROOTS 使用例与开发者 home 目录解耦；传 null 恢复生产默认。
+ */
+export function __setSkillScanRootsForTest(roots: string[] | null): void {
+  __setSkillScanRoots(roots)
+  cacheKey = null
+  cacheIndex = null
+}
+
+/** 清空进程内索引缓存（测试复位用；roots 不变但目录内容变化时强制重扫）。 */
+export function __resetSkillCache(): void {
+  cacheKey = null
+  cacheIndex = null
+}
+
+/**
  * 按 capability tag 语义匹配 skill，并按会话项目栈过滤（形态/框架字段命中规则见 stacks.ts）。
  * 返回过滤后的 skill 名清单（不按 tech-stack-* 前缀分组，过滤统一在解析层完成）。
  * session 三种取值：
@@ -107,7 +124,3 @@ export function resolveSkillsForCapabilities(
   return { skillNames }
 }
 
-/** efficiency tag 命中的效率类 skill 名 */
-export function getEfficiencySkills(index: SkillTagIndex = scanSkillTags()): string[] {
-  return index.tagMap.get("efficiency") || []
-}

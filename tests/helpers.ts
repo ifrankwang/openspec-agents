@@ -1,6 +1,8 @@
 import { __setGitRunner, type GitRunner } from "../src/core/git"
 import { __setMustDoOverride, resolveStepMustDo } from "../src/core/tools/gate"
 import { __setKnownStackTags } from "../src/skills/stacks"
+import { __setSkillScanRootsForTest, __resetSkillCache } from "../src/skills/resolve"
+import { REPO_SKILL_SCAN_ROOTS } from "../src/skills/scan"
 import { loadWorkflowFile, resolveWorkflowPath } from "../src/core/workflow/loader"
 import { agent_submit } from "../src/adapters/opencode/tools"
 import type { ToolContext } from "../src/core/tools/types"
@@ -438,6 +440,7 @@ export const TEST_FRAMEWORKS = ["java", "vue", "react"]
  * + 必做项申报自动补申（见 installAutoMustDoChecks）。需要真实门禁拒绝行为的用例显式构造申报。
  */
 export function installTestSkillEnv(): void {
+  __setSkillScanRootsForTest(REPO_SKILL_SCAN_ROOTS)
   __setKnownStackTags({ stacks: TEST_STACKS, frameworks: TEST_FRAMEWORKS })
   installAutoMustDoChecks()
 }
@@ -648,6 +651,9 @@ export function teardown(tmpRoot: string): void {
   __setGitRunner(null)
   __setMustDoOverride(null)
   __setKnownStackTags(null)
+  // 复位为生产默认 roots 并清缓存，避免全局注入泄漏到后续测试文件
+  __setSkillScanRootsForTest(null)
+  __resetSkillCache()
   if (existsSync(tmpRoot)) {
     for (const entry of readdirSync(tmpRoot)) {
       try { rmSync(join(tmpRoot, entry), { recursive: true, force: true }) } catch {}

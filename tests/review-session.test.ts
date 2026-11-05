@@ -576,13 +576,14 @@ describe("防御性路径", () => {
   test("discoverDiskWorktrees 识别 review/ 前缀分支（与 task-group/ 同为可恢复磁盘痕迹）", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
-      fakeGit.worktrees.set("/tmp/wt-review", { branch: "review/review-pr-main-feature-x", path: "/tmp/wt-review" })
-      fakeGit.worktrees.set("/tmp/wt-group", { branch: "task-group/cid/1", path: "/tmp/wt-group" })
-      fakeGit.worktrees.set("/tmp/wt-main", { branch: "main", path: "/tmp/wt-main" })
+      const fakeWtRoot = `/tmp/wt-fake-${Date.now()}`
+      fakeGit.worktrees.set(`${fakeWtRoot}/review`, { branch: "review/review-pr-main-feature-x", path: `${fakeWtRoot}/review` })
+      fakeGit.worktrees.set(`${fakeWtRoot}/group`, { branch: "task-group/cid/1", path: `${fakeWtRoot}/group` })
+      fakeGit.worktrees.set(`${fakeWtRoot}/main`, { branch: "main", path: `${fakeWtRoot}/main` })
       const { discoverDiskWorktrees } = await import("../src/core/git")
       const found = await discoverDiskWorktrees(wt)
-      expect(found).toContainEqual({ branch: "review/review-pr-main-feature-x", path: "/tmp/wt-review" })
-      expect(found).toContainEqual({ branch: "task-group/cid/1", path: "/tmp/wt-group" })
+      expect(found).toContainEqual({ branch: "review/review-pr-main-feature-x", path: `${fakeWtRoot}/review` })
+      expect(found).toContainEqual({ branch: "task-group/cid/1", path: `${fakeWtRoot}/group` })
       expect(found.some((f) => f.branch === "main")).toBe(false)
     } finally { teardown(root) }
   })

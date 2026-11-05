@@ -3,14 +3,15 @@
  * MCP 配置分发、默认无人值守。
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { spawnSync } from "node:child_process"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
-const TMP_ROOT = "/tmp/adapter-inject-test"
+const TMP_ROOT = mkdtempSync(join(tmpdir(), "adapter-inject-test-"))
 
 afterAll(() => {
   rmSync(TMP_ROOT, { recursive: true, force: true })
@@ -47,6 +48,8 @@ function claudeValidate(target: string): { status: number; output: string } {
 }
 
 function hasClaudeCli(): boolean {
+  // CI 环境强制视为不可用：本机 CLI 版本差异会让 plugin validate 结果随环境分叉（本地挂/CI 不挂）
+  if (process.env.CI) return false
   return spawnSync("claude", ["--version"], { encoding: "utf-8" }).status === 0
 }
 

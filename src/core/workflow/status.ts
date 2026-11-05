@@ -11,7 +11,7 @@ import { agentToReviewDimension, agentToReviewLayer, readIssueSource } from "../
 import { resolveChildIssueFields } from "./reset.ts"
 import { taskListOf, issueChildrenOf } from "../task-children.ts"
 import {
-  renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
+  renderSkillSuggestions, renderWorktreeSection,
   renderAgentSummaries, renderDevMustDoDeclaration, renderTaskItem, formatFilePath, formatSeverity,
   isWorktreeReady, renderWorktreeNotReady, interpolateText, renderStateMismatchDiagnostic,
   extractDeploymentNoteLines,
@@ -722,9 +722,6 @@ function renderAgentWorking(
   lines.push("## 操作指引", "")
   let n = 0
   lines.push(`${n++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
-  const eff = renderEfficiencySteps(n)
-  lines.push(...eff.lines)
-  n = eff.nextNum
   if (tg.worktreePath && tg.baseRef) {
   lines.push(`${n++}. 用上方「变更范围」命令获取本任务组的已提交变更文件清单，作为本次实施/修改范围；审查/报告范围以当前 step 指令为准`)
   }

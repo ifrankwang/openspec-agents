@@ -178,7 +178,7 @@ phases:
       - id: implement
         agents:
           - id: developer
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         transitions:
           on_pass: verify
           on_fail: analyze

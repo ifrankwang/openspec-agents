@@ -12,8 +12,12 @@ import {
   scanSkillTags,
   type SkillTagIndex,
   resolveSkillsForCapabilities,
-  getEfficiencySkills,
 } from "../src/skills/resolve"
+import { __setSkillScanRootsForTest } from "../src/skills/resolve"
+import { REPO_SKILL_SCAN_ROOTS } from "../src/skills/scan"
+
+// 索引只取仓库内确定性 roots，避免用例结果随开发者 home 目录的用户级 skill 漂移
+__setSkillScanRootsForTest(REPO_SKILL_SCAN_ROOTS)
 import { loadWorkflow } from "../src/core/workflow/loader"
 import { renderSkillSuggestions } from "../src/core/views"
 import { stepAgentIds } from "../src/core/workflow/types"
@@ -21,9 +25,9 @@ import { __setKnownStackTags, knownFrameworks, knownStacks } from "../src/skills
 
 describe("resolveSkillsForCapabilities tag 匹配", () => {
   test("caps 命中 → skillNames 非空", () => {
-    const r = resolveSkillsForCapabilities(["efficiency"])
+    const r = resolveSkillsForCapabilities(["quality-gate"])
     expect(r.skillNames.length).toBeGreaterThan(0)
-    expect(r.skillNames).toContain("code-efficiency")
+    expect(r.skillNames).toContain("quality-gate")
   })
 
   test("api-testing 命中 api-test", () => {
@@ -96,7 +100,7 @@ describe("resolveSkillsForCapabilities tag 匹配", () => {
   })
 
   test("其他维度 tag 不命中架构演进审查 skill（归口边界防误伤）", () => {
-    for (const cap of ["maintainability", "security", "performance", "style", "db-design", "api-design", "api-testing", "dev-practices", "efficiency"]) {
+    for (const cap of ["maintainability", "security", "performance", "style", "db-design", "api-design", "api-testing", "dev-practices"]) {
       const r = resolveSkillsForCapabilities([cap])
       expect(r.skillNames).not.toContain("architecture-evolution")
     }
@@ -285,8 +289,8 @@ describe("scanSkillTags 进程内缓存", () => {
 
   test("skill 索引内容正确", () => {
     const a = scanSkillTags()
-    expect(a.skillTags.get("code-efficiency")).toEqual(["efficiency"])
-    expect(a.tagMap.get("efficiency")).toContain("code-efficiency")
+    expect(a.skillTags.get("quality-gate")).toEqual(["quality-gate"])
+    expect(a.tagMap.get("quality-gate")).toContain("quality-gate")
   })
 })
 
@@ -353,16 +357,6 @@ describe("frontmatter stacks / frameworks 解析与动态值域", () => {
   })
 })
 
-describe("getEfficiencySkills", () => {
-  test("efficiency tag 命中效率类 skill", () => {
-    expect(getEfficiencySkills()).toContain("code-efficiency")
-  })
-
-  test("不含 java-dev-practices（与 code-efficiency 解耦）", () => {
-    expect(getEfficiencySkills()).not.toContain("java-dev-practices")
-  })
-})
-
 describe("必做清单归属 workflow step（skill 不再声明）", () => {
   const MUST_DO_SKILLS = [
     "api-test", "test-design", "quality-gate",
@@ -400,16 +394,16 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
       const r = resolveSkillsForCapabilities(a?.capability_tags)
       expect(r.skillNames.length).toBeGreaterThan(0)
     }
-    expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design", "efficiency"])
-    expectResolvable("implement", "openspec-developer", ["efficiency", "api-testing", "e2e-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
-    expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate", "efficiency"])
-    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "e2e-testing", "test-design", "efficiency", "dev-practices", "cleanup"])
-    expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "efficiency", "tool-improvement"])
-    expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "efficiency", "tool-improvement"])
+    expectResolvable("analyze", "openspec-architect", ["architecture", "api-design", "db-design"])
+    expectResolvable("implement", "openspec-developer", ["api-testing", "e2e-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"])
+    expectResolvable("verify_tool", "openspec-reviewer-tool", ["quality-gate"])
+    expectResolvable("verify_task", "openspec-reviewer-task", ["api-testing", "e2e-testing", "test-design", "dev-practices", "cleanup"])
+    expectResolvable("verify_quality", "openspec-reviewer-style", ["style", "tool-improvement"])
+    expectResolvable("verify_quality", "openspec-reviewer-security", ["security", "tool-improvement"])
   })
 
   test("review.yaml / review-simple.yaml 的 implement capability_tags 含 e2e-testing（独立审查 fix 模式 dev 交付 e2e）", () => {
-    const expected = ["efficiency", "api-testing", "e2e-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"]
+    const expected = ["api-testing", "e2e-testing", "test-design", "quality-gate", "dev-practices", "db-design", "style", "architecture", "performance", "security", "maintainability", "cleanup"]
     for (const name of ["review.yaml", "review-simple.yaml"]) {
       const wf = readWf(name)
       const a = wf.stepMap.get("implement")!.step.agents.find((x) => x.id === "openspec-developer")
@@ -430,11 +424,11 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
   })
 
   test("agent 级 capability_tags 生效：style 命中 style 相关 skill，security 命中 security 相关 skill", () => {
-    const style = resolveSkillsForCapabilities(["style", "efficiency"])
+    const style = resolveSkillsForCapabilities(["style"])
     expect(style.skillNames).toContain("java-code-style")
     expect(style.skillNames).not.toContain("security-baseline")
     expect(style.skillNames).not.toContain("java-security")
-    const security = resolveSkillsForCapabilities(["security", "efficiency"])
+    const security = resolveSkillsForCapabilities(["security"])
     expect(security.skillNames).toContain("security-baseline")
     expect(security.skillNames).toContain("java-security")
     expect(security.skillNames).not.toContain("java-code-style")
@@ -449,8 +443,8 @@ describe("workflow YAML agent 级 capability_tags 可解析", () => {
       }
     }
     const fromYaml = resolveSkillsForCapabilities([...yamlTags])
-    expect(fromYaml.skillNames).toContain("code-efficiency")
     expect(fromYaml.skillNames).toContain("api-test")
+    expect(fromYaml.skillNames).toContain("quality-gate")
     expect(resolveSkillsForCapabilities(["tool-improvement"]).skillNames).toContain("java-quality-tool-improve")
   })
 })

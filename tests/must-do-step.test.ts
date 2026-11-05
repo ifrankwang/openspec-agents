@@ -131,7 +131,7 @@ phases:
           always: [no_such_item]
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -174,7 +174,7 @@ phases:
           no_such_stack: [compile]
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement
@@ -194,7 +194,7 @@ phases:
           always: compile
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency]
+            capability_tags: [quality-gate]
         transitions:
           on_pass: done
           on_fail: implement

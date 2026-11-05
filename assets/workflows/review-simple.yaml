@@ -34,7 +34,7 @@ phases:
       - id: implement
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency, api-testing, e2e-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
+            capability_tags: [api-testing, e2e-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
         must_do:
           always:
             - compile
@@ -74,7 +74,7 @@ phases:
       - id: quality_review
         agents:
           - id: openspec-reviewer
-            capability_tags: [quality-gate, api-testing, e2e-testing, test-design, dev-practices, efficiency, style, architecture, performance, security, maintainability, tool-improvement, cleanup]
+            capability_tags: [quality-gate, api-testing, e2e-testing, test-design, dev-practices, style, architecture, performance, security, maintainability, tool-improvement, cleanup]
         must_do:
           always:
             - env

@@ -45,10 +45,18 @@ function isSkillRoot(candidate: string): boolean {
 // 与 loader 的 workflow 缺失即抛错差异是有意为之——opx_* 工具全部依赖 workflow，缺失时 server 无可用性。
 const scanRoot = resolveSkillScanRoot(import.meta.url)
 
-export const SKILL_SCAN_ROOTS: string[] = [
+/**
+ * 不依赖开发者 home 目录的确定性扫描根：仅随包分发根 + 仓库内标准发现目录。
+ * 测试环境通过 __setSkillScanRoots 钉死到这组根，避免用例结果随用户级 skill 漂移。
+ */
+export const REPO_SKILL_SCAN_ROOTS: string[] = [
   ...(scanRoot ? [scanRoot] : []),
   resolve(projectRoot, ".agents", "skills"),
   resolve(projectRoot, ".opencode", "skills"),
+]
+
+export const SKILL_SCAN_ROOTS: string[] = [
+  ...REPO_SKILL_SCAN_ROOTS,
   join(homedir(), ".agents", "skills"),
   join(homedir(), ".config", "opencode", "skills"),
 ]
@@ -57,8 +65,19 @@ export const SKILL_SCAN_ROOTS: string[] = [
 // 源码形态探测根即仓库根 assets/skills（与改动前行为一致）；插件形态为插件根 skills/。
 export const DISTRIBUTED_SKILL_ROOTS: string[] = scanRoot ? [scanRoot] : []
 
+/** 测试注入的扫描根覆盖；null = 取 SKILL_SCAN_ROOTS 生产默认值。 */
+let rootsOverride: string[] | null = null
+
+export function __setSkillScanRoots(roots: string[] | null): void {
+  rootsOverride = roots ? [...roots] : null
+}
+
+export function effectiveSkillScanRoots(): string[] {
+  return rootsOverride ?? SKILL_SCAN_ROOTS
+}
+
 export function findSkillPath(name: string): string | null {
-  for (const root of SKILL_SCAN_ROOTS) {
+  for (const root of effectiveSkillScanRoots()) {
     const p = resolve(root, name, "SKILL.md")
     if (existsSync(p)) return p
   }

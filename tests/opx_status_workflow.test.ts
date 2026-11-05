@@ -122,10 +122,10 @@ describe("P6-B 新流动态视图", () => {
     // instructionBlock 文案保留
     expect(output).toContain("# ✅ 当前轮到你执行")
     expect(output).toContain("**必须**调用 `opx_agent_submit()` 提交")
-    // capability_tags [quality-gate, efficiency] → 解析出的 skill 名
+    // capability_tags [quality-gate] → 解析出的 skill 名（仅仓库内确定性索引）
     expect(output).toContain("## Skill 加载清单")
-    expect(output).toContain("`code-efficiency`")
     expect(output).toContain("`quality-gate`")
+    expect(output).not.toContain("`code-efficiency`")
     expect(output).toContain("## 操作指引")
     // 不泄露旧流专属提交工具
     expect(output).not.toContain("opx_tool_review_submit")
@@ -662,7 +662,7 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     }
     writeStateSync(wt, state)
 
-    // style 只命中 [style, efficiency] 对应 skill；security 只命中 [security, efficiency] 对应 skill
+    // style 只命中 [style, tool-improvement] 对应 skill；security 只命中 [security, tool-improvement] 对应 skill
     const styleOut = await status.execute({ change_id: CID }, makeCtx("openspec-reviewer-style", wt))
     expect(styleOut).toContain("## Skill 加载清单")
     expect(styleOut).toContain("`java-code-style`")

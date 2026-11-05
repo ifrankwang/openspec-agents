@@ -61,7 +61,7 @@ export {
 
 // views
 export {
-  renderSkillSuggestions, renderEfficiencySteps, renderWorktreeSection,
+  renderSkillSuggestions, renderWorktreeSection,
   renderAgentSummaries, formatFilePath, renderTaskItem, formatSeverity,
 } from "./views.ts"
 

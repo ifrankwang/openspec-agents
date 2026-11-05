@@ -441,7 +441,7 @@ describe("W7. set_worktree 自定义路径准入", () => {
 
     await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     await expect(
-      set_worktree.execute({ change_id: CID, worktree_path: "/tmp/outside-worktree" }, o)
+      set_worktree.execute({ change_id: CID, worktree_path: `/tmp/outside-worktree-${Date.now()}` }, o)
     ).rejects.toThrow(/超出/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}

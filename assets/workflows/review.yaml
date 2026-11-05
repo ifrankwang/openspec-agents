@@ -33,7 +33,7 @@ phases:
       - id: implement
         agents:
           - id: openspec-developer
-            capability_tags: [efficiency, api-testing, e2e-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
+            capability_tags: [api-testing, e2e-testing, test-design, quality-gate, dev-practices, db-design, style, architecture, performance, security, maintainability, cleanup]
         must_do:
           always:
             - compile
@@ -73,7 +73,7 @@ phases:
       - id: verify_tool
         agents:
           - id: openspec-reviewer-tool
-            capability_tags: [quality-gate, efficiency]
+            capability_tags: [quality-gate]
         must_do:
           always:
             - env
@@ -108,7 +108,7 @@ phases:
       - id: verify_task
         agents:
           - id: openspec-reviewer-task
-            capability_tags: [api-testing, e2e-testing, test-design, efficiency, dev-practices, cleanup]
+            capability_tags: [api-testing, e2e-testing, test-design, dev-practices, cleanup]
         must_do:
           always:
             - behavior_surface
@@ -144,15 +144,15 @@ phases:
       - id: verify_quality
         agents:
           - id: openspec-reviewer-style
-            capability_tags: [style, efficiency, tool-improvement]
+            capability_tags: [style, tool-improvement]
           - id: openspec-reviewer-architecture
-            capability_tags: [architecture, efficiency, tool-improvement]
+            capability_tags: [architecture, tool-improvement]
           - id: openspec-reviewer-performance
-            capability_tags: [performance, efficiency, tool-improvement]
+            capability_tags: [performance, tool-improvement]
           - id: openspec-reviewer-security
-            capability_tags: [security, efficiency, tool-improvement]
+            capability_tags: [security, tool-improvement]
           - id: openspec-reviewer-maintainability
-            capability_tags: [maintainability, efficiency, tool-improvement]
+            capability_tags: [maintainability, tool-improvement]
         must_do:
           always: []
         transitions:
