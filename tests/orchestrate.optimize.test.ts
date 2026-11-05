@@ -224,7 +224,7 @@ describe("B2. Recovery 阶段恢复", () => {
       const ctx = await setupToAnalyze(wt, CID)
       await driveToImplement(wt, CID)
       const r = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, ctx.orch)
-      expect(r).toBe("编排会话已初始化。")
+      expect(r).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -793,8 +793,10 @@ describe("B8. taskNumber 数字 ID 归一化 + init base_branch", () => {
   })
 
   test("init 显式传 base_branch → state.baseBranch 正确", async () => {
-    const { wt, root } = fresh()
+    const { wt, root, fakeGit } = fresh()
     try {
+      // 显式 base_branch 须为本地分支（新增存在性校验）
+      fakeGit.localBranches.add("develop")
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "develop" }, o)
       const state = JSON.parse(readFileSync(statePath(wt), "utf-8"))

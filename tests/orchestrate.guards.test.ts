@@ -268,7 +268,7 @@ describe("G4.1. init 重入", () => {
     try {
       await driveToImplement(wt, CID)
       const result = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
-      expect(result).toBe("编排会话已初始化。")
+      expect(result).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")

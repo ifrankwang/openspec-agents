@@ -1,13 +1,15 @@
 import path from "path"
-import { rmdir } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import type { Dirent } from "node:fs"
+import { copyFile, mkdir, readdir, readFile, rmdir, rm } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
-import { parseAllTaskGroupsFromMd, parseTasksMdForGroup, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
+import { parseTaskGroupsFromContent, parseTasksForGroupFromContent, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
 import type { ParsedTask } from "../tasks-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
@@ -704,6 +706,42 @@ function assertProjectStacks(args: InitParams): void {
   }
 }
 
+/**
+ * 读取 tasks.md 内容，来源按序回落（跨基准分支/换任务组重入 init 的关键路径）：
+ * ① state 已存在且活跃任务组 workItem.metadata.worktree_path 下该文件存在 → 读 worktree
+ *   （跨分支发起后主仓库工作树已无规划文档副本、重入换组时的常态）；
+ * ② 主仓库工作树存在 → 读 ctx.worktree（首次 init 常态）；
+ * ③ 以上都没有 → `git show <baseBranch>:openspec/changes/<changeId>/tasks.md` 取基准分支版本库内容
+ *   （baseBranch 传「会话固化的基准分支」优先，未固化时才用当前检出分支）。
+ * 三者都取不到返回 null，由调用方按原有错误文案报错。
+ */
+async function resolveTasksContent(
+  repoRoot: string,
+  state: OrchestrateState | null,
+  changeId: string,
+  baseBranch: string,
+): Promise<string | null> {
+  const rel = `openspec/changes/${changeId}/tasks.md`
+  if (state) {
+    const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
+    const worktreePath =
+      item && typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : null
+    if (worktreePath) {
+      const p = path.join(worktreePath, rel)
+      if (await pathExists(p)) {
+        try { return await readFile(p, "utf-8") } catch { /* 读失败回落下一来源 */ }
+      }
+    }
+  }
+  const mainPath = path.join(repoRoot, rel)
+  if (await pathExists(mainPath)) {
+    try { return await readFile(mainPath, "utf-8") } catch { /* 读失败回落下一来源 */ }
+  }
+  const shown = await runGitChecked(repoRoot, ["show", `${baseBranch}:${rel}`])
+  if (shown.success && shown.stdout.length > 0) return shown.stdout
+  return null
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_init")
 
@@ -746,9 +784,46 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     throw new Error(`mode 参数不合法，合法值：full、simple。传入值："${String(args.mode)}"。`)
   }
 
-  const parsedGroups = await parseAllTaskGroupsFromMd(ctx.worktree, changeId)
+  // base_branch 是 ref 而非严格 branch：只做非空 + 无空白字符等基本检查（完整分支名校验由 git check-ref-format 承担）；
+  // 显式传入时校验本地分支存在，错误早于任何状态变更且不落盘。
+  if (args.base_branch) {
+    if (!args.base_branch.trim() || /\s/.test(args.base_branch)) {
+      throw new Error(`base_branch 不合法："${args.base_branch}"。基准分支名不能为空或包含空白字符。`)
+    }
+    if (!(await isLocalBranch(ctx.worktree, args.base_branch))) {
+      const branches = await listLocalBranches(ctx.worktree)
+      throw new Error(
+        `base_branch "${args.base_branch}" 不是本地分支。当前本地分支：${branches.join("、") || "(无)"}。\n` +
+        `请传入已存在的本地分支名（远端分支请先在本地建分支跟踪后再传入）。`
+      )
+    }
+  }
+  const baseBranch = args.base_branch || await getCurrentBranch(ctx.worktree)
+  let state = await readStateByChangeId(ctx.worktree, changeId)
+  // 基准分支在首次 init 时固化（change 分支 fork 源与收口合并目标）：中途传不同值显式拒绝，不静默忽略。
+  if (state && args.base_branch && args.base_branch !== state.baseBranch) {
+    throw new Error(
+      `base_branch 与已固化的基准分支不一致：已固化 "${state.baseBranch}"，本次传入 "${args.base_branch}"。\n` +
+      `基准分支在 init 时固化、不可中途变更（change 分支的 fork 源与收口合并目标都是它）。` +
+      `请去掉 base_branch 参数沿用固化值，或重开 change。`
+    )
+  }
+  const wasCurrentGroup = state?.taskGroupId === args.task_group_id
+  // 已固化项目栈 → 要求本次 init 与之一致；旧会话无 stacks → 补齐（升级在途会话）
+  const stacksNote = state ? adoptOrAssertSessionStacks(state, args) : null
+
+  // 规划文档来源按序回落（worktree → 主仓库工作树 → 基准分支版本库）：跨分支发起后主仓库工作树
+  // 已无规划文档副本，换任务组重入 init 依赖该回落链才解析得到任务组。
+  // 第三级必须用「会话固化的基准分支」：state 已存在且本次未传 base_branch 时，当前检出分支可能已切走
+  // （跨分支发起/重入），拿当前检出分支去 git show 会读错分支甚至读不到。
+  const fallbackBaseBranch = state?.baseBranch || baseBranch
+  const tasksContent = await resolveTasksContent(ctx.worktree, state, changeId, fallbackBaseBranch)
+  const parsedGroups = tasksContent === null ? [] : parseTaskGroupsFromContent(tasksContent)
   if (parsedGroups.length === 0) {
-    throw new Error(`无法从 tasks.md 解析出任务组，请检查文件 openspec/changes/${changeId}/tasks.md。`)
+    throw new Error(
+      `无法从 tasks.md 解析出任务组，请检查文件 openspec/changes/${changeId}/tasks.md。\n` +
+      `跨分支会话可重传 base_branch 或先恢复 worktree（opx_orch_set_worktree）后重试。`
+    )
   }
   const targetGroup = parsedGroups.find((g) => g.id === args.task_group_id)
   if (!targetGroup) {
@@ -758,23 +833,11 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     )
   }
 
-  // 逐任务组解析 tasks.md 子任务（构造各 task WorkItem 的 task children 用）
+  // 逐任务组解析 tasks.md 子任务（构造各 task WorkItem 的 task children 用；同一文件内容一次读入）
   const tasksByGroup = new Map<string, ParsedTask[]>()
   for (const g of parsedGroups) {
-    tasksByGroup.set(g.id, await parseTasksMdForGroup(ctx.worktree, changeId, g.id))
+    tasksByGroup.set(g.id, parseTasksForGroupFromContent(tasksContent!, g.id))
   }
-
-  // base_branch 是 ref 而非严格 branch：只做非空 + 无空白字符等基本检查（完整分支名校验由 git check-ref-format 承担）
-  if (args.base_branch) {
-    if (!args.base_branch.trim() || /\s/.test(args.base_branch)) {
-      throw new Error(`base_branch 不合法："${args.base_branch}"。基准分支名不能为空或包含空白字符。`)
-    }
-  }
-  const baseBranch = args.base_branch || await getCurrentBranch(ctx.worktree)
-  let state = await readStateByChangeId(ctx.worktree, changeId)
-  const wasCurrentGroup = state?.taskGroupId === args.task_group_id
-  // 已固化项目栈 → 要求本次 init 与之一致；旧会话无 stacks → 补齐（升级在途会话）
-  const stacksNote = state ? adoptOrAssertSessionStacks(state, args) : null
 
   // state 已存在时的 mode 变更窗口校验/更新（位于 for 循环前——循环内非活跃组新建 item 与
   // applyRecoveryState 均读 state.mode；错误早于任何状态变更抛出，不落盘）：
@@ -928,6 +991,8 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   if (args.recovery) parts.push(`已恢复到 ${args.recovery.phase} 阶段。`)
   if (modeSwitchNote) parts.push(modeSwitchNote)
   if (stacksNote) parts.push(stacksNote)
+  // 回显生效的基准分支：发起侧据此确认 change 分支 fork 源与收口合并目标（不切主仓库检出分支）
+  parts.push(`\n\n- **基准分支**: \`${state.baseBranch}\``)
   // review_layer 在 simple 模式下无对应子层（仅 quality_review 单层审查），该参数接受但不生效：
   // 返回体显式警告，避免调用方误以为已按子层恢复
   if (args.recovery?.review_layer && (state.mode ?? "full") === "simple") {
@@ -994,6 +1059,320 @@ async function ensureChangeBranch(repoRoot: string, branch: string, baseBranch: 
   return true
 }
 
+// ─── 跨基准分支发起：规划文档落位（I1）───
+
+/** 递归列出目录下全部文件（返回相对路径，/ 分隔）；目录不存在或不可读时返回空数组。 */
+async function listFilesRecursive(root: string, prefix = ""): Promise<string[]> {
+  let entries: Dirent[] = []
+  try {
+    entries = await readdir(path.join(root, prefix), { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const files: string[] = []
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) files.push(...await listFilesRecursive(root, rel))
+    else if (entry.isFile()) files.push(rel)
+  }
+  return files
+}
+
+async function sha256OfFile(filePath: string): Promise<string> {
+  return createHash("sha256").update(await readFile(filePath)).digest("hex")
+}
+
+/** 自底向上删除空目录（只删空目录，非空目录保留；用于清理删完快照文件后的残留目录）。 */
+async function removeEmptyDirs(root: string): Promise<void> {
+  let entries: Dirent[] = []
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) await removeEmptyDirs(path.join(root, entry.name))
+  }
+  try {
+    await rmdir(root)
+  } catch {
+    /* 非空或已不存在：保留 */
+  }
+}
+
+/**
+ * 跨基准分支规划文档预检结论：
+ * - blocked：返回 blocked 文案，本轮零改动（不创建 worktree / change 分支）；
+ * - sync：创建 worktree 后在 bindWorktreeRefs 之前同步进 change 分支；
+ * - skipNote：不执行同步，仅把说明追加到返回体（基准分支已有同版本文档 / 工作树无副本）。
+ */
+interface CrossBranchPlanDecision {
+  blocked?: string
+  sync?: boolean
+  skipNote?: string
+}
+
+/** 规划文档已提交在当前检出分支、基准分支没有该目录时的 blocked 返回体。 */
+function renderCrossBranchPlanCommittedBlocked(opts: {
+  changeId: string
+  currentBranch: string
+  baseBranch: string
+}): string {
+  const { changeId, currentBranch, baseBranch } = opts
+  const changeDir = `openspec/changes/${changeId}`
+  const tmpWt = `/tmp/${normalizeSessionToken(changeId)}-${normalizeSessionToken(baseBranch)}`
+  return [
+    `- **status**: blocked`,
+    `- **原因**: 规划文档 \`${changeDir}/\` 已提交在当前检出分支 \`${currentBranch}\`，而基准分支 \`${baseBranch}\` 上没有该目录。change 工作副本从基准分支切出，会拿不到规划文档（后续解析任务组直接失败）；为避免把当前分支的规划文档搬成双份，本次未创建 worktree、未做任何改动。`,
+    `- **处理**: 把规划文档提交到基准分支后再重试，例如 \`git worktree add ${tmpWt} ${baseBranch}\` 临时检出基准分支、在临时工作树内 \`git add ${changeDir} && git commit -m "docs(openspec): add ${changeId} plan"\`、完成后 \`git worktree remove ${tmpWt}\`；或改以当前分支 \`${currentBranch}\` 为 base_branch 重开 change。`,
+  ].join("\n")
+}
+
+/** detached HEAD 下基准分支已自带规划文档时的跳过说明（不搬移、不做同步）。 */
+function planDetachedOnBaseNote(baseBranch: string, changeDir: string, localFileCount: number): string {
+  const localNote = localFileCount > 0 ? `，主仓库工作树里 ${localFileCount} 个同名副本未做处理` : ""
+  return `- **规划文档**: 基准分支 \`${baseBranch}\` 上已有 \`${changeDir}/\`，worktree 自带，未做同步（主仓库处于 detached HEAD${localNote}）。`
+}
+
+/** detached HEAD 且确有规划文档需要同步时的 blocked 返回体（无法判定检出分支，不同步）。 */
+function renderDetachedPlanSyncBlocked(opts: {
+  changeId: string
+  baseBranch: string
+  fileCount: number
+}): string {
+  const changeDir = `openspec/changes/${opts.changeId}`
+  return [
+    `- **status**: blocked`,
+    `- **原因**: 主仓库处于 detached HEAD，无法判定当前检出分支；基准分支 \`${opts.baseBranch}\` 上没有 \`${changeDir}/\`，而主仓库工作树里该目录有 ${opts.fileCount} 个未提交文件需要同步进变更分支，规划文档同步未执行。`,
+    `- **处理**: 请切到明确分支（如 \`git switch main\`）后重试；本次未创建新 worktree、未做任何改动。`,
+  ].join("\n")
+}
+
+/** 基准分支已有该 change 的规划文档、但与当前工作树版本不一致时的 blocked 返回体（不搬运不覆盖）。 */
+function renderBasePlanMismatchBlocked(opts: { changeId: string; baseBranch: string }): string {
+  const changeDir = `openspec/changes/${opts.changeId}`
+  return [
+    `- **status**: blocked`,
+    `- **原因**: 基准分支 \`${opts.baseBranch}\` 已有该 change 的规划文档且与当前工作树版本不一致，未做任何同步（避免覆盖基准分支已有内容或产生双份）。`,
+    `- **处理**: 用 \`git diff ${opts.baseBranch} -- ${changeDir}\` 核对后人工提交到基准分支，或删除重复副本后重试。`,
+  ].join("\n")
+}
+
+/** 规划文档已暂存（已 git add）未提交时的 blocked 返回体：此时同步会丢暂存态、删源后留下幽灵暂存条目。 */
+function renderStagedPlanBlocked(opts: { changeId: string; currentBranch: string }): string {
+  const changeDir = `openspec/changes/${opts.changeId}`
+  return [
+    `- **status**: blocked`,
+    `- **原因**: 主仓库工作树里 \`${changeDir}/\` 有已暂存未提交的条目（当前检出分支 \`${opts.currentBranch}\`），直接同步并删除主仓库副本会留下幽灵暂存条目；本次未创建 worktree、未做任何改动。`,
+    `- **处理**: 先提交（\`git commit\`）或取消暂存（\`git restore --staged -- ${changeDir}\`）后重试。`,
+  ].join("\n")
+}
+
+/** 基准分支已有同版本文档时的跳过说明。 */
+function planAlreadyOnBaseNote(baseBranch: string, changeDir: string): string {
+  return `- **规划文档**: 基准分支 \`${baseBranch}\` 已有同一 change 的规划文档（\`${changeDir}/\`，与当前工作树版本一致），worktree 自带，未做同步。`
+}
+
+/**
+ * 规划文档逐文件比对基准分支版本：路径集合与 blob oid 全部一致才算「同版本」。
+ * 基准侧用 `git rev-parse <base>:<path>`、工作树侧用 `git hash-object <file>`（同为 blob oid 口径）。
+ */
+async function isSamePlanDocsAsBase(
+  repoRoot: string,
+  baseBranch: string,
+  changeDir: string,
+  basePaths: string[],
+  localFiles: string[],
+): Promise<boolean> {
+  if (basePaths.length !== localFiles.length) return false
+  const baseSet = new Set(basePaths)
+  const sourceDir = path.join(repoRoot, changeDir)
+  for (const rel of localFiles) {
+    const relPath = `${changeDir}/${rel}`
+    if (!baseSet.has(relPath)) return false
+    const baseOid = await blobOidInRef(repoRoot, baseBranch, relPath)
+    const localOid = await hashObjectOfFile(repoRoot, path.join(sourceDir, rel))
+    if (baseOid !== localOid) return false
+  }
+  return true
+}
+
+/**
+ * 跨基准分支发起前的规划文档预检（全部为只读判断，均在创建 worktree 之前完成，blocked 即零改动）：
+ * - detached HEAD（无法判定检出分支）→ blocked；
+ * - 基准分支已有该目录 → 与主仓库工作树逐文件比对：
+ *   工作树无副本（worktree fork 自带）或逐文件同版本 → 跳过同步；有不一致 → blocked；
+ * - 基准分支没有该目录 → 当前分支 HEAD 已提交 → blocked；已暂存未提交 → blocked；否则待同步。
+ */
+async function resolveCrossBranchPlan(
+  repoRoot: string,
+  state: OrchestrateState,
+  currentBranch: string,
+): Promise<CrossBranchPlanDecision> {
+  const changeDir = `openspec/changes/${state.changeId}`
+  const basePaths = await listTreePaths(repoRoot, state.baseBranch, changeDir)
+  const sourceDir = path.join(repoRoot, changeDir)
+  const localFiles = (await pathExists(sourceDir)) ? await listFilesRecursive(sourceDir) : []
+
+  if (basePaths.length > 0) {
+    if (localFiles.length === 0) return { sync: false, skipNote: planAlreadyOnBaseNote(state.baseBranch, changeDir) }
+    if (await isSamePlanDocsAsBase(repoRoot, state.baseBranch, changeDir, basePaths, localFiles)) {
+      return { sync: false, skipNote: planAlreadyOnBaseNote(state.baseBranch, changeDir) }
+    }
+    return { blocked: renderBasePlanMismatchBlocked({ changeId: state.changeId, baseBranch: state.baseBranch }) }
+  }
+
+  if ((await listTreePaths(repoRoot, "HEAD", changeDir)).length > 0) {
+    return {
+      blocked: renderCrossBranchPlanCommittedBlocked({
+        changeId: state.changeId,
+        currentBranch,
+        baseBranch: state.baseBranch,
+      }),
+    }
+  }
+
+  // 已暂存（非 `??` 未跟踪）条目：同步会丢暂存态、删源后留下幽灵暂存条目，直接 blocked
+  const statusRes = await runGitChecked(repoRoot, ["status", "--porcelain", "-uall", "--", changeDir])
+  if (!statusRes.success) throw new Error(`无法读取主仓库工作区状态：${statusRes.stderr}`)
+  const nonUntracked = statusRes.stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !l.startsWith("??"))
+  if (nonUntracked.length > 0) {
+    return { blocked: renderStagedPlanBlocked({ changeId: state.changeId, currentBranch }) }
+  }
+  return { sync: true }
+}
+
+/**
+ * detached HEAD 下的规划文档预检（无法判定当前检出分支，不做任何搬移）：
+ * 仅当「基准分支没有该 change 的规划文档（listTreePaths 为空）且主仓库工作树该目录有未提交文件需要
+ * 同步」时才 blocked；基准分支已自带文档、或工作树无文件（无事可同步）时放行，按既有 worktree 创建
+ * 逻辑继续（worktree 从 state.baseBranch 切出，自带基准分支上的文档）。
+ */
+async function resolveDetachedPlan(repoRoot: string, state: OrchestrateState): Promise<CrossBranchPlanDecision> {
+  const changeDir = `openspec/changes/${state.changeId}`
+  const basePaths = await listTreePaths(repoRoot, state.baseBranch, changeDir)
+  const sourceDir = path.join(repoRoot, changeDir)
+  const localFiles = (await pathExists(sourceDir)) ? await listFilesRecursive(sourceDir) : []
+  if (basePaths.length > 0) {
+    return { sync: false, skipNote: planDetachedOnBaseNote(state.baseBranch, changeDir, localFiles.length) }
+  }
+  if (localFiles.length === 0) return { sync: false }
+  return {
+    blocked: renderDetachedPlanSyncBlocked({
+      changeId: state.changeId,
+      baseBranch: state.baseBranch,
+      fileCount: localFiles.length,
+    }),
+  }
+}
+
+/**
+ * 跨基准分支发起的规划文档落位（调用方已完成 resolveCrossBranchPlan 预检，仅 sync 结论走到这里）：
+ * 主仓库该目录为未跟踪/未暂存内容 → 复制进 change worktree，在 worktree 内单独提交（worktree 有独立
+ * index，不触碰主仓库 index）；提交成功后复核 HEAD 已覆盖全部复制文件，再逐文件哈希复核并删除主仓库
+ * 未跟踪副本。幂等：worktree 已含相同内容时 add 无暂存变化、不产生重复提交。
+ * 失败路径保证「主仓库副本删除」晚于「worktree 提交 + 提交内容复核」——任一环节失败都不删主仓库副本。
+ */
+async function syncChangePlanDocs(repoRoot: string, worktreePath: string, state: OrchestrateState): Promise<string> {
+  const changeDir = `openspec/changes/${state.changeId}`
+  const sourceDir = path.join(repoRoot, changeDir)
+  if (!(await pathExists(sourceDir))) return ""
+  const files = await listFilesRecursive(sourceDir)
+  if (files.length === 0) return ""
+  if (!(await isWorktreeClean(worktreePath))) {
+    throw new Error(
+      `worktree "${worktreePath}" 存在未提交内容，无法同步主仓库规划文档。\n` +
+      `请先在该 worktree 内 commit 或 stash 后重试（主仓库副本未做任何删除）。`
+    )
+  }
+
+  // 逐文件复制并记录内容哈希（删除前复核，避免删掉用户后来的改动）
+  const hashes = new Map<string, string>()
+  for (const rel of files) {
+    const src = path.join(sourceDir, rel)
+    const dst = path.join(worktreePath, changeDir, rel)
+    hashes.set(rel, await sha256OfFile(src))
+    await mkdir(path.dirname(dst), { recursive: true })
+    await copyFile(src, dst)
+  }
+
+  const addResult = await runGitChecked(worktreePath, ["add", "--", changeDir])
+  if (!addResult.success) {
+    throw new Error(`worktree 内规划文档 git add 失败（主仓库副本未删除）：${addResult.stderr}`)
+  }
+  const staged = await runGitChecked(worktreePath, ["diff", "--cached", "--name-only", "--", changeDir])
+  if (!staged.success) {
+    throw new Error(`无法核对 worktree 暂存内容（主仓库副本未删除）：${staged.stderr}`)
+  }
+  const stagedFiles = staged.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+  let commitNote = ""
+  if (stagedFiles.length > 0) {
+    const commitResult = await runGitChecked(worktreePath, ["commit", "-m", "docs(openspec): sync change plan into change branch"])
+    if (!commitResult.success) {
+      throw new Error(
+        `worktree 内规划文档 git commit 失败（主仓库副本未删除，规划文档已复制到 worktree 但未提交）：${commitResult.stderr}\n` +
+        `请先在 worktree 内处理暂存区后重试。`
+      )
+    }
+    const commitOid = (await runGit(worktreePath, ["rev-parse", "HEAD"])).trim()
+    commitNote = commitOid ? `、commit \`${commitOid}\`` : ""
+  }
+
+  // 提交结果复核：HEAD 必须覆盖全部已复制文件。全部文件被 .gitignore 忽略等场景下 add/commit 可能「看似成功」
+  // 但内容没进版本库，此时删源会让规划文档只剩 worktree 里未跟踪的副本——不删源、报错交人工处理。
+  const committed = new Set(await listTreePaths(worktreePath, "HEAD", changeDir))
+  const missing = files.filter((rel) => !committed.has(`${changeDir}/${rel}`))
+  if (missing.length > 0) {
+    throw new Error(
+      `规划文档未全部提交到变更分支（缺少：${missing.join("、")}），已跳过删除主仓库副本。\n` +
+      `常见原因：文件被 .gitignore 忽略。请人工核对后执行 \`git -C '${worktreePath}' add -f -- ${changeDir}\` 并提交，` +
+      `或删除主仓库未跟踪副本：\`rm -rf '${sourceDir}'\`。`
+    )
+  }
+
+  // 删除前重新列一次目录：同步期间出现快照外新文件说明用户正在改这份文档 → 中止，不删任何文件
+  const currentFiles = await listFilesRecursive(sourceDir)
+  const snapshot = new Set(files)
+  const extra = currentFiles.filter((rel) => !snapshot.has(rel))
+  if (extra.length > 0) {
+    throw new Error(
+      `主仓库规划文档目录出现快照外新文件（${extra.join("、")}），已中止删除，未删除任何文件。\n` +
+      `请人工核对后删除主仓库副本：\`rm -rf '${sourceDir}'\`。`
+    )
+  }
+
+  // 删除前逐文件哈希核对：任一文件内容已变化则整体不删，避免删掉用户后来的改动
+  const changed: string[] = []
+  for (const rel of files) {
+    const src = path.join(sourceDir, rel)
+    if (!(await pathExists(src)) || (await sha256OfFile(src)) !== hashes.get(rel)) changed.push(rel)
+  }
+  if (changed.length > 0) {
+    throw new Error(
+      `主仓库规划文档在同步过程中被修改，已跳过删除（worktree 已提交，内容不会丢失）：${changed.join("、")}。\n` +
+      `请人工核对后删除主仓库未跟踪副本：\`rm -rf '${sourceDir}'\`。`
+    )
+  }
+
+  // 只删快照内文件，再自底向上清理空目录（不整体 rm -rf，避免误删同步期间新增内容）
+  for (const rel of files) {
+    try {
+      await rm(path.join(sourceDir, rel), { force: true })
+    } catch (e) {
+      throw new Error(
+        `主仓库规划文档副本删除失败（${rel}）：${e instanceof Error ? e.message : String(e)}。\n` +
+        `worktree 已提交、内容安全，请人工删除主仓库副本：\`rm -rf '${sourceDir}'\`。`
+      )
+    }
+  }
+  await removeEmptyDirs(sourceDir)
+  return `- **规划文档**: 已从主仓库工作树同步到变更分支（${files.length} 个文件${commitNote}），主仓库工作树副本已清理。`
+}
+
 /**
  * change 会话常驻 worktree 就位（create-or-reuse）：
  * - 分支由 ensureChangeBranch 保证存在（首个任务组从基准 tip 创建，后续任务组复用）；
@@ -1005,6 +1384,8 @@ async function ensureChangeBranch(repoRoot: string, branch: string, baseBranch: 
  *   目录由 git 拒绝，透传错误提示人工处理）；
  *   ③目录存在且检出本分支 → 脏分类：仅 openspec/ 路径脏 → 自动 commit 兜底（与主仓库侧对称）；
  *   含代码文件脏 → 拒绝并提示人工处理；
+ * - 跨基准分支发起时，规划文档同步（或跳过说明）在 bindWorktreeRefs 之前执行：保证 scope_start_oid
+ *   起点不含本次同步提交，同步文档不会被算进本任务组的审查范围；
  * - 就位后 bindWorktreeRefs 绑定引用并记录任务组 scope 端点。
  */
 async function ensureChangeWorktree(
@@ -1013,7 +1394,12 @@ async function ensureChangeWorktree(
   item: WorkItem,
   branch: string,
   defaultPath: string,
-): Promise<{ path: string; reused: boolean }> {
+  plan: { sync: boolean; skipNote: string },
+): Promise<{ path: string; reused: boolean; planNote: string }> {
+  /** 规划文档落位：同步必须在 bindWorktreeRefs 之前完成（scope 起点不含同步提交）。 */
+  const applyPlan = async (worktreePath: string): Promise<string> =>
+    plan.sync ? await syncChangePlanDocs(repoRoot, worktreePath, state) : plan.skipNote
+
   await ensureChangeBranch(repoRoot, branch, state.baseBranch)
 
   const wtList = await runGit(repoRoot, ["worktree", "list"])
@@ -1028,8 +1414,9 @@ async function ensureChangeWorktree(
     // 目录不存在：管理记录残留（幽灵 worktree）时先 prune，再全新创建 checkout change 分支
     await runGitChecked(repoRoot, ["worktree", "prune"])
     await runGit(repoRoot, ["worktree", "add", targetPath, branch])
+    const planNote = await applyPlan(targetPath)
     await bindWorktreeRefs(item, targetPath, branch)
-    return { path: targetPath, reused: false }
+    return { path: targetPath, reused: false, planNote }
   }
 
   if (!registeredPath) {
@@ -1041,8 +1428,9 @@ async function ensureChangeWorktree(
         `请人工确认该目录内容并处理（删除或迁移）后重试。`
       )
     }
+    const planNote = await applyPlan(targetPath)
     await bindWorktreeRefs(item, targetPath, branch)
-    return { path: targetPath, reused: false }
+    return { path: targetPath, reused: false, planNote }
   }
 
   // 目录存在且检出本分支 → 复用候选：脏分类（openspec/ 脏自动 commit 兜底；代码文件脏拒绝）
@@ -1066,8 +1454,9 @@ async function ensureChangeWorktree(
     const commitResult = await runGitChecked(targetPath, ["commit", "-m", "docs(openspec): auto-commit before worktree reuse"])
     if (!commitResult.success) throw new Error(`worktree openspec 目录 git commit 失败：${commitResult.stderr}`)
   }
+  const planNote = await applyPlan(targetPath)
   await bindWorktreeRefs(item, targetPath, branch)
-  return { path: targetPath, reused: true }
+  return { path: targetPath, reused: true, planNote }
 }
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
@@ -1108,15 +1497,42 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
       : path.join(repoRoot, ".worktree", state.changeId, "ws")
   }
 
-  const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
-  if (changeStatus.trim().length > 0) {
-    const addResult = await runGitChecked(repoRoot, ["add", `openspec/changes/${state.changeId}/`])
-    if (!addResult.success) throw new Error(`change 目录 git add 失败：${addResult.stderr}`)
-    const commitResult = await runGitChecked(repoRoot, ["commit", "-m", "docs(openspec): auto-commit before worktree setup"])
-    if (!commitResult.success) throw new Error(`change 目录 git commit 失败：${commitResult.stderr}`)
+  // 跨基准分支发起（主仓库当前检出分支 ≠ 会话固化的基准分支）：规划文档不能按旧路径自动 commit 到
+  // 当前检出分支，改由 worktree 创建后同步进 change 分支；两者相等时保持既有行为不变。
+  const currentBranch = isReview ? "" : (await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
+  // detached HEAD 无法判定检出分支：仅在确有规划文档需要同步时 blocked（基准分支已自带文档、
+  // 或工作树无文件可同步时放行，按既有 worktree 创建逻辑继续）。
+  const detached = !isReview && (currentBranch === "" || currentBranch === "HEAD")
+  const crossBranch = !isReview && !detached && currentBranch !== state.baseBranch
+  // 规划文档预检（只读）：detached / 跨分支的各类分流都在此完成，blocked 时不创建 worktree、零改动。
+  let planSync = false
+  let planSkipNote = ""
+  if (detached) {
+    const plan = await resolveDetachedPlan(repoRoot, state)
+    if (plan.blocked) return plan.blocked
+    planSkipNote = plan.skipNote ?? ""
+  } else if (crossBranch) {
+    const plan = await resolveCrossBranchPlan(repoRoot, state, currentBranch)
+    if (plan.blocked) return plan.blocked
+    planSync = plan.sync ?? false
+    planSkipNote = plan.skipNote ?? ""
+  }
+
+  // 主仓库 openspec 变更目录自动提交仅在「当前检出分支 == 基准分支」时执行（跨分支走新路径，
+  // 不得触碰主仓库 index，否则规划文档会被提交到当前分支而与 change 分支脱节；detached 无法判定
+  // 检出分支，同样不做自动提交）
+  if (!detached && !crossBranch) {
+    const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
+    if (changeStatus.trim().length > 0) {
+      const addResult = await runGitChecked(repoRoot, ["add", `openspec/changes/${state.changeId}/`])
+      if (!addResult.success) throw new Error(`change 目录 git add 失败：${addResult.stderr}`)
+      const commitResult = await runGitChecked(repoRoot, ["commit", "-m", "docs(openspec): auto-commit before worktree setup"])
+      if (!commitResult.success) throw new Error(`change 目录 git commit 失败：${commitResult.stderr}`)
+    }
   }
 
   let reused = false
+  let planNote = ""
   if (isReview) {
     const wtList = await runGit(repoRoot, ["worktree", "list"])
     const existingLine = wtList.split("\n").find((l) => {
@@ -1170,9 +1586,13 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
       }
     }
   } else {
-    const ensured = await ensureChangeWorktree(repoRoot, state, item, branch, wtPath)
+    const ensured = await ensureChangeWorktree(repoRoot, state, item, branch, wtPath, {
+      sync: planSync,
+      skipNote: planSkipNote,
+    })
     wtPath = ensured.path
     reused = ensured.reused
+    planNote = ensured.planNote
   }
 
   await writeState(ctx.worktree, state)
@@ -1187,6 +1607,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     `- **状态**: ${reused ? "复用已有 worktree" : "已创建 worktree"}`,
     `- **路径**: \`${item.metadata["worktree_path"]}\``,
     `- **分支**: \`${branch}\``,
+    ...(planNote ? ["", planNote] : []),
   ].join("\n")
 }
 

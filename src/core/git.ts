@@ -214,6 +214,34 @@ export async function listLocalBranches(worktree: string): Promise<string[]> {
   return out.split("\n").map((l) => l.trim()).filter(Boolean)
 }
 
+/**
+ * 读取指定 ref 下某路径的 blob oid（`git rev-parse <ref>:<path>`）。
+ * 用于跨基准分支的规划文档逐文件比对（与 hashObjectOfFile 同为 blob oid 口径）；失败抛错不静默。
+ */
+export async function blobOidInRef(worktree: string, ref: string, relPath: string): Promise<string> {
+  const r = await runGitChecked(worktree, ["rev-parse", `${ref}:${relPath}`])
+  if (!r.success) throw new Error(`无法读取 ${ref}:${relPath} 的版本库对象：${r.stderr}`)
+  return r.stdout
+}
+
+/** 计算工作树文件内容的 blob oid（`git hash-object <file>`），与 blobOidInRef 同口径可比对。 */
+export async function hashObjectOfFile(worktree: string, filePath: string): Promise<string> {
+  const r = await runGitChecked(worktree, ["hash-object", filePath])
+  if (!r.success) throw new Error(`无法计算 "${filePath}" 的内容哈希：${r.stderr}`)
+  return r.stdout
+}
+
+/**
+ * 列出某 ref 指定目录下的全部路径（`git ls-tree -r --name-only <rev> -- <dir>`）。
+ * 返回空数组表示该目录未提交到该 ref（工作树里是未跟踪/未暂存内容）；命令失败抛错不静默降级，
+ * 调用方据此判定「规划文档是否已提交到当前分支」。
+ */
+export async function listTreePaths(worktree: string, rev: string, dirPath: string): Promise<string[]> {
+  const r = await runGitChecked(worktree, ["ls-tree", "-r", "--name-only", rev, "--", dirPath])
+  if (!r.success) throw new Error(`无法读取 ${rev} 下 "${dirPath}" 的版本库内容：${r.stderr}`)
+  return r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+}
+
 export async function isWorktreeClean(worktree: string): Promise<boolean> {
   const out = await runGit(worktree, ["status", "--porcelain"])
   return out.length === 0

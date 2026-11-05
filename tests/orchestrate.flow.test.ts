@@ -50,8 +50,10 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
   })
 
   test("init 显式传 base_branch 正确使用", async () => {
-    const { wt, root } = fresh()
+    const { wt, root, fakeGit } = fresh()
     try {
+      // 显式 base_branch 须为本地分支（新增存在性校验）
+      fakeGit.localBranches.add("release/1.0")
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "release/1.0" }, o)
       expect(stateOf(wt).baseBranch).toBe("release/1.0")

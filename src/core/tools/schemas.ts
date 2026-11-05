@@ -217,7 +217,7 @@ export const orchInitSchema: JSONSchema = {
     },
     base_branch: {
       type: "string",
-      description: "基准分支名（如 main、develop），作为 change 分支（change/{changeId}）的 fork 源与收口合并目标。未传则自动从当前 git 分支推导。仅 change 会话入口有效。",
+      description: "基准分支名（如 main、develop），作为 change 分支（change/{changeId}）的 fork 源与收口合并目标。须为已存在的本地分支（远端引用不支持）；未传则自动从当前 git 分支推导。基准分支在 init 时固化，重入传不同值会被拒绝；主仓库检出分支不需要切换。仅 change 会话入口有效。",
     },
     recovery: recoverySchema,
     project_stacks: {

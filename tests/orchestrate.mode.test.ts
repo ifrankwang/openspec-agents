@@ -280,14 +280,14 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
       // 同组重复初始化传相同 mode：无提示
       const out1 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
-      expect(out1).toBe("编排会话已初始化。")
+      expect(out1).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
       // 切组不传 mode：沿用固化模式
       const out2 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2" }, o)
-      expect(out2).toBe("编排会话已初始化。")
+      expect(out2).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
       expect(stateOf(wt).mode).toBe("simple")
       // 切组传相同 mode：同样无提示
       const out3 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
-      expect(out3).toBe("编排会话已初始化。")
+      expect(out3).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })

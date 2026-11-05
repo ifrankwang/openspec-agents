@@ -78,6 +78,10 @@ export function renderWorktreeSection(
 ): string[] {
   const lines: string[] = []
   lines.push("## Worktree", "")
+  // 基准分支（change 会话）：worktree 分支的 fork 源与收口合并目标，可能在主仓库未检出的分支上
+  if (state.kind !== "review") {
+    lines.push(`- **基准分支**: \`${state.baseBranch}\``)
+  }
   if (tg.worktreePath) {
     lines.push(`- **路径**: \`${tg.worktreePath}\``)
     lines.push(`- **分支**: \`${tg.branchName || "(none)"}\``)
