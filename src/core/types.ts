@@ -11,9 +11,13 @@ export type TaskStatus = typeof TASK_STATUSES[number]
 export const ISSUE_STATUSES = ["open", "submitted", "rejected", "verified", "exemption_requested", "exempted"] as const
 export type IssueStatus = typeof ISSUE_STATUSES[number]
 
+/** 历史阶段枚举（旧 TaskGroupState 投影兼容用）：实施流程首轮不再从 task_analysis 进入，
+ *  analyze step 仅作 implement 上报 blocker 后的回退落点。 */
 export type Phase = "task_analysis" | "dev_impl" | "review" | "completed"
 
-/** 恢复（recovery）可恢复的阶段合法值，与 InitParams.recovery.phase 值域一致。 */
+/** 恢复（recovery）可恢复的阶段合法值，与 InitParams.recovery.phase 值域一致。
+ *  task_analysis 在两种模式下均等同 dev_impl（重置本组任务进度并从 implement 开始），
+ *  保留该值仅用于重制任务组与模式切换窗口。 */
 export const BUILD_PHASE_TARGETS = ["task_analysis", "dev_impl", "review"] as const
 export type BuildPhaseTarget = typeof BUILD_PHASE_TARGETS[number]
 
@@ -32,8 +36,9 @@ export type OrchestrateStatus = "not_started" | "in_progress" | "completed"
 export type DimensionVerdict = "pending" | "passed" | "failed"
 export type QualityLayerProgress = Record<ReviewDimension, DimensionVerdict>
 
-/** 流程模式：full（默认，analyze → implement → 三重审查+收尾验证）或 simple（implement → quality_review → done；
- *  verify_cleanup 仅作收口漂移/冲突回退落点，正常流转不经过）。 */
+/** 流程模式：full=（implement → 三重审查+收尾验证；analyze 仅作 implement 上报 blocker 后的回退落点）
+ *  或 simple（implement → quality_review → done；verify_cleanup 仅作收口漂移/冲突回退落点，正常流转不经过）。
+ *  两种模式的初始落点一致为 implement（文档复核前移到提案流程）。 */
 export type WorkflowMode = "full" | "simple"
 
 /** 独立审查会话的审查范围类型：pr=按 base..head 分支区间审查，full=全量代码库审查。 */

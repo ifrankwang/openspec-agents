@@ -73,9 +73,9 @@ function makeTask(id: string, title: string, overrides: Record<string, unknown> 
   }
 }
 
-/** 直接渲染 working 视图（读取仓库 task.yaml，聚焦 status 渲染逻辑）。 */
-function renderWorking(item: any, stepId: string, agent: string): string {
-  const workflow = loadWorkflow(readFileSync(join(import.meta.dir, "../assets/workflows/task.yaml"), "utf8"))
+/** 直接渲染 working 视图（默认读取仓库 task.yaml；simple 模式传 task-simple.yaml），聚焦 status 渲染逻辑。 */
+function renderWorking(item: any, stepId: string, agent: string, workflowFile = "task.yaml"): string {
+  const workflow = loadWorkflow(readFileSync(join(import.meta.dir, "../assets/workflows", workflowFile), "utf8"))
   const state = {
     changeId: "cid", isolationNamespace: "ns", taskGroupId: "1", baseBranch: "main",
     workItems: [item], createdAt: "", updatedAt: "",
@@ -239,14 +239,43 @@ describe("common + step 语义渲染", () => {
     expect(out).not.toContain("{{notes}}")
   })
 
-  test("implement：执行边界缺失 → 占位符保留原文", () => {
+  test("implement：执行边界缺失 → 渲染「整个 worktree」默认文案，不出现字面占位符", () => {
     const item = makeItem({ phase: "in_progress", currentStep: "implement" })
     const out = renderWorking(item, "implement", "openspec-developer")
-    expect(out).toContain("允许变更目录范围：{{allowed_directories}}")
-    expect(out).toContain("允许引用包范围：{{allowed_packages}}")
-    expect(out).toContain("实施前请注意遵守：{{notes}}")
+    // 边界由提案阶段产出到 clarify.md、init 解析后落 metadata；缺失时按「整个 worktree」降级
+    expect(out).toContain("允许变更目录范围：整个 worktree（未从 clarify.md 解析到执行边界）")
+    expect(out).toContain("允许引用包范围：不适用（未产出执行边界）")
+    expect(out).toContain("实施前请注意遵守：无额外说明")
+    expect(out).not.toContain("{{allowed_directories}}")
+    expect(out).not.toContain("{{allowed_packages}}")
+    expect(out).not.toContain("{{notes}}")
     // common.constraints 中 worktree_path 有值 → 已插值
     expect(out).toContain("所有 edit/write 操作限定在 /wt 内")
+    // 指令层同步给出边界来源与降级口径
+    expect(out).toContain("执行边界以视图为准（来源 clarify.md，未解析到时默认整个 worktree）")
+  })
+
+  test("task-simple：implement 约束边界占位符按 clarify.md 边界插值，缺失时回落默认文案", () => {
+    const withBoundary = makeItem({
+      phase: "in_progress",
+      currentStep: "implement",
+      metadata: { execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "坑位提醒" } },
+    })
+    const out = renderWorking(withBoundary, "implement", "openspec-developer", "task-simple.yaml")
+    expect(out).toContain("允许变更目录范围：src")
+    expect(out).toContain("允许引用包范围：com.t")
+    expect(out).toContain("实施前请注意遵守：坑位提醒")
+    expect(out).not.toContain("{{allowed_directories}}")
+    expect(out).not.toContain("{{allowed_packages}}")
+    expect(out).not.toContain("{{notes}}")
+
+    // 未解析到 clarify.md 边界：两种模式共用 status.ts 缺省回落，不出现字面占位符
+    const withoutBoundary = makeItem({ phase: "in_progress", currentStep: "implement" })
+    const out2 = renderWorking(withoutBoundary, "implement", "openspec-developer", "task-simple.yaml")
+    expect(out2).toContain("允许变更目录范围：整个 worktree（未从 clarify.md 解析到执行边界）")
+    expect(out2).toContain("允许引用包范围：不适用（未产出执行边界）")
+    expect(out2).toContain("实施前请注意遵守：无额外说明")
+    expect(out2).not.toMatch(/\{\{allowed_(directories|packages)\}\}|\{\{notes\}\}/)
   })
 
   test("instructions：common 继承 + step 追加（编号步骤）", () => {
@@ -261,23 +290,33 @@ describe("common + step 语义渲染", () => {
     expect(out).toContain("按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界")
     // 修复闭环指引（P1）：fixed_issue_ids 上报进入待复核 + blocking issue 全覆盖门禁
     expect(out).toContain("修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定")
-    // blocker 消费闭环指引：确认留痕经 blocker_updates 置 resolved，凭留痕重新申报
-    expect(out).toContain("blocker 上报后经 question 向用户确认处理方式，确认结果经 blocker_updates（blocker_id + user_response）上报置 resolved")
+    // blocker 消费闭环指引：resolved 由架构裁决者在 analyze 回退步骤处理，dev 凭留痕重新申报
+    expect(out).toContain("blocker 上报后：有人值守经 question 向用户确认处理方式；无人值守按视图「确认模式」标识自行裁决")
+    expect(out).toContain("blocker 的 resolved 由架构裁决者在 analyze 回退步骤处理，你无需自行 resolve")
+    expect(out).toContain("人工执行任务凭视图 Blocker 留痕（resolved 且 user_response 记录确认/裁决结论）列入 completed_task_ids 重新提交")
     expect(out).toContain("提交 opx_agent_submit：passed 提交前须将全部已完成（含被驳回后修复的）子任务列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1）申报，全部子任务已验证时可省略；无法完成或人工执行的任务不得虚报，应经 verdict=failed + blocker 上报后凭留痕申报；不可修 issue 申请豁免（exempt_issue_ids）")
     // 提交引导步骤仍在（硬编码收尾步骤）
     expect(out).toContain("全部完成 → commit →")
   })
 
-  test("analyze：constraints（blocker 走 barrier 不入配置语义）+ instructions", () => {
+  test("analyze：blocker 裁决 + 边界修订语义（不做文档复核）+ constraints", () => {
     const item = makeItem({ phase: "todo", currentStep: "analyze" })
     const out = renderWorking(item, "analyze", "openspec-architect")
-    // analyze 有自己的 constraints（与 common 合并）；edit 边界与 blocker 处置属架构师身份职责语义（openspec-reviewer.md 承载），不在此重复
+    // analyze 有自己的 constraints（与 common 合并）
     expect(out).toContain("## 约束")
-    expect(out).toContain("只审当前任务组范围")
+    expect(out).toContain("只处理当前任务组的 blocker 与执行边界修订，不做全量文档复核")
     expect(out).toContain("所有 edit/write 操作限定在 /wt 内")
-    // instructions：common 继承 + step 追加
-    expect(out).toContain("存在缺口时提交 blocker（category: architecture_design / info_gap），不以假设替代确认")
-    expect(out).toContain("提交 opx_agent_submit，必传参数 execution_boundary")
+    // instructions：common 继承 + blocker 回退落点职责（裁决 / 确认 / 边界修订）
+    expect(out).toContain("处理 implement 上报的 blocker：逐条核对 category / description / evidence")
+    expect(out).toContain("需用户拍板的问题由你直接确认：有人值守时用 question 工具向用户提问")
+    expect(out).toContain("经 blocker_updates 逐条置 resolved（user_response 填确认/裁决结论与处理方式）")
+    expect(out).toContain("需要调整实施范围时修订执行边界：经 execution_boundary 提交（仅在需要变更时提交，未变更不提交）")
+    // 文档复核/架构模式审查已前移到提案阶段，analyze 不再承担
+    expect(out).toContain("本步骤不做文档一致性复核与架构模式审查（已前移到提案阶段架构审查）")
+    expect(out).not.toContain("必传参数 execution_boundary")
+    expect(out).not.toContain("按评估维度逐项审查 design.md")
+    // 确认模式在 analyze 视图渲染（有人值守/无人值守）
+    expect(out).toContain("## 确认模式")
     // 构建验证句不对 analyze 渲染
     expect(out).not.toContain("构建验证")
   })
@@ -300,17 +339,17 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("git -C /wt diff --name-only")
   })
 
-  test("analyze：按评估维度审查 / 用户确认模式 / 工具调用边界 / 只审当前任务组范围", () => {
+  test("analyze：blocker 裁决职责 / 用户确认模式 / 工具调用边界 / 不做全量文档复核", () => {
     const item = makeItem({ phase: "todo", currentStep: "analyze" })
     const out = renderWorking(item, "analyze", "openspec-architect")
-    expect(out).toContain("按评估维度逐项审查 design.md 并给出结论：architecture / api-design / db-design（无问题也需简要确认），不以假设替代确认")
-    expect(out).toContain("需用户拍板的问题由你直接确认，不提交用户确认型 blocker")
+    expect(out).toContain("blocker 属方案/设计缺口时，判断是否需回提案流程修订规划文档")
+    expect(out).toContain("不得在本步骤重写 design.md / proposal.md / specs（规划文档修改归提案流程）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需用户拍板时使用）")
-    expect(out).toContain("只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节")
-    // 架构脉络阅览许可（架构演进审查配套约束）：原文前缀保留，追加句生效
-    expect(out).toContain("评估整体架构契合与重构历史逻辑贴合时，可阅览项目整体结构与既有实现建立架构脉络（不含其它任务组设计文档），审查结论仍聚焦当前方案，不扩散为对既有代码的全面审查")
-    // notes 规范展开
-    expect(out).toContain("notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空")
+    expect(out).toContain("只处理当前任务组的 blocker 与执行边界修订，不做全量文档复核")
+    // 文档一致性复核 / 架构模式审查 / 规则边界推演已前移到提案阶段，不再渲染到 analyze 指引
+    expect(out).not.toContain("校验 design.md 与 tasks.md、specs/ 下相关 spec.md 的一致性")
+    expect(out).not.toContain("校验设计文档与任务前提的一致性，评估架构模式合规性")
+    expect(out).not.toContain("notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空")
   })
 
   test("implement：文档读取 / 环境问题代码层解决 / issue 修复范围 / blocker 字段", () => {

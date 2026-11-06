@@ -32,7 +32,7 @@ function skillSection(out: string): string {
   return end < 0 ? rest : rest.slice(0, end)
 }
 
-/** 初始化 full 模式会话并推进到 implement（developer 视图可渲染）→ 返回 developer 上下文。 */
+/** 初始化 full 模式会话（新流 init 即落 implement，developer 视图可渲染）→ 返回 developer 上下文。 */
 async function initToImplement(wt: string, stacks: string[], frameworks: string[]) {
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
@@ -42,15 +42,6 @@ async function initToImplement(wt: string, stacks: string[], frameworks: string[
     o,
   )
   await set_worktree.execute({ change_id: CID }, o)
-  await agent_submit.execute(
-    {
-      change_id: CID,
-      step_id: "analyze",
-      verdict: "passed",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },
-    },
-    a,
-  )
   return { o, a, d }
 }
 
@@ -101,10 +92,7 @@ describe("会话项目栈过滤集成（真实 skill 索引 + opx_status）", ()
         o,
       )
       await set_worktree.execute({ change_id: CID }, o)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
-        a,
-      )
+      // 新流首轮即 implement（analyze 仅作 blocker 回退落点）
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(readItem(wt, CID, "1")) },
         d,

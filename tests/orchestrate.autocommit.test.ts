@@ -15,7 +15,7 @@ import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, teardown, initSimpleWorktree } from "./helpers"
-import { driveToImplement, driveToVerifyTool, readItem, setupToAnalyze, taskIdsOf, DEFAULT_EXECUTION_BOUNDARY } from "./helpers-workflow"
+import { driveToImplement, driveToVerifyTool, readItem, taskIdsOf } from "./helpers-workflow"
 
 const CID = "autocommit"
 const SUBMIT_OK = "提交成功，请直接结束当前会话"
@@ -61,31 +61,63 @@ describe("reviewer 家族 submit 自动提交（文档直改兜底）", () => {
     } finally { teardown(root) }
   })
 
-  test("openspec-architect analyze 提交：脏 worktree → 先自动提交再走 reconcile 干净树预检，污染文档并入", async () => {
+  test("openspec-architect analyze 回退提交：worktree 内直改文档 → 自动提交（文档直改兜底）", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const { ctx } = await driveToImplement(wt, CID)
+      // 回退到 analyze（架构师身份唯一的提交落点）：implement 上报 blocker → on_fail analyze
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: {
+            source_role: "openspec-developer", category: "external_dependency",
+            description: "缺少外部接口地址", evidence: "spec 未提供", attempted_actions: "检查 spec",
+          },
+        },
+        ctx.dev,
+      )
+      expect(readItem(wt, CID).currentStep).toBe("analyze")
       const wtPath = readItem(wt, CID).metadata["worktree_path"]
-      // 主仓库污染 + worktree 脏（架构师直改 md 未提交）：旧语义在 reconcile 干净树预检处死锁
-      fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+      // 架构师在 worktree 内直改 md 未提交（文档直改兜底路径）
       fakeGit.dirtyPaths.add(wtPath)
       fakeGit.callLog.length = 0
 
       const out = await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
+        {
+          change_id: CID, step_id: "analyze", verdict: "passed",
+          blocker_updates: [{ blocker_id: "b1", user_response: "地址为 https://api.example.test" }],
+        },
         ctx.arch,
       )
 
-      // 自动提交先于 reconcile 的干净树预检（run() 侧 "status --porcelain"）
+      const addIdx = fakeGit.callLog.indexOf(ADD_LINE)
       const commitIdx = fakeGit.callLog.indexOf(commitLineOf("openspec-architect", "analyze"))
-      const cleanCheckIdx = fakeGit.callLog.indexOf("status --porcelain")
-      expect(commitIdx).toBeGreaterThanOrEqual(0)
-      expect(cleanCheckIdx).toBeGreaterThan(commitIdx)
+      expect(addIdx).toBeGreaterThanOrEqual(0)
+      expect(commitIdx).toBeGreaterThan(addIdx)
       expect(out).toContain("已自动提交")
-      // 污染文档仍并入 worktree 分支（死锁消除）
-      expect(fakeGit.commitShas.length).toBe(1)
-      expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
       expect(fakeGit.dirtyPaths.has(wtPath)).toBe(false)
+      // 裁决完成 → 回到 implement 继续实施
+      expect(readItem(wt, CID).currentStep).toBe("implement")
+    } finally { teardown(root) }
+  })
+
+  test("首次 implement passed → 主仓库污染文档并入 worktree 分支（触发点已自 analyze 迁移）", async () => {
+    const { wt, root, fakeGit } = fresh()
+    try {
+      const { ctx } = await driveToImplement(wt, CID)
+      // 主仓库本 change 目录下存在未提交文档污染
+      fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
+      fakeGit.callLog.length = 0
+
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(readItem(wt, CID)) },
+        ctx.dev,
+      )
+
+      // 污染降级为合并提交并并入 worktree 分支，且标记去重（后续轮次不重复合并）
+      expect(fakeGit.commitTreeCalls.some((c) => c.message.includes("reconcile main-repo edits"))).toBe(true)
+      expect(fakeGit.mergedBranches.length).toBeGreaterThanOrEqual(1)
+      expect(readItem(wt, CID).metadata["_main_pollution_reconciled"]).toBe(true)
     } finally { teardown(root) }
   })
 
@@ -137,16 +169,30 @@ describe("reviewer 家族 submit 自动提交（文档直改兜底）", () => {
     } finally { teardown(root) }
   })
 
-  test("status 仅含未跟踪的非文档类文件 → 不纳入自动提交，返回体告警（架构师 todo 阶段路径）", async () => {
+  test("status 仅含未跟踪的非文档类文件 → 不纳入自动提交，返回体告警（架构师 analyze 回退路径）", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const { ctx } = await driveToImplement(wt, CID)
+      // 回退到 analyze（架构师提交路径）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: {
+            source_role: "openspec-developer", category: "external_dependency",
+            description: "缺少外部接口地址", evidence: "spec 未提供", attempted_actions: "检查 spec",
+          },
+        },
+        ctx.dev,
+      )
       const wtPath = readItem(wt, CID).metadata["worktree_path"]
       fakeGit.statusPorcelainOutput.set(wtPath, "?? notes/tmp.txt")
       fakeGit.callLog.length = 0
 
       const out = await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
+        {
+          change_id: CID, step_id: "analyze", verdict: "passed",
+          blocker_updates: [{ blocker_id: "b1", user_response: "地址为 https://api.example.test" }],
+        },
         ctx.arch,
       )
 

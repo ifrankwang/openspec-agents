@@ -315,17 +315,20 @@ describe("gap9 recovery 后立即查 status", () => {
 // ════════════════════════════════════════════════════════════════
 
 describe("gap10 多任务组切换", () => {
-  test("切换到组 2 后 orchestrator 分派视图渲染活跃组（todo/analyze → architect）", async () => {
+  test("切换到组 2 后 orchestrator 分派视图渲染活跃组（in_progress/implement → developer）", async () => {
     const { wt, root } = fresh()
     try {
       const ctx = await setupToAnalyze(wt, CID)
-      // 切换活跃组到 2（state.taskGroupId 权威）
+      // 切换活跃组到 2（state.taskGroupId 权威）；新流初始化即落 in_progress/implement
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "full" }, ctx.orch)
       await set_worktree.execute({ change_id: CID }, ctx.orch)
-      expect(readItem(wt, CID, "2").phase).toBe("todo")
+      expect(readItem(wt, CID, "2").phase).toBe("in_progress")
+      expect(readItem(wt, CID, "2").currentStep).toBe("implement")
       const out = await status.execute({ change_id: CID }, ctx.orch)
-      expect(out).toContain("**当前阶段**: todo")
-      expect(out).toContain("分派子代理：`openspec-architect`")
+      expect(out).toContain("**当前阶段**: in_progress")
+      expect(out).toContain("分派子代理：`openspec-developer`")
+      // 首轮无 analyze：进度表标注其已由提案期替代
+      expect(out).toContain("（提案期已替代；仅 blocker 回退时执行）")
     } finally { teardown(root) }
   })
 })
@@ -353,9 +356,10 @@ describe("gap11 worktree 内 session 调 status", () => {
       // 从 worktree 内 session（worktree=wtLive）查 status → readStateByWorktree 走 isWorktreePath 分支
       const orchView = await status.execute({ change_id: CID }, makeOrchCtx(wtLive))
       expect(orchView).toContain("# 编排进度")
-      expect(orchView).toContain("分派子代理：`openspec-architect`")
-      const archView = await status.execute({ change_id: CID }, makeCtx("openspec-architect", wtLive))
-      expect(archView).toContain("# ✅ 当前轮到你执行")
+      // 新流首轮落 implement → 分派 developer
+      expect(orchView).toContain("分派子代理：`openspec-developer`")
+      const devView = await status.execute({ change_id: CID }, makeCtx("openspec-developer", wtLive))
+      expect(devView).toContain("# ✅ 当前轮到你执行")
     } finally { teardown(root) }
   })
 })

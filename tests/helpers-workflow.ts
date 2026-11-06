@@ -5,14 +5,20 @@
  * setupWorkspace/setupWithFakeGit/teardown），本文件在其之上提供新流测试专用基建：
  *
  * 1. WorkItem 纯投影读取：taskItemOf/taskListOf/blockersOf/metaOf
- * 2. 阶段驱动：setupToAnalyze/driveToImplement/driveToVerifyTool/driveToVerifyTask/driveToQuality
+ * 2. 阶段驱动：setupToImplement/driveToImplement/driveToVerifyTool/driveToVerifyTask/driveToQuality
  *    —— 全部经 opx_agent_submit.execute 驱动状态机，按 step 门禁自动补齐参数
+ *
+ * 新流语义（文档复核前移到提案流程）：opx_orch_init 初始化/恢复一律落 in_progress/implement，
+ * 首轮不再经过 analyze；analyze step 仅作为 implement 上报 blocker 后的回退落点保留在 todo phase。
+ * 因此 driveToImplement 只做「init + set_worktree」，不再提交 analyze passed。
  *
  * 约定：
  * - 调用前需先 setupWorkspace + __setGitRunner(FakeGitRunner)（或 setupWithFakeGit）
  * - task_group_id 默认 "1"，可通过 opts.groupId 覆盖
- * - worktree 指状态文件所在 repo 根（非 .worktree 子目录）；setupToAnalyze 自动补调 set_worktree
+ * - worktree 指状态文件所在 repo 根（非 .worktree 子目录）；setupToImplement 自动补调 set_worktree
  *   使 worktree 就绪，需 worktree/branch 元数据的用例无需自行调用
+ * - opts.boundary 以 clarify.md 执行边界夹具形式注入（init 解析后落 metadata.execution_boundary），
+ *   不再经由 analyze 提交写入
  */
 import type { ToolContext } from "../src/core/tools/types"
 import type { WorkItem } from "../src/core/workflow/types"
@@ -22,7 +28,8 @@ import { loadWorkflow } from "../src/core/workflow/loader"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { taskListOf as projectTaskList } from "../src/core/task-children"
 import { init, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
-import { makeCtx, makeOrchCtx, readState } from "./helpers"
+import { makeCtx, makeOrchCtx, readState, writeClarifyMd, INIT_PROJECT_STACKS, type ClarifyBoundaryFixture } from "./helpers"
+
 
 export type Ctx = ReturnType<typeof makeCtx>
 
@@ -52,7 +59,8 @@ export const DEFAULT_EXECUTION_BOUNDARY = {
 export interface DriveOpts {
   groupId?: string
   recovery?: { phase: string; review_layer?: "tool" | "task" | "quality"; reopenIssues?: boolean }
-  boundary?: unknown
+  /** 执行边界：以 clarify.md 夹具注入，init 解析后落 metadata.execution_boundary（不再经 analyze 提交）。 */
+  boundary?: ClarifyBoundaryFixture
   completedTaskIds?: string[]
   verifiedTasks?: string[]
 }
@@ -123,28 +131,39 @@ export function makeAgentCtxs(wt: string): AgentCtx {
   }
 }
 
-/** 初始化到 todo/analyze（无 recovery 时 init 构造 task WorkItem 置 todo/analyze），并补一次 set_worktree 使 worktree 就绪。 */
-export async function setupToAnalyze(wt: string, cid: string, opts: { groupId?: string; recovery?: DriveOpts["recovery"] } = {}): Promise<AgentCtx> {
+/**
+ * 初始化到 in_progress/implement（新流首轮即实施，不再先跑 analyze），并补一次 set_worktree 使 worktree 就绪。
+ * opts.boundary 以 clarify.md 夹具写入（须早于 init），init 解析后落 metadata.execution_boundary。
+ */
+export async function setupToImplement(
+  wt: string,
+  cid: string,
+  opts: { groupId?: string; recovery?: DriveOpts["recovery"]; boundary?: ClarifyBoundaryFixture; mode?: "full" | "simple" } = {},
+): Promise<AgentCtx> {
+  const groupId = opts.groupId ?? "1"
+  if (opts.boundary) writeClarifyMd(wt, cid, { [groupId]: opts.boundary })
   const ctx = makeAgentCtxs(wt)
-  const params: Record<string, unknown> = { change_id: cid, task_group_id: opts.groupId ?? "1", mode: "full", project_stacks: ["backend"], project_frameworks: ["java"] }
+  const params: Record<string, unknown> = {
+    ...INIT_PROJECT_STACKS,
+    change_id: cid,
+    task_group_id: groupId,
+    mode: opts.mode ?? "full",
+  }
   if (opts.recovery) params.recovery = opts.recovery
   await init.execute(params as any, ctx.orch)
   await set_worktree.execute({ change_id: cid }, ctx.orch)
   return ctx
 }
 
-/** 驱动到 implement（analyze passed，task 进入 in_progress/implement）。 */
+/**
+ * 旧名兼容别名：语义已随新流变更（落地 in_progress/implement，不再构造 todo/analyze 初始态）。
+ * 新代码优先用 setupToImplement。
+ */
+export const setupToAnalyze = setupToImplement
+
+/** 驱动到 implement（init 即落 in_progress/implement；analyze 已不再是首轮步骤，无提交动作）。 */
 export async function driveToImplement(wt: string, cid: string, opts: DriveOpts = {}): Promise<{ ctx: AgentCtx; item: any }> {
-  const ctx = await setupToAnalyze(wt, cid, opts)
-  await agent_submit.execute(
-    {
-      change_id: cid,
-      step_id: "analyze",
-      verdict: "passed",
-      execution_boundary: opts.boundary ?? DEFAULT_EXECUTION_BOUNDARY,
-    },
-    ctx.arch
-  )
+  const ctx = await setupToImplement(wt, cid, opts)
   return { ctx, item: readItem(wt, cid, opts.groupId ?? "1") }
 }
 

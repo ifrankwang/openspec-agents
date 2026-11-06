@@ -294,11 +294,25 @@ function resetTasksForBlocker(item: WorkItem): void {
   clearReviewVerificationTags(item)
 }
 
-/** analyze step 参数处理：execution_boundary（passed 必传）、blockers/blocker_updates、无未解决 blocker 门禁。 */
-function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
-  if (params.verdict === "passed" && !params.execution_boundary) {
-    throw new Error("analyze step 提交 passed 时必须提供 execution_boundary。")
+/**
+ * blocker_updates 目标可更新性校验（analyze / implement 两端共用）。
+ * 旧数据兼容：metadata.blockers 可能残留缺 status 的历史条目——hasUnresolvedBlocker 口径为
+ * `status !== "resolved"`，缺 status 会被保守视为未解决（不静默放行 passed）；若更新入口只认
+ * awaiting_user，该条目既算未解决又无法经 blocker_updates 解除，形成永久阻塞。故此处把缺 status
+ * 归一为 awaiting_user（可被解除）；其余非 awaiting_user 状态仍拒绝更新（保守，留人工核对）。
+ */
+function assertBlockerUpdatable(blocker: ItemBlocker): void {
+  const raw = blocker as unknown as { status?: string; id: string }
+  if (raw.status === undefined) raw.status = "awaiting_user"
+  if (raw.status !== "awaiting_user") {
+    throw new Error(`blocker "${blocker.id}" 状态不是 awaiting_user，无法更新。`)
   }
+}
+
+/** analyze step（blocker 回退落点，仅职责：blocker 裁决 + 用户确认 + 执行边界修订）参数处理：
+ *  execution_boundary 可选（回退时修订边界；提案阶段已把边界写入 clarify.md，此处不再是 passed 必传项）、
+ *  blockers/blocker_updates、无未解决 blocker 门禁。 */
+function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
   if (params.execution_boundary) {
     item.metadata["execution_boundary"] = params.execution_boundary
   }
@@ -307,7 +321,7 @@ function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
     for (const u of params.blocker_updates) {
       const blocker = itemBlockers(item).find((b) => b.id === u.blocker_id)
       if (!blocker) throw new Error(`blocker "${u.blocker_id}" 不存在于 metadata.blockers 中。`)
-      if (blocker.status !== "awaiting_user") throw new Error(`blocker "${u.blocker_id}" 状态不是 awaiting_user，无法更新。`)
+      assertBlockerUpdatable(blocker)
       blocker.userResponse = u.user_response
       blocker.status = "resolved"
     }
@@ -315,6 +329,22 @@ function handleAnalyzeParams(item: WorkItem, params: AgentSubmitParams): void {
   if (params.verdict === "passed" && itemBlockers(item).some((b) => b.status !== "resolved")) {
     throw new Error("存在未解决的 blocker，无法以 passed 提交 analyze step。请先通过 blocker_updates 处理全部 blocker。")
   }
+}
+
+/**
+ * simple 模式 implement blocker 参数拒绝（提交参数处理入口，先于一切校验与状态写入，拒绝时零状态变更）。
+ * simple 流程没有 analyze 回退步骤：blocker 进入 awaiting_user 后没有裁决落点，后续 implement 会被
+ * 「存在未解决的 blocker」永久拦截。simple 的阻塞处理走「当场向用户确认 / 无人值守自行裁决」并把
+ * 处理方式与结论留痕在 must_do_checks 的 evidence；需要架构裁决的场景改用 full 模式。
+ */
+function assertSimpleModeNoBlockerParams(params: AgentSubmitParams): void {
+  if (!params.blocker && !(params.blockers?.length)) return
+  throw new Error(
+    "simple 模式不走 blocker 状态机：implement 提交不接受 blocker / blockers 参数。\n" +
+    "simple 流程没有 analyze 回退步骤，blocker 进入待裁决后没有裁决落点，后续 implement passed 会被未解决的 blocker 永久拦截。\n" +
+    "遇阻塞时，应当场用 question 向用户确认（无人值守时按准则自行裁决），并把处理方式与结论写进 must_do_checks 对应项的 evidence；\n" +
+    "需要架构裁决者裁决的场景请改用 full 模式（full 模式 blocker 会回退 analyze 裁决）。"
+  )
 }
 
 /** implement step 参数处理：blocker（on_fail）、blocker_updates 消费闭环 + 无未解决 blocker 门禁、
@@ -346,7 +376,7 @@ function handleImplementParams(item: WorkItem, params: AgentSubmitParams, mustDo
     for (const u of params.blocker_updates) {
       const blocker = itemBlockers(item).find((b) => b.id === u.blocker_id)
       if (!blocker) throw new Error(`blocker "${u.blocker_id}" 不存在于 metadata.blockers 中。`)
-      if (blocker.status !== "awaiting_user") throw new Error(`blocker "${u.blocker_id}" 状态不是 awaiting_user，无法更新。`)
+      assertBlockerUpdatable(blocker)
       blocker.userResponse = u.user_response
       blocker.status = "resolved"
     }
@@ -457,7 +487,9 @@ async function assertImplementNoChangeFact(item: WorkItem, params: AgentSubmitPa
   }
 }
 
-/** 把 boundary_expansion 的目录/包合并进执行边界（metadata 为事实源，缺失则忽略）。 */
+/** 把 boundary_expansion 的目录/包合并进执行边界。
+ *  无基础边界（metadata.execution_boundary 缺失）的语义是「默认整个 worktree」——边界本就覆盖全量，
+ *  expansion 无可合并对象，保持不合并（显式跳过，不得因 boundary 为 null 抛 TypeError）。 */
 function mergeBoundaryInto(item: WorkItem, expansion: NonNullable<AgentSubmitParams["boundary_expansion"]>): void {
   const boundary = item.metadata["execution_boundary"] as {
     allowed_directories: string[]
@@ -889,10 +921,14 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     } else if (stepPhase === "todo") {
       handleAnalyzeParams(item, params)
     } else if (stepPhase === "in_progress") {
+      // simple 模式无 analyze 回退落点，blocker 会永久卡死：入口显式拒绝（早于一切校验与写入）
+      if (state.mode === "simple" && params.step_id === "implement") {
+        assertSimpleModeNoBlockerParams(params)
+      }
       // implement 提交工作区干净校验：工作区必须无未提交内容，不干净直接拒绝并提示先 commit。
       // 两种模式口径不同：
-      // - simple：无 analyze 环节、执行边界默认整个 worktree，dev 提交即收尾合并的载体，未提交内容
-      //   会让收尾裸合并携带脏状态——无条件检查（含 verdict=failed）。
+      // - simple：无 analyze 环节，执行边界来自 clarify.md、缺失时默认整个 worktree，dev 提交即
+      //   收尾合并的载体，未提交内容会让收尾裸合并携带脏状态——无条件检查（含 verdict=failed）。
       // - full：仅 verdict=passed 时检查。failed 提交多为 blocker/需求缺口上报，此时半成品脏工作区
       //   属正常，强查会把 dev 报 blocker 的路径堵死。
       // 检查在一切参数处理与状态写入之前，拒绝时零状态变更（含内存态）；收尾门禁
@@ -976,20 +1012,23 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       }
     }
 
-    // arch_submit 主仓库污染文档自动合并兜底（56ddfe9 意图）：analyze step（架构师）以 passed 提交后，
-    // 若主仓库本 change 目录下存在未提交 openspec 文档污染，并入 worktree 分支并清理主仓库工作树。
+    // 主仓库污染文档自动合并兜底（56ddfe9 意图）：触发点从「analyze passed」改为「首次 implement passed」——
+    // 文档复核前移后首轮不再跑 analyze，挂在 analyze 上会永不执行。首次 implement passed 时执行一次
+    // （metadata._main_pollution_reconciled 标记去重，成功后才置位，前置校验失败仍可在后续轮次重试）。
     if (
-      stepPhase === "todo" &&
-      params.step_id === "analyze" &&
+      stepPhase === "in_progress" &&
+      params.step_id === "implement" &&
       params.verdict === "passed" &&
       wtPath &&
-      typeof item.metadata["branch_name"] === "string"
+      typeof item.metadata["branch_name"] === "string" &&
+      item.metadata["_main_pollution_reconciled"] !== true
     ) {
       const baseRef = typeof item.metadata["base_ref"] === "string" ? item.metadata["base_ref"] : null
       await reconcileMainPollution(ctx.worktree, wtPath, {
         changeId: state.changeId,
         baseRef,
       })
+      item.metadata["_main_pollution_reconciled"] = true
     }
 
     // 审查检查点增量检测（A3）：full 的 verify_tool（reviewer-tool）与 simple 的 quality_review

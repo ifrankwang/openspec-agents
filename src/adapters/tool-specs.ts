@@ -32,7 +32,7 @@ export const OPX_TOOL_SPECS: readonly OpxToolSpec[] = [
   {
     name: "opx_orch_init",
     description:
-      "初始化编排会话。project_stacks 与 project_frameworks 必传（change 入口与 review_scope 独立审查入口均需要）：声明项目形态栈与框架栈，每个值须命中当前 skill 索引中 skill frontmatter 声明的 stacks / frameworks 标签（动态校验，无硬编码值域），作为 skill 加载清单过滤与 step 必做清单分组的过滤基准，与 change_id 同生命周期持久化（recovery 恢复时同样必传）。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式：首次新建状态时固化；已开始的变更仅切组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）时可更新，其余场景传不同 mode 报错。",
+      "初始化编排会话。project_stacks 与 project_frameworks 必传（change 入口与 review_scope 独立审查入口均需要）：声明项目形态栈与框架栈，每个值须命中当前 skill 索引中 skill frontmatter 声明的 stacks / frameworks 标签（动态校验，无硬编码值域），作为 skill 加载清单过滤与 step 必做清单分组的过滤基准，与 change_id 同生命周期持久化（recovery 恢复时同样必传）。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务，同时自动从 clarify.md 解析当前任务组执行边界写入状态，缺失时按整个 worktree 处理。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式：full=完整流程（implement→三重审查+收尾验证，analyze 仅作 implement 上报 blocker 后的裁决回退落点）；simple=精简流程（implement→quality_review→done，不走 blocker 状态机）。首次新建状态时固化；已开始的变更仅切组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）时可更新，其余场景传不同 mode 报错。",
     schema: orchInitSchema,
   },
   {
@@ -44,7 +44,7 @@ export const OPX_TOOL_SPECS: readonly OpxToolSpec[] = [
   {
     name: "opx_status",
     description:
-      "统一状态/上下文查询（只读为主）。按调用者角色路由：编排视角→统计+worktree；architect→spec/blocker；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度既有 issue。",
+      "统一状态/上下文查询（只读为主）。按调用者角色路由：编排视角→统计+worktree；architect→架构裁决视图（待处理 blocker 与执行边界，仅 blocker 回退时呈现）；developer→worktree/boundary/task/issue；reviewer-tool→tool 层控件 issue；reviewer-task→task 验证状态；quality reviewer→自维度既有 issue。",
     schema: statusSchema,
   },
   {
@@ -56,7 +56,7 @@ export const OPX_TOOL_SPECS: readonly OpxToolSpec[] = [
   {
     name: "opx_orch_set_unattended",
     description:
-      "开启/关闭无人值守模式。开启后编排流程不再向用户提问：analyze 确认模式由架构师自行裁决（不确认用户）；重试检查点、状态异常、blocker 处理等需拍板事项由主代理按编排行为准则自行决策并提交——检查点决策是 opx_agent_submit 工具调用，主代理可自行执行，不因无人值守而抑制。",
+      "开启/关闭无人值守模式。开启后编排流程不再向用户提问：blocker 裁决与实施阶段的确认模式转为自行决策（架构裁决者裁决 blocker、开发者遇阻塞自行选择最优解，均不向用户确认）；重试检查点、状态异常等需拍板事项由主代理按编排行为准则自行决策并提交——检查点决策是 opx_agent_submit 工具调用，主代理可自行执行，不因无人值守而抑制。",
     schema: setUnattendedSchema,
   },
   {

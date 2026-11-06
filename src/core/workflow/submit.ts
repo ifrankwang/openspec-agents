@@ -92,7 +92,8 @@ export function assertSubmitRouting(workflow: LoadedWorkflow, item: WorkItem, st
   if (item.currentStep !== null && item.currentStep !== stepId) {
     throw new Error(`submit 校验失败：item "${item.id}" 当前 step 为 "${item.currentStep}"，与提交的 step "${stepId}" 不一致，拒绝提交且不产生任何状态变更。`)
   }
-  // phase↔step 归属校验：currentStep 为 null（todo 初始态 / 终态）显式跳过，错位态拒绝提交零状态变更。
+  // phase↔step 归属校验：currentStep 为 null（终态，或旧结构投影的 todo 初始态）显式跳过，错位态拒绝提交零状态变更。
+  // 新流初始落点为 in_progress/implement；todo/analyze 仅作 implement 上报 blocker 后的回退落点。
   if (item.currentStep !== null && entry.phase.name !== item.phase) {
     throw new Error(`submit 校验失败：item "${item.id}" 的 phase "${item.phase}" 与 step "${stepId}" 归属阶段 "${entry.phase.name}" 不一致（phase ↔ step 错位），拒绝提交且不产生任何状态变更。`)
   }

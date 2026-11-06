@@ -529,7 +529,8 @@ function renderBlockedChildrenDiagnostic(item: WorkItem, workflow: LoadedWorkflo
   return lines
 }
 
-/** orchestrator 阶段进展/审核进度：各 step:agent:verdict 汇总 + children 统计。 */
+/** orchestrator 阶段进展/审核进度：各 step:agent:verdict 汇总 + children 统计。
+ *  analyze 已瘦身为 blocker 回退落点，首轮不执行——行内标注说明，避免其长期显示 pending 造成误解。 */
 function renderProgressSection(item: WorkItem, workflow: LoadedWorkflow): string[] {
   const lines = ["## 阶段进展 / 审核进度", ""]
   lines.push("| step | agent | verdict |")
@@ -537,8 +538,11 @@ function renderProgressSection(item: WorkItem, workflow: LoadedWorkflow): string
   for (const phase of workflow.phases) {
     if (isTerminalPhase(phase.name)) continue
     for (const step of phase.steps) {
+      const stepLabel = step.id === "analyze"
+        ? `\`${step.id}\`（提案期已替代；仅 blocker 回退时执行）`
+        : `\`${step.id}\``
       for (const agent of stepAgentIds(step)) {
-        lines.push(`| \`${step.id}\` | \`${agent}\` | ${getStepVerdict(item, step.id, agent)} |`)
+        lines.push(`| ${stepLabel} | \`${agent}\` | ${getStepVerdict(item, step.id, agent)} |`)
       }
     }
   }
@@ -661,13 +665,24 @@ function renderAgentWorking(
   stepCtx["phase"] = item.phase
   stepCtx["agent"] = ctxAgent
   stepCtx["base_branch"] = state.baseBranch
+  // 执行边界缺省回落：边界由提案阶段产出到 clarify.md、init 解析后写入 metadata；
+  // simple 模式、旧会话与未产出边界的提案下该字段缺失。缺失时按「整个 worktree」语义给出默认值，
+  // 不得让视图渲染字面 {{allowed_directories}} / {{allowed_packages}} / {{notes}} 占位符。
   const boundary = readExecutionBoundary(item)
-  if (boundary) {
-    stepCtx["allowed_directories"] = boundary.allowed_directories.join(", ")
-    stepCtx["allowed_packages"] = boundary.allowed_packages.join(", ")
-    // notes 留空（架构师按规范无补充）时渲染为「无额外说明」，避免视图中出现字面 {{notes}}
-    stepCtx["notes"] = boundary.notes && boundary.notes.trim() !== "" ? boundary.notes : "无额外说明"
-  }
+  const boundaryDirs = boundary?.allowed_directories ?? []
+  const boundaryPkgs = boundary?.allowed_packages ?? []
+  stepCtx["allowed_directories"] = boundaryDirs.length > 0
+    ? boundaryDirs.join(", ")
+    : boundary
+      ? "整个 worktree（执行边界未限定目录）"
+      : "整个 worktree（未从 clarify.md 解析到执行边界）"
+  stepCtx["allowed_packages"] = boundaryPkgs.length > 0
+    ? boundaryPkgs.join(", ")
+    : boundary
+      ? "不适用（执行边界未限定包）"
+      : "不适用（未产出执行边界）"
+  // notes 留空（边界无补充说明）时渲染为「无额外说明」，避免视图中出现空值
+  stepCtx["notes"] = boundary?.notes?.trim() ? boundary.notes : "无额外说明"
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
@@ -814,10 +829,13 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
   const lines: string[] = []
   switch (stepContextKind(step.id)) {
     case "analyze":
-      lines.push(...renderAnalyzeMode(state))
+      lines.push(...renderConfirmMode(state))
       lines.push(...renderAnalyzeBlockers(item))
       break
     case "implement":
+      // 首轮即落 implement（analyze 仅作 blocker 回退落点）：确认模式同样要在实施视图给出，
+      // 开发者据此判断遇阻塞时是向用户提问还是自行裁决。
+      lines.push(...renderConfirmMode(state))
       lines.push(...renderDeveloperChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_tool":
@@ -873,8 +891,8 @@ function readExecutionBoundary(item: WorkItem): ExecutionBoundary | null {
   return typeof raw === "object" && raw !== null ? (raw as ExecutionBoundary) : null
 }
 
-/** analyze step：确认模式渲染（有人值守/无人值守），架构师据此判断直接向用户确认还是自行裁决。 */
-function renderAnalyzeMode(state: OrchestrateState): string[] {
+/** analyze / implement step 共用：确认模式渲染（有人值守/无人值守），执行者据此判断需用户拍板时直接提问还是自行裁决。 */
+function renderConfirmMode(state: OrchestrateState): string[] {
   const unattended = state.unattended === true
   return [
     "## 确认模式",

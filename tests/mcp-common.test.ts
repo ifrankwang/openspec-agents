@@ -125,17 +125,7 @@ describe("MCP server 承载 6 个 opx_* 工具", () => {
         name: "opx_orch_set_worktree",
         arguments: { change_id: CID },
       })
-      // analyze 由架构师（_agent 传角色名）提交 passed → 推进到 implement 并分派 developer
-      const submit = await client.callTool({
-        name: "opx_agent_submit",
-        arguments: {
-          change_id: CID, step_id: "analyze", verdict: "passed",
-          execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.example"], notes: "" },
-          _agent: "openspec-architect",
-        },
-      })
-      expect((submit as any).isError).toBeUndefined()
-
+      // 新流首轮即落 in_progress/implement（analyze 仅作 blocker 回退落点，无需先提交 analyze）
       // developer 子代理携带 _agent → 首次查询即拿到自身角色工作视图（非编排视角）
       const devView = await client.callTool({
         name: "opx_status",

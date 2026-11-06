@@ -149,7 +149,7 @@ describe("W2. init recovery 对 worktree 引用", () => {
     } finally { teardown(root) }
   })
 
-  // W2.2 recovery 到 task_analysis → 阶段/tags 重置，worktree 引用保留
+  // W2.2 recovery 到 task_analysis → 阶段重置到 implement，worktree 引用保留
   test("recovery task_analysis → 阶段重置但 worktree 引用保留", async () => {
     const root = `/tmp/wts-w2b-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
@@ -166,9 +166,10 @@ describe("W2. init recovery 对 worktree 引用", () => {
         recovery: { phase: "task_analysis" } }, o)
 
       const item = taskItemOf(wt)
-      // applyRecoveryState 仅重置阶段/tags/tasks，不清 worktree 资源
-      expect(item.phase).toBe("todo")
-      expect(item.currentStep).toBe("analyze")
+      // applyRecoveryState 仅重置阶段/tags/tasks，不清 worktree 资源；
+      // 新语义：task_analysis 等同 dev_impl，落 in_progress/implement（analyze 不再是首轮步骤）
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
       expect(item.metadata["worktree_path"]).toBe(orig.metadata["worktree_path"])
       expect(item.metadata["branch_name"]).toBe(orig.metadata["branch_name"])
       expect(item.metadata["base_ref"]).toBe(orig.metadata["base_ref"])
@@ -324,15 +325,12 @@ describe("W5. 锁路径 worktree 归一化", () => {
 //  Behavior 6: 工具层 worktree 路径校验
 // ════════════════════════════════════════════════════════════════
 
-/** init → set_worktree → analyze → implement，停在 review 阶段且 tool 层未提交（workflow-engine agent_submit 语义）。 */
+/** init → set_worktree（新流首轮即 implement）→ implement passed，停在 review 阶段且 tool 层未提交。 */
 async function setupToToolReview(wt: string, fakeGit: FakeGitRunner): Promise<void> {
   const o = makeOrchCtx(wt)
-  const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
   await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
-  await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed",
-    execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } }, a)
   await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] }, d)
 }
 
@@ -595,28 +593,26 @@ describe("W8. 主仓库 openspec 污染诊断", () => {
 })
 
 // ════════════════════════════════════════════════════════════════
-//  Behavior 9: analyze step（架构师提交）主仓库污染自动合并兜底
+//  Behavior 9: 首次 implement passed 主仓库污染自动合并兜底
+//  （触发点由旧流「analyze passed」前移到「首次 implement passed」：新流首轮不再跑 analyze）
 // ════════════════════════════════════════════════════════════════
 
-const BOUNDARY = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
-
-/** init → set_worktree，agent_submit(analyze) 前 worktree 已就绪 */
+/** init → set_worktree，agent_submit(implement) 前 worktree 已就绪 */
 async function setupToWorktreeReady(wt: string, fakeGit: FakeGitRunner): Promise<void> {
   const o = makeOrchCtx(wt)
   await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
 }
 
-function archCtx(wt: string) {
-  return makeCtx("openspec-architect", wt)
+/** 首次 implement passed 提交（developer），触发主仓库污染自动合并兜底。 */
+async function implementSubmit(wt: string): Promise<string> {
+  return agent_submit.execute(
+    { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] },
+    makeCtx("openspec-developer", wt),
+  )
 }
 
-/** analyze step（架构师）passed 提交，触发主仓库污染自动合并兜底。 */
-async function archSubmit(wt: string): Promise<string> {
-  return agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: BOUNDARY }, archCtx(wt))
-}
-
-describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () => {
+describe("W9. 首次 implement passed 主仓库污染自动合并兜底", () => {
 
   test("main 污染文件 a → merge 目标是 commit sha，a 并入 worktree 分支", async () => {
     const root = `/tmp/wts-w9a-${Date.now()}`
@@ -627,7 +623,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     const wtPath = taskItemOf(wt).metadata["worktree_path"]
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    await archSubmit(wt)
+    await implementSubmit(wt)
 
     expect(fakeGit.commitShas.length).toBe(1)
     const pollSha = fakeGit.commitShas[0]
@@ -637,7 +633,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("worktree 侧存在未提交变更 → 先自动提交再并入主仓库污染文档（干净树预检不阻塞）", async () => {
+  test("worktree 侧存在未提交变更 → implement 干净树门禁先拒绝，污染文档不并入", async () => {
     const root = `/tmp/wts-w9b-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -645,22 +641,15 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     const wtPath = taskItemOf(wt).metadata["worktree_path"]
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
-    // 架构师身份的 worktree 直改修正未提交：submit 时自动 commit 兜底（reviewer 家族），
-    // 消除 reconcile 干净树预检（isWorktreeClean）处的旧死锁
+    // 新流触发点是 developer 的 implement passed：提交前无条件要求工作区干净（旧流
+    // analyze 后可带脏树、靠架构师自动提交兜底；该前提已随触发点前移而不成立）。
     fakeGit.dirtyPaths.add(wtPath)
 
-    await archSubmit(wt)
-
-    // 自动提交先于 reconcile 的干净树预检（run() 侧 "status --porcelain"）
-    const commitIdx = fakeGit.callLog.findIndex((l) => l.startsWith("checked:commit -m docs(opx): direct fixes by openspec-architect (analyze)"))
-    const cleanCheckIdx = fakeGit.callLog.findIndex((l) => l === "status --porcelain")
-    expect(commitIdx).toBeGreaterThanOrEqual(0)
-    expect(cleanCheckIdx).toBeGreaterThan(commitIdx)
-    // FakeGitRunner 真实行为模拟：commit 成功清脏
-    expect(fakeGit.dirtyPaths.has(wtPath)).toBe(false)
-    // 污染文档正常并入 worktree 分支
-    expect(fakeGit.commitShas.length).toBe(1)
-    expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
+    await expect(implementSubmit(wt)).rejects.toThrow(/工作区存在未提交内容/)
+    // 干净树门禁前置于 reconcile：不创建污染合并提交、不并入 worktree 分支
+    expect(fakeGit.commitShas.length).toBe(0)
+    expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
+    expect(fakeGit.mergedBranches.length).toBe(0)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -675,7 +664,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     fakeGit.diffOut = "openspec/changes/cid/design.md\n"
 
     await expect(
-      archSubmit(wt)
+      implementSubmit(wt)
     ).rejects.toThrow(/分叉/)
     expect(fakeGit.commitShas.length).toBe(0)
     expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
@@ -691,7 +680,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/new.md"])
 
-    await archSubmit(wt)
+    await implementSubmit(wt)
 
     expect(fakeGit.commitShas.length).toBe(1)
     expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
@@ -708,7 +697,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     fakeGit.pollutionFiles.set(`${wt}-othercid`, ["openspec/changes/othercid/x.md"])
 
-    const result = await archSubmit(wt)
+    const result = await implementSubmit(wt)
 
     expect(result).not.toContain("已将主仓库污染文档")
     expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
@@ -727,7 +716,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     fakeGit.cachedDiffOut = "src/foo.java"
 
     await expect(
-      archSubmit(wt)
+      implementSubmit(wt)
     ).rejects.toThrow(/其它已暂存内容/)
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
@@ -741,7 +730,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     await setupToWorktreeReady(wt, fakeGit)
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    await archSubmit(wt)
+    await implementSubmit(wt)
 
     expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
     expect(fakeGit.callLog.some((l) => l.startsWith("checked:update-ref") || l.startsWith("checked:branch -f"))).toBe(false)
@@ -760,7 +749,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
     await expect(
-      archSubmit(wt)
+      implementSubmit(wt)
     ).rejects.toThrow(/worktree 未就绪[\s\S]*opx_orch_set_worktree/)
 
     expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)
@@ -770,7 +759,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
-  test("merge 失败 → 抛错、state 未写盘（仍为 todo）", async () => {
+  test("merge 失败 → 抛错、state 未写盘（仍停在 in_progress/implement）", async () => {
     const root = `/tmp/wts-w9h-${Date.now()}`
     const wt = freshWt(root)
     const fakeGit = new FakeGitRunner()
@@ -780,9 +769,11 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     fakeGit.mergeConflictOnNext = true
 
     await expect(
-      archSubmit(wt)
+      implementSubmit(wt)
     ).rejects.toThrow(/合并主仓库污染文档失败/)
-    expect(taskItemOf(wt).phase).toBe("todo")
+    // 新流初始落点即 in_progress/implement（不再是旧流的 todo/analyze）
+    expect(taskItemOf(wt).phase).toBe("in_progress")
+    expect(taskItemOf(wt).currentStep).toBe("implement")
 
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
@@ -799,7 +790,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     writeFileSync(join(wt, "openspec", "states", `${CID}.json`), JSON.stringify(state))
     fakeGit.pollutionFiles.set(`${wt}-${CID}`, ["openspec/changes/cid/design.md"])
 
-    await archSubmit(wt)
+    await implementSubmit(wt)
 
     expect(fakeGit.commitShas.length).toBe(1)
     expect(fakeGit.mergedBranches).toContain(fakeGit.commitShas[0])
@@ -817,7 +808,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     fakeGit.cachedDiffOut = "src/foo.java"
 
     await expect(
-      archSubmit(wt)
+      implementSubmit(wt)
     ).rejects.toThrow(/其它已暂存内容/)
     // 未进入 add 流程 → 绝不执行 restore（尤其 --worktree），主仓库工作树污染内容原样保留
     expect(fakeGit.callLog.some((l) => l.includes("restore"))).toBe(false)
@@ -837,7 +828,7 @@ describe("W9. analyze step（架构师）主仓库污染自动合并兜底", () 
     fakeGit.mainAheadCount = 2
 
     await expect(
-      archSubmit(wt)
+      implementSubmit(wt)
     ).rejects.toThrow(/主仓库分支已相对 worktree 分支前进/)
     // 未进入 merge 流程 → 无 write-tree/commit-tree/merge，worktree 分支不含其它 change 内容
     expect(fakeGit.callLog.some((l) => l.includes("write-tree"))).toBe(false)

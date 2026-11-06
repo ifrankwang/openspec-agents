@@ -15,7 +15,7 @@ import { init, agent_submit, set_worktree, complete_task_group } from "../src/ad
 import { loadWorkflow, stepAgentIds } from "../src/core/workflow"
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
-import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups, fullMustDoChecks } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, settleOtherGroups, fullMustDoChecks, writeClarifyMd } from "./helpers"
 import type { WorkItem } from "../src/core/workflow/types"
 
 const CID = "agent-submit"
@@ -115,8 +115,10 @@ function freshSetup(root: string): { wt: string; fakeGit: FakeGitRunner } {
   return { wt, fakeGit }
 }
 
-/** init + set_worktree 一次到位：worktree 就绪硬门禁要求提交前 worktree 就绪（opx_orch_set_worktree 后提交）。 */
+/** init + set_worktree 一次到位：worktree 就绪硬门禁要求提交前 worktree 就绪（opx_orch_set_worktree 后提交）。
+ *  执行边界经 clarify.md 夹具在 init 前写入（新流不再经 analyze 提交落边界），落入 metadata.execution_boundary。 */
 async function initWorktree(wt: string): Promise<void> {
+  writeClarifyMd(wt, CID, { "1": EB })
   const orch = makeOrchCtx(wt)
   await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
   await set_worktree.execute({ change_id: CID }, orch)
@@ -149,10 +151,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
       await initWorktree(wt)
 
       // analyze：architect
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       expect(taskItemOf(wt).phase).toBe("in_progress")
       expect(taskItemOf(wt).currentStep).toBe("implement")
 
@@ -215,10 +213,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     try {
       await initWorktree(wt)
       await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
-      await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx("openspec-developer", wt)
       )
@@ -245,10 +239,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       injectIssue(wt, makeIssue())
 
       await agent_submit.execute(
@@ -266,10 +256,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       injectIssue(wt, makeIssue())
 
       await agent_submit.execute(
@@ -290,10 +276,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       injectIssue(wt, makeIssue())
       // dev 提交豁免申请 → 子项进入 review（待裁定）
       await agent_submit.execute(
@@ -325,10 +307,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     try {
       await initWorktree(wt)
       await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
-      await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx("openspec-developer", wt)
       )
@@ -358,10 +336,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       injectIssue(wt, makeIssue({ severity: "Info" }))
 
       // Info child 未终态不阻塞 stepCanPass → implement passed 仍沿 on:pass 推进
@@ -437,16 +411,22 @@ describe("opx_agent_submit 通用 step 提交", () => {
       mkdirSync(stateDir, { recursive: true })
       writeFileSync(join(stateDir, `${CID}.json`), JSON.stringify(state, null, 2))
 
-      // 首次读取触发 readStateByChangeId 自动升级并落盘
+      // 首次读取触发 readStateByChangeId 自动升级；随后 init 把旧流 todo/analyze 迁移到 implement
       expect(taskItemOf(wt)).toBeUndefined()
-      const r = await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
-      expect(r).toContain("提交成功")
+      await initWorktree(wt)
       expect(taskItemOf(wt)).toBeDefined()
       expect(taskItemOf(wt).id).toBe("task:1")
+      // 旧在途会话（task_analysis 投影为 todo/analyze）→ 无阻塞时迁移到 in_progress/implement
       expect(taskItemOf(wt).phase).toBe("in_progress")
+      expect(taskItemOf(wt).currentStep).toBe("implement")
+
+      // 升级后状态可正常经 opx_agent_submit 推进（新流首轮 step 为 implement）
+      const r = await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+        makeCtx("openspec-developer", wt)
+      )
+      expect(r).toContain("提交成功")
+      expect(taskItemOf(wt).currentStep).toBe("verify_tool")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
@@ -466,10 +446,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
 
       // 推进到 review 阶段后，tool reviewer 按 verify_tool step 提交
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx("openspec-developer", wt)
@@ -491,15 +467,13 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt, fakeGit } = freshSetup(root)
     try {
       await initWorktree(wt)
+      // 新流：init 即 implement，首轮不再提交 analyze（analyze 仅 blocker 回退落点）
       for (const [step, agent] of [
-        ["analyze", "openspec-architect"],
         ["implement", "openspec-developer"],
         ["verify_tool", "openspec-reviewer-tool"],
         ["verify_task", "openspec-reviewer-task"],
       ] as const) {
-        const extra = step === "analyze"
-          ? { execution_boundary: EB }
-          : step === "implement" ? { completed_task_ids: ["1", "2", "3"] }
+        const extra = step === "implement" ? { completed_task_ids: ["1", "2", "3"] }
           : step === "verify_task" ? { verified_tasks: ["1", "2", "3"] } : {}
         await agent_submit.execute({ change_id: CID, step_id: step, verdict: "passed", ...extra }, makeCtx(agent, wt))
       }
@@ -540,10 +514,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       injectIssue(wt, makeIssue({ status: "exemption_requested", exemptReason: "第三方库限制" }))
 
       await agent_submit.execute(
@@ -565,10 +535,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       // 先注入 open issue 并经 submit 建立 todo child
       injectIssue(wt, makeIssue())
       await agent_submit.execute(
@@ -616,10 +582,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx("openspec-developer", wt)
@@ -701,7 +663,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     try {
       await initWorktree(wt)
       // 推进到 review/verify_quality
-        await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
@@ -937,10 +898,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       // implement 阶段 _retryCount=0 且无 _checkpoint 标记 → 非检查点态
       const err = await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", checkpoint_decision: "continue" },
@@ -956,41 +913,60 @@ describe("opx_agent_submit 通用 step 提交", () => {
     }
   })
 
-  test("20. analyze passed 必须提供 execution_boundary；缺省抛错且 state 不变", async () => {
+  test("20. analyze 回退时 execution_boundary 可选：缺省不抛错，clarify.md 边界保留", async () => {
     const root = `/tmp/opxsub-20-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      const err = await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed" },
+      // 新流：边界由提案阶段写入 clarify.md，analyze 仅在 blocker 回退时执行
+      expect(taskItemOf(wt).metadata["execution_boundary"]).toEqual(EB)
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: {
+            source_role: "openspec-developer", category: "external",
+            description: "第三方接口未定", evidence: "API 文档缺失", attempted_actions: "已尝试联系",
+          },
+        },
+        makeCtx("openspec-developer", wt)
+      )
+      expect(taskItemOf(wt).currentStep).toBe("analyze")
+
+      const blockerId = taskItemOf(wt).metadata["blockers"][0].id
+      // 不带 execution_boundary 提交 passed → 允许（不再是必传项）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "passed",
+          blocker_updates: [{ blocker_id: blockerId, user_response: "已确认" }],
+        },
         makeCtx("openspec-architect", wt)
-      ).catch((e: Error) => e)
-      expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/execution_boundary/)
-      expect(taskItemOf(wt).phase).toBe("todo")
+      )
+      expect(taskItemOf(wt).phase).toBe("in_progress")
+      expect(taskItemOf(wt).currentStep).toBe("implement")
+      expect(taskItemOf(wt).metadata["execution_boundary"]).toEqual(EB)
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }
   })
-  test("21. analyze blockers 写入 metadata.blockers；存在未解决 blocker 时 passed 被拦截", async () => {
+  test("21. implement blocker 写入 metadata.blockers；analyze 存在未解决 blocker 时 passed 被拦截", async () => {
     const root = `/tmp/opxsub-21-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
 
-      // 先以 failed 上报 blocker 落盘（awaiting_user），EB 校验仅在 passed 生效
+      // implement 上报 blocker（on_fail 回退 analyze），blocker 落盘 awaiting_user
       const r0 = await agent_submit.execute(
         {
-          change_id: CID, step_id: "analyze", verdict: "failed",
-          blockers: [{ source_role: "architect", category: "external", description: "第三方接口未定", evidence: "API 文档缺失", attempted_actions: "已尝试联系" }],
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "openspec-developer", category: "external", description: "第三方接口未定", evidence: "API 文档缺失", attempted_actions: "已尝试联系" },
         },
-        makeCtx("openspec-architect", wt)
+        makeCtx("openspec-developer", wt)
       )
       expect(r0).toBeDefined()
       expect(taskItemOf(wt).metadata["blockers"]).toHaveLength(1)
       expect(taskItemOf(wt).metadata["blockers"][0].status).toBe("awaiting_user")
 
-      // 存在未解决 blocker 时 passed → 拦截
+      // 存在未解决 blocker 时 analyze passed → 拦截
       const err = await agent_submit.execute(
         {
           change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB,
@@ -1019,6 +995,17 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
+      // 先经 implement blocker 回退 analyze（analyze 仅在回退落点可提交）
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: {
+            source_role: "openspec-developer", category: "external",
+            description: "第三方接口未定", evidence: "API 文档缺失", attempted_actions: "已尝试联系",
+          },
+        },
+        makeCtx("openspec-developer", wt)
+      )
       const err = await agent_submit.execute(
         { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB, blocker_updates: [{ blocker_id: "b99", user_response: "x" }] },
         makeCtx("openspec-architect", wt)
@@ -1034,7 +1021,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       // 只覆盖部分 task → 抛错
       const err = await agent_submit.execute(
@@ -1060,7 +1046,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       await agent_submit.execute(
         {
@@ -1083,7 +1068,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       // 先提交部分完成，制造 submitted 态
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       expect(taskChildrenOf(wt).every((t: any) => t.phase === "review")).toBe(true)
@@ -1125,7 +1109,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       expect(taskItemOf(wt).currentStep).toBe("verify_task")
@@ -1169,7 +1152,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
 
@@ -1205,7 +1187,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
       // passed=true + boundary_expansion → 抛错
@@ -1241,7 +1222,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
@@ -1267,7 +1247,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
       const err = await agent_submit.execute(
@@ -1298,7 +1277,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
       const r = await agent_submit.execute(
@@ -1327,7 +1305,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
@@ -1357,10 +1334,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt)
-      )
       // analyze 通过后进入 implement（in_progress 阶段，非 review）
       expect(taskItemOf(wt).phase).toBe("in_progress")
       expect(taskItemOf(wt).currentStep).toBe("implement")
@@ -1395,7 +1368,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
       // tool reviewer 在 verify_tool 报带 dimension（style）的跨维 issue → child 写入、failed 回退 implement
@@ -1461,7 +1433,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
 
@@ -1526,7 +1497,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
@@ -1595,7 +1565,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
 
@@ -1648,7 +1617,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
@@ -1687,7 +1655,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       // 注入既存非终态 Info child（与待报 Low issue 同 key，dedupe key 不含 severity）
       injectIssue(wt, {
@@ -1720,7 +1687,6 @@ describe("opx_agent_submit 通用 step 提交", () => {
       await initWorktree(wt)
       // init 后 children 为 task child "1"/"2"/"3"（tasks.md 1.1/1.2/1.3）
       expect(taskItemOf(wt).children.filter((c: WorkItem) => c.type === "task").map((c: WorkItem) => c.id)).toEqual(["1", "2", "3"])
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       // 注入 issue：id/externalId "1" 与 task child 短数字 id "1" 撞车；归因 quality/architecture
       injectIssue(wt, makeIssue({
@@ -1798,10 +1764,6 @@ function injectReviewIssue(wt: string, issue: Record<string, unknown>): void {
 /** 驱动到 verify_quality 阶段（analyze → implement → verify_tool → verify_task）。 */
 async function driveToVerifyQuality(wt: string): Promise<void> {
   await initWorktree(wt)
-  await agent_submit.execute(
-    { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-    makeCtx("openspec-architect", wt)
-  )
   await agent_submit.execute(
     { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
     makeCtx("openspec-developer", wt)
@@ -1949,7 +1911,6 @@ describe("issue 复核（recheck）端到端", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
       // tool reviewer 报 tool 层 Low issue 并 failed → 回 implement
@@ -2122,7 +2083,6 @@ describe("issue 复核（recheck）端到端", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_task", verdict: "passed", verified_tasks: ["1", "2", "3"] }, makeCtx("openspec-reviewer-task", wt))
@@ -2220,7 +2180,6 @@ describe("issue 复核（recheck）端到端", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
 
       // 注入 quality 层 todo issue：报源 security reviewer、未声明 dimension（metadata 无 dimension 字段，回落 style）
       const statePath = join(wt, "openspec", "states", `${CID}.json`)
@@ -2266,7 +2225,6 @@ describe("issue 复核（recheck）端到端", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
       await agent_submit.execute({ change_id: CID, step_id: "verify_tool", verdict: "passed" }, makeCtx("openspec-reviewer-tool", wt))
 
@@ -2332,7 +2290,6 @@ describe("issue 复核（recheck）端到端", () => {
     const { wt } = freshSetup(root)
     try {
       await initWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
       await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
 
       // tool reviewer 报跨维 issue（dimension=maintainability）并 failed → 回 implement

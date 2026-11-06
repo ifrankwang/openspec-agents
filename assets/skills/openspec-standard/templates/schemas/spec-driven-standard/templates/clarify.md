@@ -57,6 +57,23 @@
 - Tier: <!-- SIMPLE / COMPLEX -->
 - Rationale: <!-- one line -->
 
+## 执行边界
+
+<!-- 由提案阶段 Phase 3 架构审查产出，主代理在复核 PASS 后写入。按任务组列出
+     实施范围，机器可读：本小节内第一个 yaml 围栏由实施流程初始化时解析。
+     结构：顶层 task_groups，其下以任务组 id（如 "1"）为键，每项包含
+       allowed_directories — 非空字符串数组，相对仓库根的允许改动目录
+       allowed_packages    — 非空字符串数组，允许新增/修改的包路径
+       notes               — 可空，实施建议
+     只列该任务组必须改动的目录与包（含其测试），默认不放开整个仓库。
+     写法示例（说明用，非真实数据；实际写入时用 yaml 围栏承载）：
+       task_groups:
+         "1":
+           allowed_directories: ["src/core"]
+           allowed_packages: ["src/core/x"]
+           notes: "可选实施建议"
+     本小节缺失或解析失败时，实施流程按整个 worktree 处理。 -->
+
 ## Initial Capabilities
 
 <!-- Preliminary guess of which specs will be created or modified (kebab-case names).

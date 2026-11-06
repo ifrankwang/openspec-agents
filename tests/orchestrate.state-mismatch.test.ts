@@ -10,7 +10,7 @@
  * M6  反方向错位（phase=review + currentStep=implement）submit 拦截
  * M7  in_progress/implement 一致态正常 ✅（不回归）
  * M8  review/verify_tool 一致态正常 ✅（不回归）
- * M9  currentStep=null（todo 初始态）不误报且提交放行
+ * M9  currentStep=null（历史遗留空 step）不误报且提交放行
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { writeFileSync, readFileSync } from "node:fs"
@@ -21,7 +21,7 @@ import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loade
 import { phaseStepMismatch } from "../src/core/workflow/engine"
 import { FakeGitRunner, setupWithFakeGit, teardown } from "./helpers"
 import {
-  setupToAnalyze, driveToImplement, driveToVerifyTool, readItem, DEFAULT_EXECUTION_BOUNDARY,
+  driveToImplement, driveToVerifyTool, readItem, taskIdsOf,
 } from "./helpers-workflow"
 
 const CID = "test-state-mismatch"
@@ -161,24 +161,26 @@ describe("状态异常拒绝视图", () => {
     } finally { teardown(root) }
   })
 
-  test("M9. currentStep=null（todo 初始态）不误报且提交放行", async () => {
+  test("M9. currentStep=null（历史遗留空 step）不误报且提交放行", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const { ctx } = await driveToImplement(wt, CID)
       rewriteItem(wt, (item) => { item.currentStep = null })
       const item = readItem(wt, CID)
-      expect(item.phase).toBe("todo")
+      expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBeNull()
       const workflow = loadWorkflowFile(TASK_WORKFLOW_PATH)
+      // currentStep=null 不参与 phase↔step 归属判定 → 不误报
       expect(phaseStepMismatch(item, workflow)).toBe(false)
-      const archView = await status.execute({ change_id: CID }, ctx.arch)
-      expect(archView).toContain("# ✅ 当前轮到你执行")
-      expect(archView).not.toContain("状态异常")
+      const devView = await status.execute({ change_id: CID }, ctx.dev)
+      expect(devView).not.toContain("状态异常")
+      // 提交路由在 currentStep=null 时不做 step 一致性拦截 → 放行并正常推进
       await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
-        ctx.arch
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item) },
+        ctx.dev
       )
-      expect(readItem(wt, CID).phase).toBe("in_progress")
+      expect(readItem(wt, CID).phase).toBe("review")
+      expect(readItem(wt, CID).currentStep).toBe("verify_tool")
     } finally { teardown(root) }
   })
 })

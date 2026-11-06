@@ -3,7 +3,7 @@
  *
  * 10 个场景，每个驱动状态推进到节点后调 opx_status(ctx) 断言渲染内容：
  * S1  未初始化 → 提示
- * S2  analyze → architect ✅ 视图 + skill 名
+ * S2  analyze（blocker 回退落点）→ architect ✅ 视图 + skill 名
  * S3  implement → developer ✅ 视图
  * S4  verify_tool → reviewer-tool ✅ 视图 + skill 名
  * S5  verify_task → reviewer-task ✅ 视图
@@ -19,10 +19,10 @@ import { join } from "node:path"
 import { readFileSync, writeFileSync } from "node:fs"
 
 import { __setGitRunner } from "../src/core/git"
-import { status } from "../src/adapters/opencode/tools"
+import { status, agent_submit } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, setupWithFakeGit, teardown, makeCtx, makeOrchCtx } from "./helpers"
 import {
-  setupToAnalyze, driveToImplement, driveToVerifyTool,
+  driveToImplement, driveToVerifyTool,
   driveToVerifyTask, driveToQuality, readItem,
 } from "./helpers-workflow"
 
@@ -64,11 +64,19 @@ describe("S1: 未初始化", () => {
 //  场景 2: analyze step → architect ✅ 视图
 // ═══════════════════════════════════════════════════
 
-describe("S2: analyze step", () => {
+describe("S2: analyze step（blocker 回退落点）", () => {
   test("architect 视角输出 ✅ 视图 + skill 名", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const { ctx } = await driveToImplement(wt, CID)
+      // 首轮为 implement；analyze 仅作为 implement 上报 blocker 后的回退落点执行
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "developer", category: "external_dependency", description: "缺外部地址", evidence: "spec 未提供", attempted_actions: "检查 spec" },
+        },
+        ctx.dev,
+      )
       const out = await status.execute({ change_id: CID }, ctx.arch)
       expect(out).toContain("# ✅ 当前轮到你执行")
       expect(out).toContain("**必须**调用 `opx_agent_submit()` 提交")

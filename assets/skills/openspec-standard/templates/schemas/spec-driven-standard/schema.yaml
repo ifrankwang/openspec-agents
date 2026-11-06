@@ -24,7 +24,9 @@ artifacts:
       assumed; then first present a simple, direct plan summary to the user
       and get an explicit confirmation of the direction - do NOT start
       Phase 2 (authoring) until the user has confirmed it (details in
-      methodology below).
+      methodology below). The execution boundary (执行边界) is NOT produced
+      during the interview: tasks.md does not exist yet, so the boundary is
+      produced in one place only - by the architecture review in Phase 3.
 
       Phase 2 - Authoring (TIERED): only after the user has explicitly
       confirmed the plan summary (HARD-GATE above), decide the tier using
@@ -49,6 +51,10 @@ artifacts:
         subagents, and its final report MUST end by telling you to start
         Phase 3.
 
+      Authoring follows the direction confirmed in clarify.md; the execution
+      boundary is not part of authoring - it is produced by the architecture
+      review in Phase 3.
+
       Complexity criteria - COMPLEX if ANY applies, otherwise SIMPLE:
       - touches 2+ capabilities or 2+ task groups with cross-group
         dependencies;
@@ -62,9 +68,19 @@ artifacts:
       When in doubt, choose COMPLEX: it keeps the orchestrating agent's
       context lean and is the safer default.
 
-      Phase 3 - Review loop (you, once authoring is complete):
-      1. Dispatch an independent review subagent (fresh general-purpose
-         session — never reuse the generation subagent). It must:
+      Phase 3 - Architecture review (you, once authoring is complete):
+      1. Dispatch an independent architecture reviewer subagent (fresh
+         session — never reuse the generation subagent). Prefer a dedicated
+         architecture-review subagent when the project makes one available;
+         when the environment has none, use a general-purpose subagent. In
+         both cases inject the full text of the standard's
+         `agents/architecture-review.md` (installed at
+         openspec/schemas/spec-driven-standard/agents/) as the reviewer's task
+         description — that file is the single source of truth for the
+         reviewer's duties, so inject it verbatim instead of paraphrasing it.
+         A dedicated subagent follows it as well; the dispatch note may stack
+         on top of its own definition.
+         The reviewer must:
          - run `openspec validate "<name>" --strict` for structural checks
            (note: validate takes the change name as a positional argument,
            no --change flag);
@@ -73,6 +89,15 @@ artifacts:
            consistency (clarify direction ↔ proposal capabilities ↔ specs
            requirements ↔ design decisions ↔ tasks with [spec:...]
            traceability tags);
+         - assess whether the architecture options the user already confirmed
+           in clarify.md's Architecture Direction are sound: fit with the
+           repository's existing architecture lineage, long-term evolution,
+           compatibility with existing contracts and behaviour, parallel
+           implementations / technical debt, and the rule-boundary
+           conclusions. Architecture skills are loaded by capability category
+           (match against the available skill descriptions — never hardcode a
+           skill name); when no matching skill is available, report the
+           degradation in the review report;
          - for changes that add or alter a rule, validation or blocking check,
            or introduce/reorder an execution path, check the rule-boundary
            findings entry by entry: the proposal's Rule Boundary section, the
@@ -85,19 +110,45 @@ artifacts:
            requirements/contracts (e.g. error codes, rate-limit semantics,
            existing implementations) do not conflict with what the main
            specs already establish;
+         - produce the execution boundary (执行边界) the apply workflow
+           reads: one entry per task group of tasks.md, in exactly this
+           machine-readable shape (it is the first yaml fence of the Execution
+           Boundary section; allowed_directories and allowed_packages must be
+           non-empty string arrays, notes may be empty or omitted):
+           ```yaml
+           task_groups:
+             "1":
+               allowed_directories:
+                 - "src/core"
+               allowed_packages:
+                 - "src/core/x"
+               notes: "optional implementation notes"
+           ```
+           Keep the boundary minimal and real - only the directories and
+           packages the task group must change (its tests included), never
+           the whole repository by default;
          - write findings to <changeRoot>/.review/issues.md, one block per
            issue with fields: severity | file | problem | suggested fix;
-           write "PASS" when clean. The .review/ directory exists only for
-           this working file during the loop - never use it to record
-           anything else.
+           write "PASS" when clean. In a read-only harness the reviewer only
+           returns its report and YOU write the file. The .review/ directory
+           exists only for this working file during the loop - never use it
+           to record anything else.
       2. If issues.md is not "PASS", YOU fix every issue yourself
          (change-directory documents only; you must not modify issues.md
          itself, and you must not delegate fixes to a subagent — fixing
-         in your own context is the token-saving design).
-      3. Re-dispatch the review subagent for a fresh full review; loop
+         in your own context is the token-saving design). When an issue
+         would change an architecture direction the user already confirmed,
+         NEVER overwrite it silently: go back to the user and re-run the plan
+         confirmation gate (present the revised direction, get an explicit
+         confirmation), record the reconfirmed direction in clarify.md's
+         Architecture Direction, and only then fix the remaining documents.
+      3. Re-dispatch the architecture reviewer for a fresh full review; loop
          until "PASS" or 3 review rounds. After 3 rounds with remaining
          issues, stop and present the leftover issues to the user.
-      4. On "PASS", delete the .review/ directory.
+      4. On "PASS", write the review's execution boundary into clarify.md's
+         Execution Boundary section (执行边界, shape above), then delete the
+         .review/ directory, and only then hand the change over to the apply
+         workflow.
 
       Do NOT hand over to the apply workflow before Phase 3 ends with
       "PASS" (or with leftover issues explicitly accepted by the user).
@@ -271,6 +322,11 @@ artifacts:
         authoring starts; SIMPLE means the orchestrating agent writes the
         remaining artifacts itself, COMPLEX means one fresh generation
         subagent writes them.
+      - **Execution Boundary (执行边界)**: written by you from the Phase 3
+        architecture review after "PASS" - one entry per task group in the
+        machine-readable shape defined in Phase 3 (the section's first yaml
+        fence). Missing or unparsable means the apply workflow falls back to
+        the whole worktree.
       - **Initial Capabilities**: preliminary guess of which specs will be touched
         (kebab-case). Finalized in proposal.md.
 

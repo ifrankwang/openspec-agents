@@ -1,5 +1,5 @@
 # task workflow：OpenSpec change 的通用任务流转
-# 对应现有编排阶段：分析（todo）→ 实现（in_progress）→ 三重审查+收尾验证（review）
+# 对应现有编排阶段：实现（in_progress，首轮直接开发）→ 三重审查+收尾验证（review）；todo/analyze 仅作为 implement 上报 blocker 后的回退落点
 # 语义归属：step 级 instructions/constraints 定义各 step 专属语义；
 # 跨所有 step 共享内容收敛到顶层 common（step 自动继承）；非 step 归属的引擎状态文案不进配置。
 # 占位符 {{key}} 经 interpolateText 注入动态值，缺值保留原文。
@@ -39,18 +39,17 @@ phases:
           on_pass: implement
           on_fail: analyze
         instructions:
-          - "校验 design.md 与 tasks.md、specs/ 下相关 spec.md 的一致性（据 tasks.md 各行 `[spec:xxx]` 溯源定位相关 spec.md 一并复核）"
-          - "按评估维度逐项审查 design.md 并给出结论：architecture / api-design / db-design（无问题也需简要确认），不以假设替代确认"
-          - "方案涉及新增/修改业务规则、校验或拦截逻辑，或新增/改变任何执行路径时，按架构维度检查点清单核对规则边界推演结论（对照 proposal.md 的「规则边界」小节、specs 下相关 spec.md 的场景、design.md 的判定挂载点，聚焦当前任务组直接相关的规则变更）；命中检查点定义的缺陷 → 提交 blocker（category: architecture_design），不以假设替代确认"
-          - "校验设计文档与任务前提的一致性，评估架构模式合规性"
-          - "输出执行边界：allowed_directories（含测试目录）与 allowed_packages 白名单，notes 仅填实施建议（关键坑位/组件复用/边缘场景/框架应用/通用做法），不重复目录与包路径，无补充时留空"
-          - "存在缺口时提交 blocker（category: architecture_design / info_gap），不以假设替代确认"
-          - "需用户拍板的问题由你直接确认，不提交用户确认型 blocker：有人值守时用 question 工具向用户提问（拿到答复当场继续，不留档）；无人值守时（依据视图「确认模式」标识）自行选择最优解继续。确认/裁决后当场继续执行，本轮未干完下一轮重新确认"
-          - "存在未解决 blocker 时无法以 passed 提交，先经 blocker_updates 逐条置 resolved（user_response 填确认/裁决结论）后再提交"
-          - "提交 opx_agent_submit，必传参数 execution_boundary"
+          - "处理 implement 上报的 blocker：逐条核对 category / description / evidence，判断属于用户确认型、方案/设计缺口型还是环境/技术阻塞型"
+          - "处理 blocker 过程中如发现新的方案/设计缺口，可按 blockers 参数提交（category: architecture_design 或 info_gap），并在裁决结论中说明需回提案流程修订的范围"
+          - "需用户拍板的问题由你直接确认：有人值守时用 question 工具向用户提问（拿到答复当场继续）；无人值守时（依据视图「确认模式」标识）自行选择最优解继续；确认/裁决后当场继续执行"
+          - "经 blocker_updates 逐条置 resolved（user_response 填确认/裁决结论与处理方式）；存在未解决 blocker 时无法以 passed 提交"
+          - "blocker 属方案/设计缺口时，判断是否需回提案流程修订规划文档：需要时在裁决结论中明确要求，不得在本步骤重写 design.md / proposal.md / specs（规划文档修改归提案流程）"
+          - "需要调整实施范围时修订执行边界：经 execution_boundary 提交（仅在需要变更时提交，未变更不提交）"
+          - "本步骤不做文档一致性复核与架构模式审查（已前移到提案阶段架构审查）"
+          - "提交 opx_agent_submit"
         constraints:
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需用户拍板时使用）"
-          - "只审当前任务组范围：除任务排列是否合理需阅览全部任务组标题外，其它检查聚焦当前任务组直接相关的文档章节；评估整体架构契合与重构历史逻辑贴合时，可阅览项目整体结构与既有实现建立架构脉络（不含其它任务组设计文档），审查结论仍聚焦当前方案，不扩散为对既有代码的全面审查"
+          - "只处理当前任务组的 blocker 与执行边界修订，不做全量文档复核"
   - name: in_progress
     steps:
       - id: implement
@@ -78,7 +77,7 @@ phases:
           on_pass: verify_tool
           on_fail: analyze
         instructions:
-          - "tasks.md 当前任务组任务项 + `[spec:xxx]` 溯源 specs/ 下相关 spec.md（需求细节与验收标准）；存在时读取 clarify.md（架构方向结论）"
+          - "tasks.md 当前任务组任务项 + `[spec:xxx]` 溯源 specs/ 下相关 spec.md（需求细节与验收标准）；存在时读取 clarify.md（架构方向结论）；执行边界以视图为准（来源 clarify.md，未解析到时默认整个 worktree）"
           - "按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界"
           - "实施前识别 spec 描述的一并操作行为组（如状态变更与数据入队这类需同时发生的多个行为）；实施后逐项自证每个行为真实生效，禁止以单一状态字段的实现替代其他行为"
           - "涉及数据模型或流程产出变更（含字段/实体承载位置搬迁、AI 生成等流程产物）时，自证须包含关键数据产出断言：产出字段已持久化到 spec 指定承载位置且值完整非空、搬迁承接与同一输入产出基线一致（按已加载接口测试规范执行）；禁止仅以流程跑通/接口成功替代"
@@ -99,7 +98,7 @@ phases:
           - "修复完成的 issue 经 fixed_issue_ids 上报后进入待复核（review）状态，终态由报源 reviewer 复核裁定；不可修 issue 经 exempt_issue_ids 申请豁免（申请后进入待裁定（review）状态，由报源 reviewer 在后续审查轮次裁定，被驳回的 issue 回待修复）；Info 级 issue 不阻塞提交，无需申请豁免；全部 blocking issue 均已上报修复或申请豁免后才可 passed 提交推进"
           - "确定性质量工具检查出的问题不得以压制手段（压制注解/注释抑制/规则排除配置/平台状态标注/构建跳过开关等）静默规避：确需压制时，必须在压制处代码注释说明清楚理由（commit message 可补充），并经 exempt_issue_ids 申请豁免由报源 reviewer 裁定；不得以 fixed_issue_ids 冒充修复；被驳回后须移除压制并真实修复"
           - "遇外部依赖、凭证、真实输入或必须 stub/降级/跳过验收才能继续时，以 verdict=failed 提交 blocker（含 source_role、task_id、category、description、evidence、attempted_actions、options）"
-          - "blocker 上报后经 question 向用户确认处理方式，确认结果经 blocker_updates（blocker_id + user_response）上报置 resolved；人工执行任务凭用户确认留痕列入 completed_task_ids 重新提交（申报依据为 blocker 记录，不得凭空申报）"
+          - "blocker 上报后：有人值守经 question 向用户确认处理方式；无人值守按视图「确认模式」标识自行裁决。blocker 的 resolved 由架构裁决者在 analyze 回退步骤处理，你无需自行 resolve；人工执行任务凭视图 Blocker 留痕（resolved 且 user_response 记录确认/裁决结论）列入 completed_task_ids 重新提交（申报依据为 blocker 记录，不得凭空申报）"
           - "提交 opx_agent_submit：passed 提交前须将全部已完成（含被驳回后修复的）子任务列入 completed_task_ids（数字 id 如 1、2，或任务编号如 1.1）申报，全部子任务已验证时可省略；无法完成或人工执行的任务不得虚报，应经 verdict=failed + blocker 上报后凭留痕申报；不可修 issue 申请豁免（exempt_issue_ids）"
         constraints:
           - "禁用 edit/write 修改 `{{worktree_path}}/openspec/changes/` 下任何文档（spec/design/tasks/clarify）；唯一例外：所提交 fixed_issue_ids 中某 issue 的 file 字段指向该目录下文档时，仅允许按该 issue 的要求修改对应文档，不得扩大范围；本约束为提示词级约束，工具层不校验实际改动的文件"

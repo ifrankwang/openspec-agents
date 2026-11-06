@@ -45,22 +45,23 @@ function normalizeStateJson(raw: string): string {
 }
 
 describe("双轨对比：插件壳 vs MCP 形态状态机行为一致（tasks 4.6）", () => {
-  test("同一 change 两端跑 init → set_worktree → analyze passed → status，状态文件一致", async () => {
+  test("同一 change 两端跑 init → set_worktree → implement 上报 blocker 回退 analyze → status，状态文件一致", async () => {
     const rootPlugin = `/tmp/dual-plugin-${Date.now()}`
     const rootMcp = `/tmp/dual-mcp-${Date.now()}`
     try {
       // ── 插件壳形态：直接调用 tools.execute（与 OpenCode 插件壳同一条执行路径）──
       const { worktree: wtPlugin } = setupWithFakeGit(rootPlugin, CID)
       const orchCtx = makeOrchCtx(wtPlugin)
-      const archCtx = makeCtx("openspec-architect", wtPlugin)
+      const devCtx = makeCtx("openspec-developer", wtPlugin)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orchCtx)
       await set_worktree.execute({ change_id: CID }, orchCtx)
+      // 首轮为 implement：上报 blocker（verdict=failed）→ 回退 analyze，两端须产出同一状态
       await agent_submit.execute(
         {
-          change_id: CID, step_id: "analyze", verdict: "passed",
-          execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.example"], notes: "" },
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "developer", category: "external_dependency", description: "缺少外部接口地址", evidence: "spec 未提供", attempted_actions: "检查 spec" },
         },
-        archCtx
+        devCtx
       )
       const pluginStatus = await status.execute({ change_id: CID }, orchCtx)
 
@@ -80,9 +81,9 @@ describe("双轨对比：插件壳 vs MCP 形态状态机行为一致（tasks 4.
       const mcpSubmit = await client.callTool({
         name: "opx_agent_submit",
         arguments: {
-          change_id: CID, step_id: "analyze", verdict: "passed",
-          execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.example"], notes: "" },
-          _agent: "openspec-architect",
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "developer", category: "external_dependency", description: "缺少外部接口地址", evidence: "spec 未提供", attempted_actions: "检查 spec" },
+          _agent: "openspec-developer",
         },
       })
       expect((mcpSubmit as any).isError).toBeUndefined()
@@ -97,9 +98,9 @@ describe("双轨对比：插件壳 vs MCP 形态状态机行为一致（tasks 4.
       const stateMcp = readFileSync(join(wtMcp, "openspec", "states", `${CID}.json`), "utf-8")
       expect(normalizeStateJson(statePlugin)).toBe(normalizeStateJson(stateMcp))
 
-      // 两形态视图行为一致：analyze passed 后均推进到 implement 并分派 developer
-      expect(pluginStatus).toContain("分派子代理：`openspec-developer`")
-      expect(mcpStatusText).toContain("分派子代理：`openspec-developer`")
+      // 两形态视图行为一致：blocker 回退后均落 analyze 并分派架构师
+      expect(pluginStatus).toContain("分派子代理：`openspec-architect`")
+      expect(mcpStatusText).toContain("分派子代理：`openspec-architect`")
     } finally {
       teardown(rootPlugin)
       teardown(rootMcp)

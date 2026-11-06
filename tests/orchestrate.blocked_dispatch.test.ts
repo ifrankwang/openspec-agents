@@ -21,7 +21,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, status, agent_submit } from "../src/adapters/opencode/tools"
 import { INIT_PROJECT_STACKS, FakeGitRunner, setupWithFakeGit, teardown, makeCtx } from "./helpers"
 import {
-  setupToAnalyze, driveToQuality, submitQualityPassed,
+  setupToImplement, driveToQuality, submitQualityPassed,
   taskIdsOf, readItem, DEFAULT_EXECUTION_BOUNDARY,
 } from "./helpers-workflow"
 
@@ -63,11 +63,7 @@ describe("recheck 漏带链路：blocked 分派报源 reviewer 并补交解除",
   test("verify_task 漏带 recheck → status 分派 openspec-reviewer-task → recheck-only 补交解除", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: DEFAULT_EXECUTION_BOUNDARY })
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(readItem(wt, CID)) },
         ctx.dev
@@ -230,7 +226,7 @@ describe("recovery reset_steps 重置 review tag", () => {
   test("reset_steps 值域校验：非 review phase / 与 review_layer 互斥 / 空数组 / 非法 step → 抛错零变更", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID)
       await expectError(
         init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl", reset_steps: ["verify_tool"] } } as any, ctx.orch),
         /reset_steps 参数仅当 recovery.phase 为 review/
@@ -252,8 +248,8 @@ describe("recovery reset_steps 重置 review tag", () => {
         init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review", reset_steps: ["quality_review"] } } as any, ctx.orch),
         /quality_review.*不属于当前会话形态（full 模式）的审查 step/
       )
-      // 抛错零变更：仍停留在 analyze
-      expect(readItem(wt, CID).currentStep).toBe("analyze")
+      // 抛错零变更：仍停留在 init 落点的 implement（参数校验早于任何状态变更）
+      expect(readItem(wt, CID).currentStep).toBe("implement")
     } finally { teardown(root) }
   })
 })
@@ -344,11 +340,7 @@ describe("exempt 提交→推进→裁定链路（exempt 子项进入 review 待
   test("dev 提交 exempt_issue_ids → child 进 review 待裁定 + implement 放行推进 verify_tool → 漏带裁定 blocked 分派报源 reviewer → 补交 dismissed 解除", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: DEFAULT_EXECUTION_BOUNDARY })
       // 注入 tool 层报源阻塞 issue（todo 态，待 dev 申请豁免）
       rewriteItem(wt, (item) => {
         item.children.push({
@@ -394,11 +386,7 @@ describe("exempt 提交→推进→裁定链路（exempt 子项进入 review 待
   test("exempt 裁定 rejected：reviewer 提交 verify_tool failed + rejected 裁定 → issue 回 todo，item 回退 implement 收敛", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: DEFAULT_EXECUTION_BOUNDARY })
       rewriteItem(wt, (item) => {
         item.children.push({
           id: "issue:7", source: "openspec", externalId: "7", type: "issue",
@@ -431,11 +419,7 @@ describe("exempt 提交→推进→裁定链路（exempt 子项进入 review 待
   test("mixed：同层 fixed 待复核 + exempt 待裁定，补交不全仍持续分派报源 reviewer 直至解除（不二次死锁）", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: DEFAULT_EXECUTION_BOUNDARY },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: DEFAULT_EXECUTION_BOUNDARY })
       // 注入 tool 层两个阻塞 issue：fixed 用（7）、exempt 用（8）
       rewriteItem(wt, (item) => {
         item.children.push(

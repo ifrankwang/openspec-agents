@@ -15,10 +15,10 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node
 import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
-import { init, status, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
+import { init, status, agent_submit, set_worktree, set_unattended } from "../src/adapters/opencode/tools"
 import { renderWorkflowStatusView } from "../src/core/workflow/status"
 import { loadWorkflow } from "../src/core/workflow/loader"
-import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeCtx, makeOrchCtx, fullMustDoChecks } from "./helpers"
+import { INIT_PROJECT_STACKS, FakeGitRunner, installTestSkillEnv, makeCtx, makeOrchCtx, fullMustDoChecks, writeClarifyMd } from "./helpers"
 
 const CID = "wf-status"
 
@@ -48,37 +48,24 @@ function taskItemOf(s: any): any {
   return s.workItems.find((w: any) => w.id === "task:1")
 }
 
-/** 用 opx_agent_submit 把新流推进到 review（verify_tool 步），返回 orchestrator/architect/developer ctx。 */
+/** 用 opx_agent_submit 把新流推进到 review（verify_tool 步）：新流 init 即 implement，implement passed 后进入 review。 */
 async function driveToReview(wt: string): Promise<{ o: ReturnType<typeof makeCtx>; a: ReturnType<typeof makeCtx>; d: ReturnType<typeof makeCtx> }> {
   const o = makeOrchCtx(wt)
   const a = makeCtx("openspec-architect", wt)
   const d = makeCtx("openspec-developer", wt)
+  writeClarifyMd(wt, CID, { "1": { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } })
   await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
-  await agent_submit.execute(
-    {
-      change_id: CID, step_id: "analyze", verdict: "passed",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },
-    },
-    a
-  )
   await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] }, d)
   return { o, a, d }
 }
 
-/** 把新流推进到 implement step（in_progress），返回 developer ctx。 */
+/** 把新流推进到 implement step（in_progress）：新流 init 即落 implement，无需 analyze 提交。 */
 async function driveToImplement(wt: string): Promise<ReturnType<typeof makeCtx>> {
   const o = makeOrchCtx(wt)
-  const a = makeCtx("openspec-architect", wt)
+  writeClarifyMd(wt, CID, { "1": { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" } })
   await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
   await set_worktree.execute({ change_id: CID }, o)
-  await agent_submit.execute(
-    {
-      change_id: CID, step_id: "analyze", verdict: "passed",
-      execution_boundary: { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" },
-    },
-    a
-  )
   return makeCtx("openspec-developer", wt)
 }
 
@@ -695,6 +682,30 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     try { rmSync(root, { recursive: true, force: true }) } catch {}
   })
 
+  test("implement：developer 视图渲染确认模式（默认有人值守 → set_unattended 切换无人值守）", async () => {
+    const root = `/tmp/wf-dev-confirm-${Date.now()}`
+    const wt = freshWt(root)
+    __setGitRunner(new FakeGitRunner())
+    const d = await driveToImplement(wt)
+
+    // 新流首轮即 implement：确认模式须在实施视图给出（开发者据此判断遇阻塞时提问还是自行裁决）
+    const out1 = await status.execute({ change_id: CID }, d)
+    expect(out1).toContain("## 确认模式")
+    expect(out1).toContain("当前：**有人值守**")
+    expect(out1).not.toContain("当前：**无人值守**")
+
+    // 开启无人值守（编排者专属）→ 同一 developer 视图切换为无人值守标识
+    const o = makeOrchCtx(wt)
+    const r = await set_unattended.execute({ change_id: CID, enabled: true }, o)
+    expect(r).toContain("无人值守模式已 **开启**")
+    const out2 = await status.execute({ change_id: CID }, d)
+    expect(out2).toContain("## 确认模式")
+    expect(out2).toContain("当前：**无人值守**")
+    expect(out2).not.toContain("当前：**有人值守**")
+
+    try { rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+
   test("analyze step：blockers 渲染（awaiting_user/resolved + 处理指引）", async () => {
     const root = `/tmp/wf-m1d-d-${Date.now()}`
     const wt = freshWt(root)
@@ -702,9 +713,22 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const o = makeOrchCtx(wt)
     await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
     await set_worktree.execute({ change_id: CID }, o)
+    // 新流 analyze 仅作 blocker 回退落点：implement 上报 blocker → on_fail 回退 analyze
+    await agent_submit.execute(
+      {
+        change_id: CID, step_id: "implement", verdict: "failed",
+        blocker: {
+          source_role: "openspec-developer", category: "architecture_design",
+          description: "接口契约未定", evidence: "E", attempted_actions: "A",
+        },
+      },
+      makeCtx("openspec-developer", wt)
+    )
 
     const state = readStateSync(wt)
     const item = taskItemOf(state)
+    expect(item.phase).toBe("todo")
+    expect(item.currentStep).toBe("analyze")
     item.metadata["blockers"] = [
       {
         id: "b1", sourceRole: "openspec-architect", taskId: null, category: "architecture_design",
@@ -969,8 +993,8 @@ describe("M1d 新流视图补齐：children/blockers/边界/摘要/terminal/进�
     const output = await status.execute({ change_id: CID }, o)
     expect(output).toContain("# 编排进度")
     expect(output).toContain("## 阶段进展 / 审核进度")
-    // tags 汇总：analyze/implement passed，verify_tool pending
-    expect(output).toContain("| `analyze` | `openspec-architect` | passed |")
+    // tags 汇总：implement passed；analyze 为 blocker 回退落点，首轮不执行且行内带「提案期已替代」标注
+    expect(output).toContain("| `analyze`（提案期已替代；仅 blocker 回退时执行） | `openspec-architect` | pending |")
     expect(output).toContain("| `implement` | `openspec-developer` | passed |")
     expect(output).toContain("| `verify_tool` | `openspec-reviewer-tool` | pending |")
     // children 统计（review 态计为待复核）

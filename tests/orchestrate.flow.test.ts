@@ -6,8 +6,9 @@
  * opx_status_workflow / orchestrate.optimize 等新流测试文件覆盖，本文件只保留：
  * 1. init 相关绿用例（base_branch 自动推导 / 显式 base_branch / detached HEAD /
  *    isolationNamespace 生成与补全）——直接测 init 工具，与新流相关
- * 2. 新流完整端到端 happy path 回归（init→analyze→implement→verify_tool→verify_task→
- *    verify_quality→verify_cleanup→done→complete_task_group），覆盖全流程状态机推进
+ * 2. 新流完整端到端 happy path 回归（init→implement→verify_tool→verify_task→
+ *    verify_quality→verify_cleanup→done→complete_task_group），覆盖全流程状态机推进；
+ *    analyze 已瘦身为 implement 上报 blocker 后的回退落点，首轮不执行
  *
  * 驱动统一走 helpers-workflow（经 opx_agent_submit 推进状态机），
  * 状态断言走 readItem / taskListOf / metadata。
@@ -17,10 +18,10 @@ import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
 import { generateIsolationNamespace } from "../src/core/namespace"
-import { init, set_worktree, complete_task_group } from "../src/adapters/opencode/tools"
+import { init, complete_task_group } from "../src/adapters/opencode/tools"
 import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, settleOtherGroups } from "./helpers"
 import {
-  setupToAnalyze, driveToQuality, submitQualityPassed, submitCleanupPassed, readItem, taskListOf,
+  setupToImplement, driveToQuality, submitQualityPassed, submitCleanupPassed, readItem, taskListOf,
 } from "./helpers-workflow"
 
 const CID = "test-flow"
@@ -111,14 +112,15 @@ describe("init 基础行为（base_branch 推导 / isolationNamespace）", () =>
 })
 
 describe("新流端到端 happy path", () => {
-  test("init→analyze→implement→verify_tool→verify_task→verify_quality→verify_cleanup→done→complete_task_group", async () => {
+  test("init→implement→verify_tool→verify_task→verify_quality→verify_cleanup→done→complete_task_group", async () => {
     const { wt, root, fakeGit } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      expect(readItem(wt, CID).phase).toBe("todo")
-      expect(readItem(wt, CID).currentStep).toBe("analyze")
+      const ctx = await setupToImplement(wt, CID)
+      // 首轮即落 in_progress/implement（analyze 仅作 blocker 回退落点）
+      expect(readItem(wt, CID).phase).toBe("in_progress")
+      expect(readItem(wt, CID).currentStep).toBe("implement")
 
-      await set_worktree.execute({ change_id: CID }, ctx.orch)
+      // set_worktree 已由 setupToImplement 完成
 
       const { item } = await driveToQuality(wt, CID)
       expect(item.phase).toBe("review")

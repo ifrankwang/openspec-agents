@@ -118,6 +118,8 @@ export async function readStateByWorktree(worktree: string, changeId?: string): 
 // ─── 旧格式读兼容迁移：taskGroups → workItems（单轨化后 taskGroups 不再持久化）───
 // 以下映射仅服务于旧格式状态文件升级为 workItems 的迁移入口，非双轨同步逻辑。
 // 升级后 taskGroups 字段不再写回，workItems 为唯一事实源。
+// 注意：task_analysis → todo/analyze 是旧结构的投影映射，新流不再写 todo/analyze 初始态
+// （初始化落点统一为 in_progress/implement，analyze 仅作 blocker 回退落点）。
 
 /** 旧 tg.status → WorkItem phase（迁移用） */
 function taskGroupStatusToPhase(status: Phase): WorkItemPhase {

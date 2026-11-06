@@ -40,7 +40,8 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, o)
 
-      const out = await status.execute({ change_id: CID }, makeCtx("openspec-architect", wt))
+      // 新流首轮落 implement → developer 为执行角色
+      const out = await status.execute({ change_id: CID }, makeCtx("openspec-developer", wt))
       expect(out).toContain("# ⛔ worktree 未就绪，当前拒绝执行")
       expect(out).toContain("opx_orch_set_worktree")
       expect(out).toContain("不调用 `opx_agent_submit`")
@@ -79,7 +80,7 @@ describe("worktree 就绪门禁：opx_status 视图", () => {
       const out = await status.execute({ change_id: CID }, o)
       expect(out).toContain("## Worktree")
       expect(out).toContain("**路径**")
-      expect(out).toContain("分派子代理：`openspec-architect`")
+      expect(out).toContain("分派子代理：`openspec-developer`")
     } finally { teardown(root) }
   })
 })

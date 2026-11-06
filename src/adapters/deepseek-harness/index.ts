@@ -142,15 +142,16 @@ function denyEditTools(frontmatter: Record<string, unknown>): boolean {
   return false
 }
 
-/** DSH 子代理 persona 前置的工具接入说明，避免子代理在首次 opx_status 前用 shell 全盘搜索工具。 */
+/** DSH 子代理 persona 前置的工具接入说明：区分编排流程内职责（先查 opx_status）与提案阶段审查（不碰 opx_*），
+ *  避免子代理在首次 opx_status 前用 shell 全盘搜索工具。 */
 const DSH_SUBAGENT_TOOL_ACCESS_PREAMBLE = `## DSH 工具接入（必读）
 
-- 本流程的 opx_* 工具在 DSH 中以 \`opx_*\` 原生工具形式出现（注册在本插件包内，无 \`mcp__\` 前缀），子代理通常只需要：
+- 本插件的 opx_* 工具在 DSH 中以 \`opx_*\` 原生工具形式出现（注册在本插件包内，无 \`mcp__\` 前缀），编排流程内的子代理通常只需要：
   - \`opx_status\`
   - \`opx_agent_submit\`
-- 调用工具时必须携带 \`_agent\` 参数传自身角色名（如 \`openspec-developer\`），否则身份无法判定、会被按编排主代理视角处理。
+- 若分派任务属于编排流程内职责（step 执行 / 审查 / 实施）：开始工作前第一件事是调用 \`opx_status\` 获取上下文，不要先探查仓库或读取状态文件；调用工具时必须携带 \`_agent\` 参数传自身角色名（如 \`openspec-developer\`），否则身份无法判定、会被按编排主代理视角处理。
+- 若分派任务是提案阶段的文档 / 架构审查（无编排会话）：不要调用任何 \`opx_*\` 工具，按分派任务说明执行（职责文本随分派注入）。
 - 若工具列表中没有这些工具，不要用 shell 搜索 \`opx\`、\`openspec\`、MCP 配置或安装路径——它们不是被隐藏，而是插件未加载成功，直接向编排者报告。
-- 开始工作前第一件事是调用 \`opx_status\` 获取上下文，不要先探查仓库或读取状态文件。
 `
 
 /**

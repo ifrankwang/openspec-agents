@@ -1,20 +1,19 @@
 /**
  * M1e-2a 新流测试基建自测。
  *
- * 验证 tests/helpers-workflow.ts 的驱动助手能真实推进状态机：
- * - setupToAnalyze：todo/analyze
- * - driveToImplement：in_progress/implement（analyze passed）
+ * 验证 tests/helpers-workflow.ts 的驱动助手能真实推进状态机（新流语义：首轮即 implement）：
+ * - setupToImplement：in_progress/implement（analyze 仅 blocker 回退落点，不再是首轮步骤）
+ * - driveToImplement：init 后即 implement，无 analyze 提交
  * - driveToVerifyTool：review/verify_tool（implement passed）
  * - driveToVerifyTask / driveToQuality：逐层推进到 review/verify_quality
  * - 投影助手：taskItemOf/taskListOf/blockersOf/metaOf
- * - 参数门禁：execution_boundary / completed_task_ids / verified_tasks 自动补齐
+ * - 参数门禁：execution_boundary（clarify.md 夹具）/ completed_task_ids / verified_tasks 自动补齐
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { rmSync } from "node:fs"
 import { __setGitRunner } from "../src/core/git"
 import { setupWithFakeGit, teardown } from "./helpers"
 import {
-  setupToAnalyze, driveToImplement, driveToVerifyTool,
+  setupToImplement, setupToAnalyze, driveToImplement, driveToVerifyTool,
   driveToVerifyTask, driveToQuality, submitQualityPassed, submitCleanupPassed,
   taskItemOf, taskListOf, blockersOf, metaOf, readItem,
 } from "./helpers-workflow"
@@ -60,10 +59,10 @@ describe("WorkItem 投影助手", () => {
 })
 
 describe("阶段驱动助手", () => {
-  test("setupToAnalyze：todo/analyze，workItems 构造", async () => {
+  test("setupToImplement：init 直接落 in_progress/implement，workItems 构造", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID)
       expect(ctx.orch.agent).toBe("primary")
       expect(ctx.orch.orchestrator).toBe(true)
       expect(ctx.arch.agent).toBe("openspec-architect")
@@ -73,12 +72,23 @@ describe("阶段驱动助手", () => {
       expect(ctx.dims["style"].agent).toBe("openspec-reviewer-style")
 
       const item = readItem(wt, CID)
-      expect(item.phase).toBe("todo")
-      expect(item.currentStep).toBe("analyze")
+      // 新流：初始化落点不再是 todo/analyze（analyze 仅 blocker 回退落点）
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
     } finally { teardown(root) }
   })
 
-  test("driveToImplement：in_progress/implement，analyze passed 落地", async () => {
+  test("setupToAnalyze 为兼容别名：同样落 implement", async () => {
+    const { wt, root } = fresh()
+    try {
+      await setupToAnalyze(wt, CID)
+      const item = readItem(wt, CID)
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+    } finally { teardown(root) }
+  })
+
+  test("driveToImplement：in_progress/implement，tasks 全 open", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx, item } = await driveToImplement(wt, CID)
@@ -86,6 +96,15 @@ describe("阶段驱动助手", () => {
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
       expect(taskListOf(item).every((t: any) => t.status === "open")).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("driveToImplement + clarify.md 边界夹具：metadata.execution_boundary 落地", async () => {
+    const { wt, root } = fresh()
+    try {
+      const boundary = { allowed_directories: ["src/core"], allowed_packages: ["src/core/x"], notes: "限定核心目录" }
+      const { item } = await driveToImplement(wt, CID, { boundary })
+      expect(metaOf(item, "execution_boundary")).toEqual(boundary)
     } finally { teardown(root) }
   })
 
@@ -126,12 +145,11 @@ describe("阶段驱动助手", () => {
     } finally { teardown(root) }
   })
 
-  test("recovery=dev_impl：setupToAnalyze 后直接到 in_progress/implement", async () => {
+  test("recovery=dev_impl：重复 init 带恢复参数仍落 in_progress/implement", async () => {
     const { wt, root } = fresh()
     try {
-      // 先初始化到 analyze，再带 recovery 重新初始化
-      await setupToAnalyze(wt, CID)
-      const ctx = await setupToAnalyze(wt, CID, { recovery: { phase: "dev_impl" } })
+      await setupToImplement(wt, CID)
+      const ctx = await setupToImplement(wt, CID, { recovery: { phase: "dev_impl" } })
       const item = readItem(wt, CID)
       expect(ctx.dev.agent).toBe("openspec-developer")
       expect(item.phase).toBe("in_progress")

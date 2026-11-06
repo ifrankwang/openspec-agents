@@ -4,10 +4,10 @@ import { join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
 import {
-  init, status, set_unattended,
+  init, status, set_unattended, agent_submit,
 } from "../src/adapters/opencode/tools"
 import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, readState } from "./helpers"
-import { setupToAnalyze, driveToVerifyTool } from "./helpers-workflow"
+import { setupToAnalyze, driveToImplement, driveToVerifyTool } from "./helpers-workflow"
 import {
   createInitialWorkItem, checkpointTriggered, effectiveMaxRetries,
 } from "../src/core/workflow/engine"
@@ -103,7 +103,15 @@ describe("T1: set_unattended tool", () => {
     const root = `/tmp/ut-mode-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const { ctx } = await driveToImplement(wt, CID)
+      // analyze 现为 blocker 回退落点：implement 上报 blocker 后架构师视角进入 analyze
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "developer", category: "external_dependency", description: "缺地址", evidence: "spec 未提供", attempted_actions: "检查 spec" },
+        },
+        ctx.dev,
+      )
 
       // 默认有人值守：视图渲染「确认模式」且标识为有人值守
       const out1 = await status.execute({ change_id: CID }, ctx.arch)

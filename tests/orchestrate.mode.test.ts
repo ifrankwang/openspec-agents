@@ -278,16 +278,23 @@ describe("opx_orch_init mode 变更窗口（W1 切组 / W2 重制当前组）", 
     try {
       const o = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
-      // 同组重复初始化传相同 mode：无提示
+      // 同组重复初始化传相同 mode：无切换提示（含基准分支回显与执行边界来源回显）
       const out1 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
-      expect(out1).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
+      expect(out1).toContain("编排会话已初始化。")
+      expect(out1).toContain("- **基准分支**: `main`")
+      expect(out1).toContain("- **执行边界**: 未从 clarify.md 解析到本任务组执行边界，实施视图按整个 worktree 处理。")
+      expect(out1).not.toContain("流程模式已从")
       // 切组不传 mode：沿用固化模式
       const out2 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2" }, o)
-      expect(out2).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
+      expect(out2).toContain("编排会话已初始化。")
+      expect(out2).toContain("- **基准分支**: `main`")
+      expect(out2).not.toContain("流程模式已从")
       expect(stateOf(wt).mode).toBe("simple")
       // 切组传相同 mode：同样无提示
       const out3 = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "simple" }, o)
-      expect(out3).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
+      expect(out3).toContain("编排会话已初始化。")
+      expect(out3).toContain("- **基准分支**: `main`")
+      expect(out3).not.toContain("流程模式已从")
       expect(stateOf(wt).mode).toBe("simple")
     } finally { teardown(root) }
   })
@@ -346,12 +353,11 @@ describe("task-simple.yaml 加载与结构", () => {
     expect(impl.phase.name).toBe("in_progress")
     expect(impl.step.agents.map((a) => a.id)).toEqual(["openspec-developer"])
     expect(impl.step.transitions).toEqual({ on_pass: "quality_review", on_fail: "implement" })
-    // 1.4 验收：constraints 不含边界占位符（执行边界默认整个 worktree）
-    for (const c of impl.step.constraints ?? []) {
-      expect(c).not.toMatch(/\{\{allowed_directories\}\}/)
-      expect(c).not.toMatch(/\{\{allowed_packages\}\}/)
-      expect(c).not.toMatch(/\{\{notes\}\}/)
-    }
+    // 1.4 验收：constraints 含边界占位符（两种模式统一使用 clarify.md 执行边界，未解析到时视图回落整个 worktree）
+    const implConstraints = (impl.step.constraints ?? []).join("\n")
+    expect(implConstraints).toContain("允许变更目录范围：{{allowed_directories}}")
+    expect(implConstraints).toContain("允许引用包范围：{{allowed_packages}}")
+    expect(implConstraints).toContain("实施前请注意遵守：{{notes}}")
 
     const qr = wf.stepMap.get("quality_review")!
     expect(qr.phase.name).toBe("review")

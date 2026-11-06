@@ -589,6 +589,43 @@ export function setupWorkspace(tmpRoot: string, changeId: string): string {
   return dir
 }
 
+// ─── clarify.md 执行边界夹具 ───
+
+export interface ClarifyBoundaryFixture {
+  allowed_directories: string[]
+  allowed_packages: string[]
+  notes?: string
+}
+
+/**
+ * 生成 clarify.md 内容：「执行边界」小节内 task_groups 映射（结构与 src/core/clarify-md.ts
+ * 的 parseExecutionBoundary 同构）。opx_orch_init 在初始化时解析该小节并写入 metadata.execution_boundary。
+ */
+export function clarifyMdText(boundaries: Record<string, ClarifyBoundaryFixture>): string {
+  const lines = ["# 需求澄清", "", "## 执行边界", "", "```yaml", "task_groups:"]
+  for (const [groupId, b] of Object.entries(boundaries)) {
+    lines.push(`  "${groupId}":`)
+    lines.push(`    allowed_directories: ${JSON.stringify(b.allowed_directories)}`)
+    lines.push(`    allowed_packages: ${JSON.stringify(b.allowed_packages)}`)
+    if (b.notes !== undefined) lines.push(`    notes: ${JSON.stringify(b.notes)}`)
+  }
+  lines.push("```", "")
+  return lines.join("\n")
+}
+
+/** 在 change 目录写入 clarify.md 执行边界夹具（须在 init 之前写入，init 才可解析到）。 */
+export function writeClarifyMd(
+  worktree: string,
+  changeId: string,
+  boundaries: Record<string, ClarifyBoundaryFixture>,
+): string {
+  const dir = join(worktree, "openspec", "changes", changeId)
+  mkdirSync(dir, { recursive: true })
+  const p = join(dir, "clarify.md")
+  writeFileSync(p, clarifyMdText(boundaries), "utf-8")
+  return p
+}
+
 // ─── Context Factory ───
 
 export function makeCtx(

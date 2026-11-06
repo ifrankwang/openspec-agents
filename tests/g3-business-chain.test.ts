@@ -8,7 +8,7 @@
  * 3. 提案标准补第四类强制场景，模板与本仓库已安装副本一致
  */
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import {
@@ -20,6 +20,21 @@ const REPO_ROOT = join(import.meta.dir, "..")
 
 function readRepo(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), "utf8")
+}
+
+/** 递归列出仓库内某目录下全部文件（相对该目录的 POSIX 路径、排序）；跳过隐藏文件/目录（.DS_Store 等噪音）。 */
+function listRepoFiles(relDir: string): string[] {
+  const out: string[] = []
+  const walk = (absDir: string, prefix: string): void => {
+    for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) walk(join(absDir, entry.name), rel)
+      else if (entry.isFile()) out.push(rel)
+    }
+  }
+  walk(join(REPO_ROOT, relDir), "")
+  return out.sort()
 }
 
 function stepInstructions(filePath: string, stepId: string): string {
@@ -229,11 +244,11 @@ describe("workflow 指令按链路口径（change 会话两份）", () => {
 // ─── 提案标准：第四类强制场景 + 副本一致性 ───
 
 describe("提案标准第四类强制场景：跨接口业务链路", () => {
-  const TPL_SCHEMA = "assets/skills/openspec-standard/templates/schemas/spec-driven-standard/schema.yaml"
-  const TPL_SPEC_MD = "assets/skills/openspec-standard/templates/schemas/spec-driven-standard/templates/spec.md"
+  const TPL_STANDARD_DIR = "assets/skills/openspec-standard/templates/schemas/spec-driven-standard"
+  const INS_STANDARD_DIR = "openspec/schemas/spec-driven-standard"
+  const TPL_SCHEMA = `${TPL_STANDARD_DIR}/schema.yaml`
+  const TPL_SPEC_MD = `${TPL_STANDARD_DIR}/templates/spec.md`
   const TPL_CONFIG = "assets/skills/openspec-standard/templates/openspec/config.yaml"
-  const INS_SCHEMA = "openspec/schemas/spec-driven-standard/schema.yaml"
-  const INS_SPEC_MD = "openspec/schemas/spec-driven-standard/templates/spec.md"
   const INS_CONFIG = "openspec/config.yaml"
 
   test("schema.yaml specs 指令含跨接口业务链路场景要求", () => {
@@ -261,9 +276,28 @@ describe("提案标准第四类强制场景：跨接口业务链路", () => {
     expect(config).toContain("THEN 写清后续查询返回的字段内容并逐字段列明")
   })
 
-  test("已安装副本与模板逐字一致", () => {
-    expect(readRepo(INS_SCHEMA)).toBe(readRepo(TPL_SCHEMA))
-    expect(readRepo(INS_SPEC_MD)).toBe(readRepo(TPL_SPEC_MD))
+  test("已安装副本与模板逐字一致（标准目录全量 + openspec/config.yaml）", () => {
+    const tplFiles = listRepoFiles(TPL_STANDARD_DIR)
+    const insFiles = listRepoFiles(INS_STANDARD_DIR)
+
+    // 比对范围覆盖标准目录全部文件：本次新增/改动的 README、agents/architecture-review、templates/clarify
+    // 与既有 schema/templates 一并纳入（防止后续新增文件漏检）
+    expect(tplFiles).toContain("README.md")
+    expect(tplFiles).toContain("agents/architecture-review.md")
+    expect(tplFiles).toContain("templates/clarify.md")
+    expect(tplFiles).toContain("templates/spec.md")
+    expect(tplFiles).toContain("schema.yaml")
+
+    // 无缺失、无多余：两侧文件清单完全相同（新增但未安装的文件会在此被拦下）
+    expect(insFiles).toEqual(tplFiles)
+
+    // 逐字比对：按文件粒度断言，失败信息可直接定位差异文件
+    for (const rel of tplFiles) {
+      expect({ file: rel, content: readRepo(`${INS_STANDARD_DIR}/${rel}`) })
+        .toEqual({ file: rel, content: readRepo(`${TPL_STANDARD_DIR}/${rel}`) })
+    }
+
+    // config.yaml 位于标准目录之外（templates/openspec/config.yaml ↔ openspec/config.yaml），单独逐字比对
     expect(readRepo(INS_CONFIG)).toBe(readRepo(TPL_CONFIG))
   })
 })

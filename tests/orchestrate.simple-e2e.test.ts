@@ -250,25 +250,26 @@ describe("simple 模式端到端：豁免裁定路径 + 合并冲突由 dev 解�
 })
 
 describe("simple 模式端到端：full 模式既有流转不受身份逻辑化影响（回归快照）", () => {
-  test("full 模式 init（显式 mode: full）→ analyze 正常推进", async () => {
+  test("full 模式 init（显式 mode: full）→ 首轮落 implement（analyze 保留为 blocker 回退落点）", async () => {
     const { root, wt } = fresh()
     try {
       const orch = makeOrchCtx(wt)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
       await set_worktree.execute({ change_id: CID }, orch)
-      // 显式 full：旧行为完整保留（analyze step 存在、初始态 todo/analyze）
+      // full 与 simple 首轮落点统一：文档复核前移到提案流程，analyze 仅作 implement 上报 blocker 后的回退落点
       expect(stateOf(wt).mode).toBe("full")
       const item = taskItemOf(wt)
-      expect(item.phase).toBe("todo")
-      expect(item.currentStep).toBe("analyze")
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      // blocker 回退路径仍落 analyze（回退落点可用）
       await agent_submit.execute(
         {
-          change_id: CID, step_id: "analyze", verdict: "passed",
-          execution_boundary: { allowed_directories: ["src"], allowed_packages: [], notes: "" },
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: { source_role: "developer", category: "external_dependency", description: "缺少外部接口地址", evidence: "spec 未提供", attempted_actions: "检查 spec" },
         },
-        makeCtx("openspec-architect", wt),
+        makeCtx("openspec-developer", wt),
       )
-      expect(taskItemOf(wt).currentStep).toBe("implement")
+      expect(taskItemOf(wt).currentStep).toBe("analyze")
     } finally { teardown(root) }
   })
 })

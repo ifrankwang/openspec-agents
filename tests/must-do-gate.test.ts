@@ -27,7 +27,7 @@ import {
 import { agentSubmitSchema } from "../src/core/tools/schemas"
 import { MUST_DO_CATALOG } from "../src/core/workflow/loader"
 import { makeCtx, FakeGitRunner, setupWorkspace, fullMustDoChecks } from "./helpers"
-import { setupToAnalyze, driveToVerifyTool, driveToVerifyTask, DIMENSION_AGENTS } from "./helpers-workflow"
+import { setupToImplement, driveToVerifyTool, driveToVerifyTask, DIMENSION_AGENTS } from "./helpers-workflow"
 
 const CID = "must-do"
 
@@ -84,16 +84,12 @@ async function freshAtTool(root: string): Promise<{ wt: string; fakeGit: FakeGit
   return { wt, fakeGit }
 }
 
-/** 驱动到 implement（analyze 已 passed），返回 worktree 根与 fake git。 */
+/** 驱动到 implement（新流 init 即落 implement，无需 analyze 提交；边界经 clarify.md 夹具注入），返回 worktree 根与 fake git。 */
 async function freshAtImplement(root: string): Promise<{ wt: string; fakeGit: FakeGitRunner }> {
   const wt = setupWorkspace(root, CID)
   const fakeGit = new FakeGitRunner()
   __setGitRunner(fakeGit)
-  const ctx = await setupToAnalyze(wt, CID)
-  await agent_submit.execute(
-    { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-    ctx.arch,
-  )
+  await setupToImplement(wt, CID, { boundary: EB })
   return { wt, fakeGit }
 }
 
@@ -843,11 +839,7 @@ describe("视图注入必做清单与证据要求", () => {
     __setGitRunner(new FakeGitRunner())
     useRealDeclaration()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        ctx.arch,
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       const out = await status.execute({ change_id: CID }, ctx.dev)
       expect(out).toContain("## 本 step 必做清单")
       expect(out).toContain("`compile`")
@@ -872,11 +864,7 @@ describe("视图注入必做清单与证据要求", () => {
     __setGitRunner(new FakeGitRunner())
     useRealDeclaration()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        ctx.arch,
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       const out = await status.execute({ change_id: CID }, ctx.dev)
       expect(out).toContain("`api_script`")
       expect(out).not.toContain("`e2e_script`")

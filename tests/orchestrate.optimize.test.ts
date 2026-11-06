@@ -26,7 +26,7 @@ import { loadWorkflowFile, TASK_WORKFLOW_PATH } from "../src/core/workflow/loade
 import { checkpointTriggered, recommendForItem } from "../src/core/workflow/engine"
 import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, settleOtherGroups } from "./helpers"
 import {
-  setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, submitQualityPassed,
+  setupToImplement, setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality, submitQualityPassed,
   taskListOf, metaOf, readItem, taskIdsOf, DIMENSION_AGENTS, rollbackQuality,
 } from "./helpers-workflow"
 
@@ -117,10 +117,21 @@ async function expectError(p: Promise<unknown>, pattern: RegExp): Promise<Error>
 }
 
 describe("B1. opx_status 阶段门禁", () => {
-  test("todo/analyze：architect 可过 gate，developer 被门禁且预期角色为 architect", async () => {
+  test("analyze blocker 回退：architect 可过 gate，developer 被门禁且预期角色为 architect", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const { ctx } = await driveToImplement(wt, CID)
+      // 回退落点才轮到 analyze：implement 上报 blocker → on_fail 回退 analyze
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "implement", verdict: "failed",
+          blocker: {
+            source_role: "openspec-developer", category: "requirement",
+            description: "需求缺口待确认", evidence: "spec 未覆盖", attempted_actions: "按 spec 推导",
+          },
+        },
+        ctx.dev
+      )
       const archView = await status.execute({ change_id: CID }, ctx.arch)
       expect(archView).toContain("# ✅ 当前轮到你执行")
       const devView = await status.execute({ change_id: CID }, ctx.dev)
@@ -190,29 +201,31 @@ describe("B1. opx_status 阶段门禁", () => {
 })
 
 describe("B2. Recovery 阶段恢复", () => {
-  test("recovery dev_impl → in_progress/implement，analyze passed tag", async () => {
+  test("recovery dev_impl → in_progress/implement，tags 清空（不再合成 analyze passed）", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID)
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "dev_impl" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
-      expect(item.tags["analyze:openspec-architect"]).toBe("passed")
+      // 新语义：首轮不再经过 analyze，恢复时也不合成 analyze passed tag
+      expect(item.tags["analyze:openspec-architect"]).toBeUndefined()
+      expect(item.tags).toEqual({})
     } finally { teardown(root) }
   })
 
-  test("recovery review → review/verify_tool，analyze+implement passed tag；残留 _retryCount 被清除", async () => {
+  test("recovery review → review/verify_tool，implement passed tag（无 analyze tag）；残留 _retryCount 被清除", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID)
       // 注入残留重试计数：recovery 须清除，防止恢复后下一次回退立即再次触发检查点
       rewriteItem(wt, (item) => { item.metadata["_retryCount"] = 5 })
       await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", recovery: { phase: "review" } }, ctx.orch)
       const item = readItem(wt, CID)
       expect(item.phase).toBe("review")
       expect(item.currentStep).toBe("verify_tool")
-      expect(item.tags["analyze:openspec-architect"]).toBe("passed")
+      expect(item.tags["analyze:openspec-architect"]).toBeUndefined()
       expect(item.tags["implement:openspec-developer"]).toBe("passed")
       expect(metaOf(item, "_retryCount")).toBe(0)
     } finally { teardown(root) }
@@ -221,10 +234,11 @@ describe("B2. Recovery 阶段恢复", () => {
   test("无 recovery 重复 init 保留既有阶段", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID)
       await driveToImplement(wt, CID)
       const r = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, ctx.orch)
-      expect(r).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
+      expect(r).toContain("编排会话已初始化。")
+      expect(r).toContain("- **执行边界**: 未从 clarify.md 解析到本任务组执行边界，实施视图按整个 worktree 处理。")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")
@@ -492,30 +506,46 @@ describe("B3.1. Recovery review 增量合并（保留 passed / 重置 failed / �
 })
 
 describe("B4. boundary 参数", () => {
-  test("analyze passed 必须携带 execution_boundary；缺省抛错", async () => {
+  const EB = { allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" }
+  const BLOCKER = {
+    source_role: "openspec-developer", category: "requirement",
+    description: "需求缺口待确认", evidence: "spec 未覆盖", attempted_actions: "按 spec 推导",
+  }
+
+  test("clarify.md 执行边界 → init 解析后 metadata 落盘（不再经 analyze 提交）", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await expectError(
-        agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed" }, ctx.arch),
-        /execution_boundary/
-      )
-      expect(readItem(wt, CID).phase).toBe("todo")
+      const { item } = await driveToImplement(wt, CID, { boundary: EB })
+      expect(metaOf(item, "execution_boundary")).toEqual(EB)
     } finally { teardown(root) }
   })
 
-  test("analyze passed 携带 execution_boundary → metadata 落盘", async () => {
+  test("analyze 回退修订 execution_boundary → 覆盖 clarify.md 边界（metadata 为事实源）", async () => {
     const { wt, root } = fresh()
     try {
-      const { item } = await driveToImplement(wt, CID)
-      expect(metaOf(item, "execution_boundary")).toEqual({ allowed_directories: ["src"], allowed_packages: ["com.t"], notes: "" })
+      const { ctx } = await driveToImplement(wt, CID, { boundary: EB })
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "failed", blocker: BLOCKER },
+        ctx.dev
+      )
+      const blockerId = readItem(wt, CID).metadata.blockers[0].id
+      const EB2 = { allowed_directories: ["src", "src/core"], allowed_packages: ["com.t", "com.t.core"], notes: "回退修订" }
+      await agent_submit.execute(
+        {
+          change_id: CID, step_id: "analyze", verdict: "passed",
+          execution_boundary: EB2,
+          blocker_updates: [{ blocker_id: blockerId, user_response: "按修订边界继续" }],
+        },
+        ctx.arch
+      )
+      expect(metaOf(readItem(wt, CID), "execution_boundary")).toEqual(EB2)
     } finally { teardown(root) }
   })
 
   test("verify_tool failed + boundary_expansion → 合并进执行边界并回 implement", async () => {
     const { wt, root } = fresh()
     try {
-      const { ctx } = await driveToVerifyTool(wt, CID)
+      const { ctx } = await driveToVerifyTool(wt, CID, { boundary: EB })
       await agent_submit.execute(
         {
           change_id: CID, step_id: "verify_tool", verdict: "failed",
@@ -598,35 +628,35 @@ describe("B5. checkpoint continue 重置 retryCount", () => {
 })
 
 describe("B6. opx_status 视图", () => {
-  test("orchestrator 分派视图：编排进度 + 下一步分派", async () => {
+  test("orchestrator 分派视图：编排进度 + 下一步分派（首轮即 implement）", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID)
       const view = await status.execute({ change_id: CID }, ctx.orch)
       expect(view).toContain("# 编排进度")
       expect(view).toContain("## 下一步")
-      expect(view).toContain("分派子代理：`openspec-architect`")
+      expect(view).toContain("分派子代理：`openspec-developer`")
     } finally { teardown(root) }
   })
 
-  test("architect working 视图：✅ 当前轮到你执行 + 操作指引", async () => {
+  test("developer working 视图：✅ 当前轮到你执行 + 操作指引", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      const view = await status.execute({ change_id: CID }, ctx.arch)
+      const ctx = await setupToImplement(wt, CID)
+      const view = await status.execute({ change_id: CID }, ctx.dev)
       expect(view).toContain("# ✅ 当前轮到你执行")
       expect(view).toContain("## 操作指引")
       expect(view).toContain("opx_agent_submit")
     } finally { teardown(root) }
   })
 
-  test("developer gate 视图：⛔ 阶段门禁 + 当前预期角色", async () => {
+  test("architect gate 视图：⛔ 阶段门禁 + 当前预期角色", async () => {
     const { wt, root } = fresh()
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      const view = await status.execute({ change_id: CID }, ctx.dev)
+      const ctx = await setupToImplement(wt, CID)
+      const view = await status.execute({ change_id: CID }, ctx.arch)
       expect(view).toContain("# ⛔ 阶段门禁")
-      expect(view).toContain("当前预期角色为：`openspec-architect`")
+      expect(view).toContain("当前预期角色为：`openspec-developer`")
     } finally { teardown(root) }
   })
 })

@@ -17,7 +17,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit } from "../src/adapters/opencode/tools"
 import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWithFakeGit, teardown, fullMustDoChecks } from "./helpers"
 import {
-  setupToAnalyze, driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
+  driveToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
   taskItemOf, taskListOf, metaOf, readItem, taskIdsOf, rollbackQuality,
 } from "./helpers-workflow"
 
@@ -242,20 +242,44 @@ describe("G3. 重复提交守卫", () => {
   })
 })
 
-// ── G4: analyze 参数守卫 ──
+// ── G4: analyze 回退落点（blocker 裁决）参数守卫 ──
 
-describe("G4. analyze 参数守卫", () => {
-  test("analyze passed 不带 execution_boundary → 抛错且 state 不变", async () => {
+describe("G4. analyze 回退落点参数守卫", () => {
+  const BLOCKER = {
+    source_role: "openspec-developer",
+    category: "requirement",
+    description: "需求缺口待用户确认",
+    evidence: "spec 未覆盖该行为，无法独立裁决",
+    attempted_actions: "按 spec 推导后仍无法确定验收口径",
+  }
+
+  test("implement 上报 blocker → 回退 analyze；analyze passed 不带 execution_boundary → 允许并前进回 implement", async () => {
     const { wt, root } = fresh()
     try {
-      await setupToAnalyze(wt, CID)
-      await expectError(
-        agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed" }, makeCtx("openspec-architect", wt)),
-        /execution_boundary/
+      const { ctx } = await driveToImplement(wt, CID)
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "failed", blocker: BLOCKER },
+        ctx.dev
+      )
+      const rolledBack = readItem(wt, CID)
+      expect(rolledBack.phase).toBe("todo")
+      expect(rolledBack.currentStep).toBe("analyze")
+
+      // 新语义：执行边界由提案阶段写入 clarify.md，analyze 回退时 execution_boundary 不再是 passed 必传项
+      const blockerId = rolledBack.metadata.blockers[0].id
+      await agent_submit.execute(
+        {
+          change_id: CID,
+          step_id: "analyze",
+          verdict: "passed",
+          blocker_updates: [{ blocker_id: blockerId, user_response: "按方案 X 处理" }],
+        },
+        ctx.arch
       )
       const item = readItem(wt, CID)
-      expect(item.phase).toBe("todo")
-      expect(item.currentStep).toBe("analyze")
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
+      expect(metaOf(item, "execution_boundary")).toBeUndefined()
     } finally { teardown(root) }
   })
 })
@@ -263,12 +287,14 @@ describe("G4. analyze 参数守卫", () => {
 // ── G4.1: 重复 init 保留当前阶段 ──
 
 describe("G4.1. init 重入", () => {
-  test("无 recovery 重复 init 保留 analyze 之后的阶段", async () => {
+  test("无 recovery 重复 init 保留 implement 阶段（不回退 analyze）", async () => {
     const { wt, root } = fresh()
     try {
       await driveToImplement(wt, CID)
       const result = await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, makeOrchCtx(wt))
-      expect(result).toBe("编排会话已初始化。\n\n- **基准分支**: `main`")
+      expect(result).toContain("编排会话已初始化。")
+      expect(result).toContain("- **基准分支**: `main`")
+      expect(result).toContain("- **执行边界**: 未从 clarify.md 解析到本任务组执行边界，实施视图按整个 worktree 处理。")
       const item = readItem(wt, CID)
       expect(item.phase).toBe("in_progress")
       expect(item.currentStep).toBe("implement")

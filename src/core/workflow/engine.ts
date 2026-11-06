@@ -123,7 +123,8 @@ export function resolveCurrentStep(
 
 /**
  * phase↔step 归属一致性判定：currentStep 非空时，其配置归属 phase 与 item.phase 错位视为状态异常。
- * - currentStep 为 null（todo 初始态 / 终态）恒为 false，不误报；
+ * - currentStep 为 null（终态，或旧结构投影的 todo 初始态）恒为 false，不误报——新流初始落点为
+ *   in_progress/implement，todo/analyze 仅作 implement 上报 blocker 后的回退落点；
  * - currentStep 指向未声明 step（resolveCurrentStep 返 null）视为 true（安全侧，宁拒勿放）。
  * 正常一致态（各写入点原子一致）恒返回 false。
  */

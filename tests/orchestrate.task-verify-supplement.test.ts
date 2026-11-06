@@ -7,12 +7,13 @@
  *   engine gateBlock 补交推导返回该 step 全部 agents（simple 与 full 两形态）。
  * - C 恢复面按模式生效：见 orchestrate.mode-lifecycle.test.ts（simple 生效/跨模式报错/警告）
  *   与 orchestrate.blocked_dispatch.test.ts（full 值域 + 跨模式报错）。
- * - D implement blocker 消费闭环：blocker_updates 置 resolved；未 resolved 时 passed 拒绝；
- *   blocker reset 保留 done 态 task；遗漏 completed_task_ids 的错误文案不误导虚报。
+ * - D implement blocker 消费闭环（full 模式，simple 无 blocker 状态机）：blocker_updates 置 resolved；
+ *   未 resolved 时 passed 拒绝；simple 提交 blocker/blockers 被入口拒绝；blocker reset 保留 done 态 task；
+ *   遗漏 completed_task_ids 的错误文案不误导虚报。
  * - E 端到端死锁复刻：reviewer passed 漏带 verified_tasks 被门禁拦截 → 带全量补交 → done。
  * - F 独立复核返工回归：quality_review failed_tasks 为合法 failed 理由（无 issue 亦可驳回）；
  *   developer 视图渲染 blocker 留痕；必做门禁跳过绑定 passed+待验证任务（首次提交不豁免）；
- *   同轮 blocker + blocker_updates 组合拒绝（分两轮指引）。
+ *   同轮 blocker + blocker_updates 组合拒绝（full 模式，分两轮指引）。
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -122,7 +123,7 @@ describe("A. 任务验证门禁兜底", () => {
     const { root, wt } = fresh()
     try {
       await initFullWorktree(wt)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, makeCtx("openspec-architect", wt))
+      // init 即落 in_progress/implement（analyze 首轮不执行），直接实施
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
         makeCtx(DEV, wt),
@@ -302,15 +303,11 @@ describe("B. 重复提交守卫补交放行 + engine gateBlock 推导", () => {
 // ════════════════════════════════════════════════════════════════
 
 describe("D. implement blocker 消费闭环", () => {
-  test("blocker 上报 → 未 resolved 时 passed 拒绝 → blocker_updates 置 resolved + 凭留痕重新申报 → 推进 quality_review", async () => {
+  test("blocker 上报 → 未 resolved 时 passed 拒绝 → blocker_updates 置 resolved + 凭留痕重新申报 → 推进 verify_tool", async () => {
     const { root, wt } = fresh()
     try {
-      await initSimpleWorktree(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "3"] },
-        makeCtx(DEV, wt),
-      ).catch(() => {})
-      // 任务 2 人工执行不可自动完成 → blocker 上报（verdict=failed）
+      await initFullWorktree(wt)
+      // 任务 2 人工执行不可自动完成 → blocker 上报（verdict=failed）→ on_fail 回退 analyze
       await agent_submit.execute(
         {
           change_id: CID, step_id: "implement", verdict: "failed",
@@ -323,62 +320,96 @@ describe("D. implement blocker 消费闭环", () => {
         makeCtx(DEV, wt),
       )
       let item = taskItemOf(wt)
+      expect(item.phase).toBe("todo")
+      expect(item.currentStep).toBe("analyze")
       expect(item.metadata["blockers"]).toHaveLength(1)
       expect(item.metadata["blockers"][0].status).toBe("awaiting_user")
 
-      // 未 resolved 时 passed → 拒绝
+      // 未 resolved 时 analyze passed → 拒绝（blocker 裁决落点门禁）
       const err = await agent_submit.execute(
-        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
-        makeCtx(DEV, wt),
+        { change_id: CID, step_id: "analyze", verdict: "passed" },
+        makeCtx("openspec-architect", wt),
       ).catch((e: Error) => e)
       expect(err).toBeInstanceOf(Error)
       expect(err.message).toMatch(/存在未解决的 blocker/)
 
-      // blocker_updates 引用不存在 id / 已 resolved 条目 → 抛错
+      // blocker_updates 引用不存在 id → 抛错
       const errNotFound = await agent_submit.execute(
         {
-          change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"],
+          change_id: CID, step_id: "analyze", verdict: "failed",
           blocker_updates: [{ blocker_id: "b99", user_response: "x" }],
         },
-        makeCtx(DEV, wt),
+        makeCtx("openspec-architect", wt),
       ).catch((e: Error) => e)
       expect(errNotFound).toBeInstanceOf(Error)
       expect(errNotFound.message).toMatch(/b99/)
 
-      // 用户确认留痕 → blocker_updates 置 resolved → 凭留痕重新申报全部任务 → 通过
+      // 用户确认留痕 → blocker_updates 置 resolved → analyze passed 回 implement
       await agent_submit.execute(
         {
-          change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"],
+          change_id: CID, step_id: "analyze", verdict: "passed",
           blocker_updates: [{ blocker_id: "b1", user_response: "用户确认已人工执行任务 2" }],
         },
-        makeCtx(DEV, wt),
+        makeCtx("openspec-architect", wt),
       )
       item = taskItemOf(wt)
       expect(item.metadata["blockers"][0].status).toBe("resolved")
       expect(item.metadata["blockers"][0].userResponse).toBe("用户确认已人工执行任务 2")
-      expect(item.currentStep).toBe("quality_review")
+      expect(item.phase).toBe("in_progress")
+      expect(item.currentStep).toBe("implement")
 
-      // 已 resolved 后再 update → 状态不符抛错（先手工拉回 implement，路由校验在参数处理之前）
+      // 凭留痕重新申报全部任务 → passed 推进 verify_tool（full 的下一层）
+      await agent_submit.execute(
+        { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
+        makeCtx(DEV, wt),
+      )
+      item = taskItemOf(wt)
+      expect(item.phase).toBe("review")
+      expect(item.currentStep).toBe("verify_tool")
+
+      // 已 resolved 后再 update → 状态不符抛错（先手工拉回 analyze，路由校验在参数处理之前）
       rewriteItem(wt, (item) => {
-        item.phase = "in_progress"
-        item.currentStep = "implement"
+        item.phase = "todo"
+        item.currentStep = "analyze"
       })
       const errResolved = await agent_submit.execute(
         {
-          change_id: CID, step_id: "implement", verdict: "failed",
+          change_id: CID, step_id: "analyze", verdict: "failed",
           blocker_updates: [{ blocker_id: "b1", user_response: "再次确认" }],
         },
-        makeCtx(DEV, wt),
+        makeCtx("openspec-architect", wt),
       ).catch((e: Error) => e)
       expect(errResolved).toBeInstanceOf(Error)
       expect(errResolved.message).toMatch(/状态不是 awaiting_user/)
     } finally { teardown(root) }
   })
 
-  test("blocker 提交后 resetTasksForBlocker：done 态 task 保留，todo/review 回 todo", async () => {
+  test("simple 模式无 blocker 状态机：implement 提交 blocker / blockers 被入口拒绝、零状态变更", async () => {
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
+      const before = JSON.stringify(taskItemOf(wt))
+      const blocker = {
+        source_role: DEV, task_id: "2", category: "manual_operation",
+        description: "任务 2 需人工执行", evidence: "e", attempted_actions: "a",
+      }
+      for (const payload of [{ blocker }, { blockers: [blocker] }]) {
+        const err = await agent_submit.execute(
+          { change_id: CID, step_id: "implement", verdict: "failed", ...payload },
+          makeCtx(DEV, wt),
+        ).catch((e: Error) => e)
+        expect(err).toBeInstanceOf(Error)
+        expect(err.message).toMatch(/simple 模式不走 blocker 状态机/)
+        expect(err.message).toMatch(/must_do_checks/)
+        expect(JSON.stringify(taskItemOf(wt))).toBe(before)
+      }
+    } finally { teardown(root) }
+  })
+
+  test("blocker 提交后 resetTasksForBlocker：done 态 task 保留，todo/review 回 todo", async () => {
+    const { root, wt } = fresh()
+    try {
+      await initFullWorktree(wt)
       // 构造混合进度：1 已验证 done、2 待验证 review、3 未开始 todo
       rewriteItem(wt, (item) => {
         item.children.find((c: any) => c.id === "1").phase = "done"
@@ -397,6 +428,8 @@ describe("D. implement blocker 消费闭环", () => {
       expect(phases["1"]).toBe("done")   // done 已验证不得降级
       expect(phases["2"]).toBe("todo")   // review 回 todo
       expect(phases["3"]).toBe("todo")
+      // full：blocker 回退 analyze
+      expect(taskItemOf(wt).currentStep).toBe("analyze")
     } finally { teardown(root) }
   })
 
@@ -537,10 +570,6 @@ describe("F. 独立复核返工回归", () => {
     const { root, wt } = fresh()
     try {
       await initFullWorktree(wt)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        makeCtx("openspec-architect", wt),
-      )
       // 任务 2 人工执行 → dev blocker 上报（on_fail 回退 analyze）
       await agent_submit.execute(
         {
@@ -617,7 +646,8 @@ describe("F. 独立复核返工回归", () => {
   test("同轮 blocker + blocker_updates 组合 → 抛错并指引分两轮，零状态变更", async () => {
     const { root, wt } = fresh()
     try {
-      await initSimpleWorktree(wt, CID)
+      // 该组合守卫只在 full 模式可达：simple 在更前面的入口即以「不走 blocker 状态机」拒绝
+      await initFullWorktree(wt)
       const err = await agent_submit.execute(
         {
           change_id: CID, step_id: "implement", verdict: "failed",
@@ -633,8 +663,10 @@ describe("F. 独立复核返工回归", () => {
       expect(err.message).toMatch(/不可在同一轮提交中同时上报新 blocker/)
       expect(err.message).toMatch(/分两轮/)
       expect(err.message).toMatch(/下一轮再携带 blocker_updates/)
-      // 抛错在一切写入之前：blocker 清单未落盘
-      expect(taskItemOf(wt).metadata["blockers"]).toBeUndefined()
+      // 抛错在一切写入之前：blocker 清单未落盘、未回退 analyze
+      const item = taskItemOf(wt)
+      expect(item.metadata["blockers"]).toBeUndefined()
+      expect(item.currentStep).toBe("implement")
     } finally { teardown(root) }
   })
 })

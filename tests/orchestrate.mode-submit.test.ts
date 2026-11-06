@@ -7,14 +7,16 @@
  *   非报源 reviewer 裁定被拒
  * - simple 审查者未声明 dimension 上报被拒（spec:agent-identity#simple 审查者 issue 显式声明 dimension）
  * - 重复提交守卫按 tag passed 判定：failed 可重提、passed 非补交拒绝、仅裁定参数补交放行
- * - resetReviewTagsOnFix / clearReviewVerificationTags 对 verify_* tag 在 simple 下空操作无副作用
+ * - resetReviewTagsOnFix 对 verify_* tag 在 simple 下空操作无副作用；simple implement 提交 blocker /
+ *   blockers 被入口拒绝（simple 无 blocker 状态机，零状态变更）；clearReviewVerificationTags 的
+ *   verify_* 清除副作用在 full 模式（blocker 回退 analyze）验证
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { __setGitRunner } from "../src/core/git"
-import { agent_submit } from "../src/adapters/opencode/tools"
-import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
+import { init, agent_submit, set_worktree } from "../src/adapters/opencode/tools"
+import { INIT_PROJECT_STACKS, FakeGitRunner, makeCtx, makeOrchCtx, setupWorkspace, teardown, initSimpleWorktree } from "./helpers"
 
 const CID = "mode-submit"
 const DEV = "openspec-developer"
@@ -36,6 +38,14 @@ function injectIssue(wt: string, child: any): void {
   writeFileSync(p, JSON.stringify(state, null, 2))
 }
 
+/** 载入 state 后回写（只对活跃 task WorkItem 做原地修改）。 */
+function rewriteItem(wt: string, fn: (item: any) => void): void {
+  const p = join(wt, "openspec", "states", `${CID}.json`)
+  const state = JSON.parse(readFileSync(p, "utf-8")) as { workItems: any[] }
+  fn(state.workItems.find((w: any) => w.id === "task:1"))
+  writeFileSync(p, JSON.stringify(state, null, 2))
+}
+
 function fresh(): { root: string; wt: string; fakeGit: FakeGitRunner } {
   const root = `/tmp/modesub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const wt = setupWorkspace(root, CID)
@@ -50,6 +60,18 @@ async function enterQualityReview(wt: string): Promise<void> {
     { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] },
     makeCtx(DEV, wt),
   )
+}
+
+const FULL_BLOCKER = {
+  source_role: "openspec-developer", task_id: "1", category: "外部依赖",
+  description: "需要人工运维", evidence: "e", attempted_actions: "a",
+}
+
+/** full 模式 init + set_worktree：blocker 回退 analyze 的路径只在 full 下可达。 */
+async function initFullWorktree(wt: string): Promise<void> {
+  const orch = makeOrchCtx(wt)
+  await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full" }, orch)
+  await set_worktree.execute({ change_id: CID }, orch)
 }
 
 describe("2.2 implement 提交工作区干净强检查", () => {
@@ -375,26 +397,51 @@ describe("simple 下 verify_* tag 重置空操作无副作用", () => {
     } finally { teardown(root) }
   })
 
-  test("clearReviewVerificationTags：simple implement blocker 提交（resetTasksForBlocker）无 verify_* tag 副作用", async () => {
+  test("simple implement 提交 blocker / blockers → simple 状态机拒绝、零状态变更", async () => {
     const { root, wt } = fresh()
     try {
       await initSimpleWorktree(wt, CID)
+      const before = JSON.stringify(taskItemOf(wt))
+      for (const payload of [{ blocker: FULL_BLOCKER }, { blockers: [FULL_BLOCKER] }]) {
+        const err = await agent_submit.execute(
+          { change_id: CID, step_id: "implement", verdict: "failed", ...payload },
+          makeCtx(DEV, wt),
+        ).catch((e: Error) => e)
+        expect(err).toBeInstanceOf(Error)
+        // 拒绝文案：说明 simple 不走 blocker 状态机，给出用户确认/必做项留痕指引与 full 模式出口
+        expect(err.message).toMatch(/simple 模式不走 blocker 状态机/)
+        expect(err.message).toMatch(/must_do_checks/)
+        expect(err.message).toMatch(/full 模式/)
+        // 零状态变更：blocker 未入库、phase/currentStep/tag 均未动
+        expect(JSON.stringify(taskItemOf(wt))).toBe(before)
+      }
+    } finally { teardown(root) }
+  })
+})
+
+describe("full 模式 blocker 回退的 verify_* tag 副作用", () => {
+  test("implement blocker 提交（resetTasksForBlocker）清除 verify_* tag 残留并回退 analyze", async () => {
+    const { root, wt } = fresh()
+    try {
+      await initFullWorktree(wt)
+      // 注入上一轮审查通过残留的 verify_* tag（resetTasksForBlocker 的清除目标）
+      rewriteItem(wt, (item) => {
+        item.tags["verify_tool:openspec-reviewer-tool"] = "passed"
+        item.tags["verify_task:openspec-reviewer-task"] = "passed"
+        item.tags["verify_quality:style"] = "passed"
+      })
       await agent_submit.execute(
-        {
-          change_id: CID, step_id: "implement", verdict: "failed",
-          blocker: {
-            source_role: "openspec-developer", task_id: "1", category: "外部依赖",
-            description: "需要人工运维", evidence: "e", attempted_actions: "a",
-          },
-        },
+        { change_id: CID, step_id: "implement", verdict: "failed", blocker: FULL_BLOCKER },
         makeCtx(DEV, wt),
       )
       const item = taskItemOf(wt)
-      // blocker 提交成功、回退自循环停在 implement
-      expect(item.currentStep).toBe("implement")
+      // full：blocker 上报后 on_fail 回退 analyze（blocker 裁决落点）
+      expect(item.phase).toBe("todo")
+      expect(item.currentStep).toBe("analyze")
       expect(item.tags["implement:openspec-developer"]).toBe("failed")
-      // clearReviewVerificationTags（verify_tool/verify_task/verify_quality）在 simple 下空操作
-      expect(Object.keys(item.tags).some((k) => k.startsWith("verify_tool") || k.startsWith("verify_task") || k.startsWith("verify_quality"))).toBe(false)
+      expect(item.metadata["blockers"]).toHaveLength(1)
+      // clearReviewVerificationTags（verify_tool/verify_task/verify_quality）清除全部 verify_* 残留
+      expect(Object.keys(item.tags).some((k) => k.startsWith("verify_"))).toBe(false)
     } finally { teardown(root) }
   })
 })

@@ -22,7 +22,7 @@ import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, setupWorkspace } from "./helpers"
 import {
-  setupToAnalyze, driveToVerifyTool, driveToVerifyTask, driveToQuality,
+  setupToImplement, driveToVerifyTool, driveToVerifyTask, driveToQuality,
   taskListOf, readItem,
 } from "./helpers-workflow"
 import { resolveChildIssueFields } from "../src/core/workflow/reset"
@@ -75,7 +75,6 @@ function seedReviewTags(wt: string): void {
   const state = JSON.parse(readFileSync(p, "utf-8"))
   const item = state.workItems.find((w: any) => w.id === "task:1")
   item.tags = {
-    "analyze:openspec-architect": "passed",
     "implement:openspec-developer": "passed",
     "verify_tool:openspec-reviewer-tool": "passed",
     "verify_task:openspec-reviewer-task": "passed",
@@ -113,8 +112,7 @@ describe("sourcePhase A: tool 报源层 issue fixed 只清 verify_tool", () => {
     const root = `/tmp/sourcePhase-A-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       injectChild(wt, makeChild("t1", { metadata: { source_phase: "tool", file: "src/a.java", line: 1 } }))
       seedReviewTags(wt)
 
@@ -138,8 +136,7 @@ describe("sourcePhase B: task 报源层 issue fixed 清 verify_tool + verify_tas
     const root = `/tmp/sourcePhase-B-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       injectChild(wt, makeChild("tk1", { metadata: { source_phase: "task", file: "src/b.java", line: 2 } }))
       seedReviewTags(wt)
 
@@ -159,8 +156,7 @@ describe("sourcePhase C: quality 层 dim issue fixed 只清该 dim tag", () => {
     const root = `/tmp/sourcePhase-C-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       injectChild(wt, makeChild("q1", { metadata: { source_phase: "quality", dimension: "style", file: "src/c.java", line: 3 } }))
       seedReviewTags(wt)
 
@@ -185,8 +181,7 @@ describe("sourcePhase D: quality 层 exempt 不清维度 tag", () => {
     const root = `/tmp/sourcePhase-D-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       injectChild(wt, makeChild("a1", { metadata: { source_phase: "quality", dimension: "architecture", file: "src/d.java", line: 4 } }))
       seedReviewTags(wt)
 
@@ -213,8 +208,7 @@ describe("sourcePhase E: task 层 exempt 清 verify_tool + verify_task", () => {
     const root = `/tmp/sourcePhase-E-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       injectChild(wt, makeChild("te1", { metadata: { source_phase: "task", file: "src/e.java", line: 5 } }))
       seedReviewTags(wt)
 
@@ -350,8 +344,7 @@ describe("sourcePhase H: source 为 quality reviewer 的历史 child → 报源�
     const root = `/tmp/sourcePhase-H-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       // 模拟修复前遗留 state：报源为 quality reviewer（metadata.source）但 source_phase 缺失（历史格式）
       injectChild(wt, makeChild("h1", { metadata: { source: "openspec-reviewer-architecture", dimension: "architecture", file: "src/h.java", line: 10 } }))
       seedReviewTags(wt)
@@ -377,8 +370,7 @@ describe("sourcePhase I: tool 跨维报 issue（带 dimension）→ dev 修复�
     const root = `/tmp/sourcePhase-I-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       // tool 报源层 issue 带 dimension（跨维归因标签）
       injectChild(wt, makeChild("i1", { metadata: { source_phase: "tool", dimension: "security", file: "src/i.java", line: 11 } }))
       seedReviewTags(wt)
@@ -404,8 +396,7 @@ describe("sourcePhase I2: tool 跨维报 issue（带 dimension）→ dev exempt 
     const root = `/tmp/sourcePhase-I2-${Date.now()}`
     const { wt } = freshSetup(root)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute({ change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      await setupToImplement(wt, CID, { boundary: EB })
       // tool 报源层 issue 带 dimension（跨维归因标签）
       injectChild(wt, makeChild("i2", { metadata: { source_phase: "tool", dimension: "security", file: "src/i2.java", line: 12 } }))
       seedReviewTags(wt)

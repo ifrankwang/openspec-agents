@@ -11,6 +11,7 @@ import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
 import { parseTaskGroupsFromContent, parseTasksForGroupFromContent, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
 import type { ParsedTask } from "../tasks-md.ts"
+import { parseExecutionBoundary } from "../clarify-md.ts"
 import { assertOrchestrator, findTaskGroup } from "../derive.ts"
 import { assertPathWithin } from "../paths.ts"
 import { loadWorkflowFile, resolveWorkflowPath, type LoadedWorkflow } from "../workflow/loader.ts"
@@ -116,6 +117,35 @@ function migrateLegacyTasks(item: WorkItem): void {
 }
 
 /**
+ * 是否存在未解决 blocker（metadata.blockers 中 status !== "resolved" 的条目）。
+ * 供旧在途会话迁移判定：有未解决 blocker 时保留 analyze（正是其 blocker 回退落点职责）。
+ */
+function hasUnresolvedBlocker(item: WorkItem): boolean {
+  const raw = item.metadata["blockers"]
+  if (!Array.isArray(raw)) return false
+  return raw.some((b) => (b as { status?: unknown } | null)?.status !== "resolved")
+}
+
+/**
+ * 关闭 item 中全部未解决 blocker（置 resolved 并写留痕），返回关闭数量；记录本身保留（审计留痕）。
+ * 两个调用场景共用：task_analysis 重制当前组（抹掉 analyze 裁决入口）与 simple 模式重复 init
+ * （旧版本 simple 会话可能残留 blocker，而 simple 已不支持 blocker 状态机，无裁决落点会卡死）。
+ */
+function closeUnresolvedBlockers(item: WorkItem, reason: string): number {
+  const raw = item.metadata["blockers"]
+  if (!Array.isArray(raw)) return 0
+  let closed = 0
+  for (const b of raw as Array<{ status?: string; userResponse?: string | null; architectConclusion?: string | null }>) {
+    if (!b || b.status === "resolved") continue
+    b.status = "resolved"
+    b.userResponse = reason
+    b.architectConclusion = reason
+    closed++
+  }
+  return closed
+}
+
+/**
  * 扫描 review 阶段第一个未全 passed 的 step（按 workflow 声明顺序 verify_tool → verify_task → verify_quality）。
  * 一个 step 全 passed 由 adjudicateStep 判定（该 step 所有 agent 的 tag 均为 passed）；全部通过返回 null。
  */
@@ -130,25 +160,27 @@ function firstUnpassedReviewStep(item: WorkItem, workflow: LoadedWorkflow): stri
 
 /**
  * 按 recovery 合成活跃组 WorkItem 的 phase/currentStep/tags/task children。
- * - task_analysis：todo/analyze、tags 清空、task children 全 todo（全新开始）
- * - dev_impl：in_progress/implement、analyze 已 passed、task children 保留既有进度（无则 todo）
+ * 文档复核前移到提案流程后，实施流程首轮不再先跑 analyze，full 与 simple 落点统一：
+ * - 无 recovery / task_analysis：in_progress/implement、tags 清空、task children 全 todo（全新开始；
+ *   task_analysis 在两种模式下均等同 dev_impl，保留该值仅用于重制任务组与模式切换窗口）；
+ * - dev_impl：in_progress/implement、tags 清空、task children 保留既有进度（无则 todo）；
  * - review：review/verify_*（增量合并——已 passed 的审查标记保留、failed 重置为 pending，currentStep
- *   前移到第一个未全 passed 的子层；review_layer 决定强制前置哪些子层）、analyze+implement 已 passed、
- *   task children 保留既有进度（无则 done——review 恢复时子任务应视为已验证，否则 G21 remaining 会让 implement 无法提交）
- * simple 分支（mode === "simple"，3.2）：无 analyze / verify_* step，task_analysis / dev_impl 均落
- *   in_progress/implement（task_analysis 重置 task children 全 todo，dev_impl 保留既有进度）；review 落
- *   review 第一个未全 passed 的审查 step（quality_review，或全 passed 时 verify_cleanup）——implement 置
- *   passed、quality_review 的 failed tag 删除回 pending（passed 保留）、task children 缺省 done；reset_steps
+ *   前移到第一个未全 passed 的子层；review_layer 决定强制前置哪些子层）、implement 已 passed、
+ *   task children 保留既有进度（无则 done——review 恢复时子任务应视为已验证，否则 G21 remaining 会让 implement 无法提交）。
+ * simple 分支（mode === "simple"，3.2）：无 analyze / verify_* step，review 落 review 第一个未全 passed
+ *   的审查 step（quality_review，或全 passed 时 verify_cleanup）——implement 置 passed、
+ *   quality_review 的 failed tag 删除回 pending（passed 保留）、task children 缺省 done；reset_steps
  *   按模式生效（simple 仅接受 quality_review，含该值时清空 quality_review 全部 tags——passed 也清，
  *   强制重审正是该参数的目的，清空后引擎重派该 step 审查者）；review_layer 在 simple 下无对应子层
  *   （仅 quality_review 单层），接受但不生效，init 返回体输出警告。
+ * 返回值：本次重制关闭的未解决 blocker 数量（仅 task_analysis 重制分支可能非 0），供 init 返回体提示。
  */
 function applyRecoveryState(
   item: WorkItem,
   recovery: InitParams["recovery"],
   parsedTasks: ParsedTask[],
   state: Pick<OrchestrateState, "mode" | "kind" | "reviewScope">,
-): void {
+): number {
   // 恢复重建为已知状态后清除残留推进阻塞原因，避免 orchestrator 视图展示过期信息
   delete item.metadata["_advance_block_reason"]
   // 清除内部重试计数：recovery 恢复后残留 _retryCount 会在下次回退时立即再次触发检查点（死锁）。
@@ -163,7 +195,7 @@ function applyRecoveryState(
       item.phase = "in_progress"
       item.currentStep = "implement"
       item.tags = {}
-      return
+      return 0
     }
     // review 分支：恢复进 review 时 implement 必然已通过
     item.phase = "review"
@@ -187,26 +219,32 @@ function applyRecoveryState(
     item.currentStep = firstUnpassedReviewStep(item, workflow)
     // 全 passed 收口 done：review 会话无 task children，终态检查天然通过
     if (item.currentStep === null) item.phase = "done"
-    return
+    return 0
   }
   const mode = state.mode
-  if (mode === "simple") {
-    const phase = recovery?.phase
-    if (!phase || phase === "task_analysis" || phase === "dev_impl") {
-      // simple 无 analyze：无 recovery（全新初始化）/ task_analysis / dev_impl 均落 in_progress/implement。
-      // tags 整体重置——不残留 implement:openspec-developer passed（否则 dev 不会重派，恢复失去意义）。
-      item.phase = "in_progress"
-      item.currentStep = "implement"
-      item.tags = {}
-      if (!phase || phase === "task_analysis") {
-        // 重置 task children 全 todo（全新开始）
-        syncTaskChildren(item, parsedTasks, { forceOpen: true })
-      } else {
-        // dev_impl 保留既有进度（无则 todo）
-        syncTaskChildren(item, parsedTasks, { defaultStatus: "todo" })
-      }
-      return
+  // 实施流程首轮不再先跑 analyze（文档复核前移到提案流程）：full 与 simple 的
+  // 无 recovery / task_analysis / dev_impl 落点统一为 in_progress/implement。
+  // tags 整体重置——不残留 implement:openspec-developer passed（否则 dev 不会重派，恢复失去意义）。
+  const phase = recovery?.phase
+  if (!phase || phase === "task_analysis" || phase === "dev_impl") {
+    item.phase = "in_progress"
+    item.currentStep = "implement"
+    item.tags = {}
+    // 重制当前组会抹掉 analyze 回退入口：残留的未解决 blocker 将无人可裁决且永久拦截 passed，
+    // 故随重制统一关闭（置 resolved + 留痕，不删除记录）。
+    const closedBlockers = phase === "task_analysis"
+      ? closeUnresolvedBlockers(item, "随任务组重制处理")
+      : 0
+    if (!phase || phase === "task_analysis") {
+      // 重置 task children 全 todo（全新开始 / 重制本组）
+      syncTaskChildren(item, parsedTasks, { forceOpen: true })
+    } else {
+      // dev_impl 保留既有进度（无则 todo）
+      syncTaskChildren(item, parsedTasks, { defaultStatus: "todo" })
     }
+    return closedBlockers
+  }
+  if (mode === "simple") {
     // review 分支：恢复进 review 时 implement 必然已通过
     item.phase = "review"
     item.tags["implement:openspec-developer"] = "passed"
@@ -237,26 +275,10 @@ function applyRecoveryState(
       }
     }
     syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
-    return
-  }
-  const phase = recovery?.phase
-  if (!phase || phase === "task_analysis") {
-    item.phase = "todo"
-    item.currentStep = "analyze"
-    item.tags = {}
-    syncTaskChildren(item, parsedTasks, { forceOpen: true })
-    return
-  }
-  if (phase === "dev_impl") {
-    item.phase = "in_progress"
-    item.currentStep = "implement"
-    item.tags = { "analyze:openspec-architect": "passed" }
-    syncTaskChildren(item, parsedTasks, { defaultStatus: "todo" })
-    return
+    return 0
   }
   item.phase = "review"
-  // 前置层保证：恢复进 review 时 analyze/implement 必然已通过
-  item.tags["analyze:openspec-architect"] = "passed"
+  // 前置层保证：恢复进 review 时 implement 必然已通过（analyze 已瘦身为 blocker 回退落点，不再合成 passed tag）
   item.tags["implement:openspec-developer"] = "passed"
   // 增量合并 review 审查标记：值为 passed 的保留（已审查通过层无需重跑），failed 删除回到 pending
   for (const key of Object.keys(item.tags)) {
@@ -292,6 +314,7 @@ function applyRecoveryState(
     }
   }
   syncTaskChildren(item, parsedTasks, { defaultStatus: "done" })
+  return 0
 }
 
 /**
@@ -707,37 +730,37 @@ function assertProjectStacks(args: InitParams): void {
 }
 
 /**
- * 读取 tasks.md 内容，来源按序回落（跨基准分支/换任务组重入 init 的关键路径）：
+ * 读取 change 规划文档（tasks.md / clarify.md 共用）内容，来源按序回落（跨基准分支/换任务组重入 init 的关键路径）：
  * ① state 已存在且活跃任务组 workItem.metadata.worktree_path 下该文件存在 → 读 worktree
  *   （跨分支发起后主仓库工作树已无规划文档副本、重入换组时的常态）；
  * ② 主仓库工作树存在 → 读 ctx.worktree（首次 init 常态）；
- * ③ 以上都没有 → `git show <baseBranch>:openspec/changes/<changeId>/tasks.md` 取基准分支版本库内容
+ * ③ 以上都没有 → `git show <baseBranch>:<relPath>` 取基准分支版本库内容
  *   （baseBranch 传「会话固化的基准分支」优先，未固化时才用当前检出分支）。
  * 三者都取不到返回 null，由调用方按原有错误文案报错。
  */
-async function resolveTasksContent(
+async function resolveChangeDocContent(
   repoRoot: string,
   state: OrchestrateState | null,
   changeId: string,
   baseBranch: string,
+  relPath: string,
 ): Promise<string | null> {
-  const rel = `openspec/changes/${changeId}/tasks.md`
   if (state) {
     const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
     const worktreePath =
       item && typeof item.metadata["worktree_path"] === "string" ? item.metadata["worktree_path"] : null
     if (worktreePath) {
-      const p = path.join(worktreePath, rel)
+      const p = path.join(worktreePath, relPath)
       if (await pathExists(p)) {
         try { return await readFile(p, "utf-8") } catch { /* 读失败回落下一来源 */ }
       }
     }
   }
-  const mainPath = path.join(repoRoot, rel)
+  const mainPath = path.join(repoRoot, relPath)
   if (await pathExists(mainPath)) {
     try { return await readFile(mainPath, "utf-8") } catch { /* 读失败回落下一来源 */ }
   }
-  const shown = await runGitChecked(repoRoot, ["show", `${baseBranch}:${rel}`])
+  const shown = await runGitChecked(repoRoot, ["show", `${baseBranch}:${relPath}`])
   if (shown.success && shown.stdout.length > 0) return shown.stdout
   return null
 }
@@ -817,7 +840,13 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 第三级必须用「会话固化的基准分支」：state 已存在且本次未传 base_branch 时，当前检出分支可能已切走
   // （跨分支发起/重入），拿当前检出分支去 git show 会读错分支甚至读不到。
   const fallbackBaseBranch = state?.baseBranch || baseBranch
-  const tasksContent = await resolveTasksContent(ctx.worktree, state, changeId, fallbackBaseBranch)
+  const tasksContent = await resolveChangeDocContent(
+    ctx.worktree,
+    state,
+    changeId,
+    fallbackBaseBranch,
+    `openspec/changes/${changeId}/tasks.md`,
+  )
   const parsedGroups = tasksContent === null ? [] : parseTaskGroupsFromContent(tasksContent)
   if (parsedGroups.length === 0) {
     throw new Error(
@@ -839,6 +868,19 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     tasksByGroup.set(g.id, parseTasksForGroupFromContent(tasksContent!, g.id))
   }
 
+  // 执行边界改由提案阶段产出到 clarify.md：init 解析当前任务组边界，待 task item 重建/恢复完成后
+  // 写入 metadata（不新增 init 参数）。解析失败/文件缺失不阻塞 init——实施视图按整个 worktree 处理。
+  const clarifyContent = await resolveChangeDocContent(
+    ctx.worktree,
+    state,
+    changeId,
+    fallbackBaseBranch,
+    `openspec/changes/${changeId}/clarify.md`,
+  )
+  const clarifyBoundary = clarifyContent === null
+    ? null
+    : parseExecutionBoundary(clarifyContent, args.task_group_id)
+
   // state 已存在时的 mode 变更窗口校验/更新（位于 for 循环前——循环内非活跃组新建 item 与
   // applyRecoveryState 均读 state.mode；错误早于任何状态变更抛出，不落盘）：
   // - 无变更意图（不传 mode 或与生效值一致——旧 state 缺 mode 时生效值兜底 full）→ 放行，保持既有行为；
@@ -847,6 +889,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   //   （reopenIssues 仅支持 dev_impl，与 W2 天然互斥，不构成冲突路径）；
   // - 窗口外传不同 mode → 报错。
   let modeSwitchNote: string | null = null
+  // 旧在途会话迁移说明（旧流初始态 todo/analyze → 无未解决 blocker 时前移到 implement）
+  let legacyMigrationNote: string | null = null
+  // blocker 自动关闭说明（simple 模式重复 init 关闭旧遗留 blocker / task_analysis 重制关闭未解决 blocker）
+  let blockerResetNote: string | null = null
   if (state && args.mode !== undefined && args.mode !== (state.mode ?? "full")) {
     const othersSettled = otherTaskGroupsSettled(state, args.task_group_id)
     const withinWindow =
@@ -917,15 +963,11 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
           description: group.name,
           labels: ["openspec-change"],
         })
-        // 新建 item 初始 step 模式感知（3.1）：simple 无 analyze step，初始 phase=in_progress、
-        // currentStep=implement（执行边界默认整个 worktree），否则 phaseStepMismatch 会拒绝执行；
-        // full 保持 todo/analyze 既有语义。
-        if (state.mode === "simple") {
-          item.phase = "in_progress"
-          item.currentStep = "implement"
-        } else {
-          item.currentStep = "analyze"
-        }
+        // 新建 item 初始落 implement（full 与 simple 一致）：实施流程首轮不再先跑 analyze
+        // （文档复核前移到提案流程），analyze 仅作 implement 上报 blocker 后的回退落点；
+        // 落 in_progress/implement 也满足 phaseStepMismatch 校验，执行边界由 clarify.md 解析或默认整个 worktree。
+        item.phase = "in_progress"
+        item.currentStep = "implement"
         syncTaskChildren(item, groupTasks, { defaultStatus: "todo" })
         refreshMeta(item)
         state.workItems.push(item)
@@ -940,6 +982,26 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       syncTaskChildren(existing, groupTasks, {})
       // 与 recovery 路径一致：重建为已知状态后清除残留推进阻塞原因，避免视图展示过期信息
       delete existing.metadata["_advance_block_reason"]
+      // 旧版本 simple 会话可能残留 blocker 状态机产生的未解决 blocker：simple 已不支持 blocker
+      // 提交、没有裁决落点，残留会让后续 passed 永久卡死——随本次初始化自动关闭并留痕。
+      if (state.mode === "simple" && hasUnresolvedBlocker(existing)) {
+        const closed = closeUnresolvedBlockers(existing, "simple 模式已不支持 blocker 状态机，随初始化关闭")
+        blockerResetNote = `simple 模式已关闭 ${closed} 个未解决 blocker（旧版本遗留，随初始化处理）。`
+      }
+      // 旧在途会话迁移：analyze 已瘦身为 blocker 回退落点，旧流初始态 todo/analyze 不再合法。
+      // 存在未解决 blocker 时保留 analyze（这正是回退落点的职责）；否则前移到 implement 并清掉 analyze tag。
+      if (existing.phase === "todo" || existing.currentStep === "analyze") {
+        if (hasUnresolvedBlocker(existing)) {
+          legacyMigrationNote = "存在未解决 blocker，保留 analyze 回退步骤。"
+        } else {
+          existing.phase = "in_progress"
+          existing.currentStep = "implement"
+          for (const key of Object.keys(existing.tags)) {
+            if (key.startsWith("analyze:")) delete existing.tags[key]
+          }
+          legacyMigrationNote = "已迁移旧在途会话：初始落点由 analyze 前移到 implement。"
+        }
+      }
       continue
     }
 
@@ -979,20 +1041,42 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
       item.metadata["base_ref"] = null
     }
 
-    applyRecoveryState(item, args.recovery, groupTasks, state)
+    const regroupBlockersClosed = applyRecoveryState(item, args.recovery, groupTasks, state)
+    if (regroupBlockersClosed > 0) {
+      blockerResetNote = `任务组重制已关闭 ${regroupBlockersClosed} 个未解决 blocker（随重制处理）。`
+    }
     refreshMeta(item)
     if (!existing) state.workItems.push(item)
   }
 
   state.taskGroupId = args.task_group_id
+
+  // clarify.md 执行边界的写入时机：tasks 重建/恢复全部完成后、落盘之前，仅当目标 task item 的
+  // metadata.execution_boundary 不存在时写入——不得覆盖 analyze 回退时的边界修订与 reviewer 的
+  // boundary_expansion（二者都以 metadata 为事实源在后续轮次更新）。
+  let boundaryNote: string
+  const boundaryTarget = state.workItems.find((w) => w.id === `task:${args.task_group_id}`)
+  if (!clarifyBoundary) {
+    boundaryNote = "未从 clarify.md 解析到本任务组执行边界，实施视图按整个 worktree 处理。"
+  } else if (boundaryTarget && boundaryTarget.metadata["execution_boundary"] === undefined) {
+    boundaryTarget.metadata["execution_boundary"] = clarifyBoundary
+    boundaryNote = "已从 clarify.md 写入本任务组执行边界。"
+  } else {
+    boundaryNote = "本任务组已存在执行边界（来自 analyze 回退修订或 reviewer 边界扩展），未用 clarify.md 覆盖。"
+  }
+
   await writeState(ctx.worktree, state)
 
   const parts = ["编排会话已初始化。"]
   if (args.recovery) parts.push(`已恢复到 ${args.recovery.phase} 阶段。`)
+  if (blockerResetNote) parts.push(blockerResetNote)
   if (modeSwitchNote) parts.push(modeSwitchNote)
+  if (legacyMigrationNote) parts.push(legacyMigrationNote)
   if (stacksNote) parts.push(stacksNote)
   // 回显生效的基准分支：发起侧据此确认 change 分支 fork 源与收口合并目标（不切主仓库检出分支）
   parts.push(`\n\n- **基准分支**: \`${state.baseBranch}\``)
+  // 执行边界来源回显：调用方据此确认实施视图按 clarify.md 边界还是按整个 worktree 处理
+  parts.push(`\n- **执行边界**: ${boundaryNote}`)
   // review_layer 在 simple 模式下无对应子层（仅 quality_review 单层审查），该参数接受但不生效：
   // 返回体显式警告，避免调用方误以为已按子层恢复
   if (args.recovery?.review_layer && (state.mode ?? "full") === "simple") {

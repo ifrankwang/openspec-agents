@@ -11,7 +11,7 @@ import { __setGitRunner } from "../src/core/git"
 import { agent_submit } from "../src/adapters/opencode/tools"
 import { setupWithFakeGit, teardown, readState, deepFreeze } from "./helpers"
 import {
-  setupToAnalyze, driveToVerifyTool, driveToQuality,
+  setupToImplement, driveToVerifyTool, driveToQuality,
   taskListOf, taskItemOf, taskIdsOf, rollbackQuality,
 } from "./helpers-workflow"
 import { taskGroupFromWorkItem } from "../src/core/derive"
@@ -37,11 +37,7 @@ describe("N1. issue id # 前缀归一化", () => {
     const root = `/tmp/norm-fixed-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       const item0 = taskItemOf(readState(wt, CID)!)
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item0) },
@@ -82,7 +78,7 @@ describe("N1. issue id # 前缀归一化", () => {
     const root = `/tmp/norm-exempt-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       const { item: preQ } = await driveToQuality(wt, CID)
 
       // style 维度报 Low issue → 其余维度通过后聚合回退 implement
@@ -131,7 +127,7 @@ describe("N1. issue id # 前缀归一化", () => {
     const root = `/tmp/norm-qfix-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       const { item: preQ } = await driveToQuality(wt, CID)
       expect(preQ.currentStep).toBe("verify_quality")
 
@@ -164,7 +160,7 @@ describe("N1. issue id # 前缀归一化", () => {
     const root = `/tmp/norm-frozen-${Date.now()}`
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
-      const ctx = await setupToAnalyze(wt, CID)
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       await driveToQuality(wt, CID)
 
       // style 维度报两个 Low issue（7=可修、8=不可修）→ 聚合回退 implement
@@ -231,11 +227,7 @@ describe("N2. taskNumber 映射", () => {
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
       buildTwoTaskWt(wt)
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
 
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1.1", "1.2"] },
@@ -251,11 +243,7 @@ describe("N2. taskNumber 映射", () => {
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
       buildTwoTaskWt(wt)
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
       await agent_submit.execute(
         { change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2"] },
         ctx.dev
@@ -276,11 +264,7 @@ describe("N2. taskNumber 映射", () => {
     const { worktree: wt } = setupWithFakeGit(root, CID)
     try {
       buildTwoTaskWt(wt)
-      const ctx = await setupToAnalyze(wt, CID)
-      await agent_submit.execute(
-        { change_id: CID, step_id: "analyze", verdict: "passed", execution_boundary: EB },
-        ctx.arch
-      )
+      const ctx = await setupToImplement(wt, CID, { boundary: EB })
 
       // dev 层：非法编号
       await expect(

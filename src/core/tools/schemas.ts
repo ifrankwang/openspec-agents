@@ -182,7 +182,12 @@ export const recoverySchema: JSONSchema = {
   type: "object",
   description: "进度恢复参数。提供后按 phase 恢复阶段状态，< phase 为 completed，== phase 为 in_progress，> phase 为 not_started。",
   properties: {
-    phase: { type: "string", enum: ["task_analysis", "dev_impl", "review"], description: "恢复到哪个阶段" },
+    phase: {
+      type: "string",
+      enum: ["task_analysis", "dev_impl", "review"],
+      description:
+        "恢复到哪个阶段。task_analysis 在 full 下等同 dev_impl（重置本组任务进度并从 implement 开始），仍用于重制任务组与模式切换窗口",
+    },
     review_layer: {
       type: "string",
       enum: ["tool", "task", "quality"],
@@ -236,7 +241,7 @@ export const orchInitSchema: JSONSchema = {
       type: "string",
       enum: ["full", "simple"],
       description:
-        "流程模式选择（仅 change 会话入口有效，独立审查会话不使用）：full=完整流程（analyze→implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，verify_cleanup 仅作收口漂移/冲突回退落点，正常流转不经过，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
+        "流程模式选择（仅 change 会话入口有效，独立审查会话不使用）：full=完整流程（implement→三重审查+收尾验证）；simple=精简流程（implement→quality_review→done，verify_cleanup 仅作收口漂移/冲突回退落点，正常流转不经过，缺省）。首次新建编排状态时固化；已开始的变更仅在允许窗口内可更新：切换任务组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）；其余场景传不同 mode 将报错。",
     },
     review_scope: {
       type: "object",
@@ -360,7 +365,7 @@ export const agentSubmitSchema: JSONSchema = {
     },
     execution_boundary: {
       ...executionBoundarySchema,
-      description: "analyze step：架构预检产出的执行边界（verdict=passed 必传）",
+      description: "analyze 回退（blocker 裁决）时的执行边界修订（可选）",
     },
     blockers: { type: "array", description: "analyze step：新增 blocker 列表", items: blockerItem },
     blocker_updates: {

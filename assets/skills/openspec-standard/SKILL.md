@@ -20,9 +20,9 @@ capabilities: ["openspec-standard"]
 2. `openspec/config.yaml`：
    - 项目尚无该文件 → 直接写入模板内容；
    - 已存在 → 合并升级：`schema:` 一律改为 `spec-driven-standard`；`context:` 保留项目已有内容（无则用模板内容）；`rules.*` / `operations.*` 各小节中，与标准条目同源的条目替换为模板最新文本，项目自定义条目（模板中不存在的）原样保留并追加在同小节标准条目之后。
-3. `openspec/schemas/spec-driven-standard/`：整目录写入（schema.yaml、README.md、`templates/` 下五个文档模板）；该目录为标准自有内容，已存在时直接覆盖。
+3. `openspec/schemas/spec-driven-standard/`：整目录写入（schema.yaml、README.md、`templates/` 下五个文档模板、`agents/architecture-review.md` 提案期架构审查职责文本）；该目录为标准自有内容，已存在时直接覆盖。
 4. 项目既有其它 schema 目录一律不动（既有 change 的 `.openspec.yaml` 可能引用）；在汇报中说明：确认没有 change 再引用旧 schema 后，可手动删除旧目录。
-5. 汇报：本次是否新建了 `openspec/` 初始化（Core Profile，及生成的 workflow skill 清单）；本次新建/更新/保留的文件与 config.yaml 条目清单；如项目此前使用其它 schema，说明此后新 change 将使用 spec-driven-standard。
+5. 汇报：本次是否新建了 `openspec/` 初始化（Core Profile，及生成的 workflow skill 清单）；本次新建/更新/保留的文件（含 `agents/architecture-review.md` 的安装或更新）与 config.yaml 条目清单；如项目此前使用其它 schema，说明此后新 change 将使用 spec-driven-standard。
 
 ## 约束
 

@@ -21,7 +21,7 @@ import { __setGitRunner } from "../src/core/git"
 import { init, set_worktree, agent_submit, status } from "../src/adapters/opencode/tools"
 import { FakeGitRunner, makeCtx, setupWithFakeGit, setupWorkspace, teardown } from "./helpers"
 import {
-  setupToAnalyze, driveToVerifyTool, readItem, taskIdsOf,
+  setupToImplement, driveToVerifyTool, readItem, taskIdsOf,
 } from "./helpers-workflow"
 import {
   readExemptions, writeExemptions, upsertExemption, exemptionKeyOf, applyExemptionDowngrade,
@@ -172,8 +172,7 @@ describe("c/f. 跨 change 命中降级与防死锁", () => {
 
       // ── 第二轮 changeId2：全新账本，同 rule+file+line 上报 ──
       setupWorkspace(root, CID2)
-      const ctx2 = await setupToAnalyze(wt, CID2)
-      await agent_submit.execute({ change_id: CID2, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx2.arch)
+      const ctx2 = await setupToImplement(wt, CID2, { boundary: EB })
       const item2 = readItem(wt, CID2)
       await agent_submit.execute(
         { change_id: CID2, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item2) },
@@ -229,8 +228,7 @@ describe("d. Info 级 issue 豁免申请被拒", () => {
     const { wt, root } = fresh()
     try {
       // 直接构造前置：implement 阶段 + 一个命中清单标记的 Info issue child
-      const ctx = await setupToAnalyze(wt, CID1)
-      await agent_submit.execute({ change_id: CID1, step_id: "analyze", verdict: "passed", execution_boundary: EB }, ctx.arch)
+      const ctx = await setupToImplement(wt, CID1, { boundary: EB })
       const item0 = readItem(wt, CID1)
       await agent_submit.execute(
         { change_id: CID1, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item0) },
