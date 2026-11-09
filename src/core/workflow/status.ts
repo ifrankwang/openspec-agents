@@ -270,7 +270,7 @@ function renderDeploymentNotesSection(state: OrchestrateState | undefined, item:
     "",
     "向用户汇报本次变更的部署注意事项：",
     "",
-    `- 阅读主仓库 \`openspec/changes/${state.changeId}/\` 下规划文档（design.md、tasks.md、proposal.md、specs/）提取部署要点：数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化、依赖清单/构建配置变更（合并后需在主仓库重装依赖、重新构建）`,
+    `- 阅读主仓库 \`openspec/changes/${state.changeId}/\` 下规划文档（design.md、tasks.md、proposal.md、specs/）提取部署要点：数据/结构变更脚本执行、消息队列/缓存等中间件配置调整、新增配置项或功能开关、外部接口契约变化、依赖清单/构建配置变更（合并后需在主仓库重装依赖、重新构建）。该目录在收口时会被 openspec archive 归档，归档后文档位于 \`openspec/changes/archive/\` 下`,
     "- 无规划文档时跳过文档提取，仅转述下方实施补充点",
     "",
   ]

@@ -928,3 +928,83 @@ export async function autoCommitWorktreeChanges(
   }
   return { status: "committed", files: committedFiles, untrackedFiles: untrackedOtherFiles }
 }
+
+/** openspec CLI runner 类型：cwd 固定为调用方传入的 worktreePath。 */
+export type CliRunner = (cwd: string, args: string[]) => Promise<{ success: boolean; stdout: string; stderr: string }>
+
+/** 默认实现：node child_process execFile 调用 openspec CLI（ENOENT 等异常归为非成功，stderr 带异常标记）。 */
+export const defaultOpenSpecCliRunner: CliRunner = (cwd, args) =>
+  new Promise((resolve) => {
+    execFile(
+      "openspec",
+      args,
+      { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 } as any,
+      (err: Error | null, stdout: string, stderr: string) => {
+        if (err && (err as any).code === "ENOENT") {
+          resolve({ success: false, stdout: "", stderr: "ENOENT" })
+          return
+        }
+        resolve({ success: !err, stdout: stdout || "", stderr: stderr || (err ? String((err as any).message) : "") })
+      },
+    )
+  })
+
+let openspecCliRunner: CliRunner = defaultOpenSpecCliRunner
+
+export function __setOpenspecCliRunner(r: CliRunner | null): void {
+  openspecCliRunner = r ?? defaultOpenSpecCliRunner
+}
+
+/** openspec archive 归档结果：archived=成功（committed 指明是否产生了归档提交）；skipped=无需归档；
+ *  failed=执行失败（error 为 stderr/stdout 摘要）。 */
+export type OpenspecArchiveResult =
+  | { status: "archived"; committed: boolean }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; error: string }
+
+/**
+ * 收口合并前对 change 执行 openspec archive（归档规划文档 + delta 同步进主 specs）：
+ * 1. change 目录不存在 → skipped（可能已归档，天然幂等覆盖二次收口场景）；
+ * 2. CLI 未安装（ENOENT）→ skipped（归档属编排基础设施增强，环境缺失不阻断收口）；
+ * 3. CLI 非零退出（校验/同步失败）→ failed——若 CLI 失败前已产生部分文件变更，worktree 会脏，
+ *    同样归 failed，由调用方给出残留处理指引；
+ * 4. CLI 成功后 `git status --porcelain openspec` 有变化 → `add openspec` + `commit`（归档提交）；
+ *    提交失败 → failed（已产生变更但未提交）。无变化 → archived 且未提交。
+ */
+export async function archiveOpenspecChange(
+  worktreePath: string,
+  changeId: string,
+  opts: { runCli?: CliRunner } = {},
+): Promise<OpenspecArchiveResult> {
+  const runCli = opts.runCli ?? openspecCliRunner
+  const changeDir = path.join(worktreePath, "openspec", "changes", changeId)
+  if (!(await pathExists(changeDir))) {
+    return { status: "skipped", reason: "change 目录不存在（可能已归档）" }
+  }
+
+  const cliRes = await runCli(worktreePath, ["archive", changeId, "-y", "--json"])
+  if (cliRes.stderr.includes("ENOENT")) {
+    return { status: "skipped", reason: "openspec CLI 未安装" }
+  }
+  if (!cliRes.success) {
+    const summary = (cliRes.stderr || cliRes.stdout).trim()
+    return { status: "failed", error: summary.length > 0 ? summary.slice(0, 500) : `openspec archive ${changeId} 退出码非零` }
+  }
+
+  const statusRes = await runGitChecked(worktreePath, ["status", "--porcelain", "openspec"])
+  if (!statusRes.success) {
+    return { status: "failed", error: `归档后 git status 查询失败：${statusRes.stderr}` }
+  }
+  if (statusRes.stdout.length === 0) {
+    return { status: "archived", committed: false }
+  }
+  const addRes = await runGitChecked(worktreePath, ["add", "openspec"])
+  if (!addRes.success) {
+    return { status: "failed", error: `归档产物 git add 失败：${addRes.stderr}` }
+  }
+  const commitRes = await runGitChecked(worktreePath, ["commit", "-m", `chore(openspec): archive change ${changeId}`])
+  if (!commitRes.success) {
+    return { status: "failed", error: `归档产物 git commit 失败：${commitRes.stderr}` }
+  }
+  return { status: "archived", committed: true }
+}

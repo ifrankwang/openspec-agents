@@ -230,7 +230,7 @@ skill 用「形态标签」（`stacks`：backend / frontend）与「框架标签
 
 另外两处不在编排流程内：OpenCode 安装方式首次加载会在 `.opencode/agents/` 放三个代理定义文件；调用 `/openspec-standard` 在项目尚未初始化时先以 Core Profile 建 `openspec/` 骨架并生成 `.agents/skills/` 下六个 workflow skill，再写 `openspec/config.yaml` 与 `openspec/schemas/spec-driven-standard/`。
 
-变更的全部任务组完成后，才会把这条分支合并回基准分支，随后自动删掉工作副本和分支。合并前如果基准分支已经往前走了，插件先比对两边改动：只有文档、规划文件或版本号这类无害变化时直接合并；有实质冲突时退回做一次收尾回归，通过后才合并。
+变更的全部任务组完成后，才会把这条分支合并回基准分支，随后自动删掉工作副本和分支。收口合并前，工具会自动执行 openspec archive 把变更文档归档（移入 archive/）并把 delta 同步进主 specs，归档提交随合并带回基准分支；归档失败时回退到收尾验证，修复后重新收口。合并前如果基准分支已经往前走了，插件先比对两边改动：只有文档、规划文件或版本号这类无害变化时直接合并；有实质冲突时退回做一次收尾回归，通过后才合并。
 
 **多基准分支**：基准分支默认取发起时主仓库的当前检出分支，也可以用 `base_branch` 显式指定其它本地分支。比如主仓库停在 `next-release` 上开发新功能、线上 bug 的变更要合回 `main`，发起时传 `base_branch="main"` 即可：主仓库始终停在原分支，插件用底层 git 命令从 `main` 切出 `change/<变更号>` 分支、收口时再把它合并回 `main` 并推进分支引用，不切换你的检出，也不动工作区。
 

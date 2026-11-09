@@ -246,6 +246,7 @@ phases:
           - "自报 issue 必须在本 step 内收敛至终态（修复后自行复核通过，或申请豁免后自行裁定）后再提交；报 issue 时显式声明归因维度 dimension（该维度仅作归因标签，不代表对应维度 reviewer 会复核此 issue）"
           - "存在无法解决的残留或回归失败 → verdict=failed 并报 Low+ issue（显式声明归因维度 dimension）"
           - "完成后调用 opx_agent_submit 提交裁决"
+          - "收口时工具会自动对 change 执行 openspec archive 归档并提交，无需手动归档；归档失败收口会回退到本 step，按 blocked 指引处理残留后重新提交收尾验证"
         constraints:
           - "可 bash 执行构建/测试/清理命令；禁止 edit/write 任何 {{worktree_path}} 之外的文件"
           - "工具调用边界：仅可调用 opx_status、opx_agent_submit、question"

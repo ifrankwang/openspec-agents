@@ -14,18 +14,22 @@
  *   与人工处理命令，metadata.cleanup_residual 落盘，且不执行 branch -D
  * - 无分支引用时仅做 worktree 侧清理：目录消失即成功，不执行 branch -D、无残留警告
  * - is-ancestor 幂等：人工/外部已把 change 并入基准后重调，短路后走清理收尾
+ * - 收口归档（openspec archive）：成功且产生归档提交 → 收口成功带归档说明；change 目录不存在 /
+ *   CLI 未安装（ENOENT）→ skipped 说明不阻断；CLI 失败 → blocked 回退 verify_cleanup，
+ *   重新收尾验证通过后重放收口（二次归档幂等）
  *
  * 运行：bun test tests/orchestrate.complete-cleanup.test.ts
  */
 import { describe, expect, test, afterAll } from "bun:test"
-import { chmodSync, existsSync, writeFileSync, readFileSync } from "node:fs"
+import { chmodSync, existsSync, writeFileSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
 import { __setGitRunner, mergeBranchToTarget } from "../src/core/git"
 import { agent_submit, complete_task_group } from "../src/adapters/opencode/tools"
 import {
   makeCtx, makeOrchCtx, setupWithFakeGit, teardown, initSimpleWorktree, readState, settleOtherGroups,
-  type FakeGitRunner,
+  installFakeOpenSpecCli,
+  type FakeGitRunner, type FakeOpenSpecCli,
 } from "./helpers"
 
 const CID = "cleanup-e2e"
@@ -807,6 +811,136 @@ describe("收尾合并检出检测（mergeBranchToTarget 按目标分支检出�
       fakeGit.statusPorcelainOutput.delete(wt)
       const out2 = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
       expect(out2).toContain("任务组已完成并合并到")
+      expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+    } finally { teardown(root) }
+  })
+})
+
+describe("收口归档（openspec archive）", () => {
+
+  /** 归档路径用例前置：与收口合并用例一致，主仓库检出非目标分支走 worktreeless 合并原路径。 */
+  async function setupFinalWithCli(): Promise<{
+    root: string; wt: string; fakeGit: FakeGitRunner; fakeCli: FakeOpenSpecCli;
+  }> {
+    const freshRes = fresh()
+    await initSimpleWorktree(freshRes.wt, CID)
+    await driveToFinalDone(freshRes.wt)
+    freshRes.fakeGit.currentBranch = "develop"
+    // 用例自装 CLI 桩拿实例断言（setupWorkspace 已装过桩，替换为可观测实例）
+    const fakeCli = installFakeOpenSpecCli()
+    return { ...freshRes, fakeCli }
+  }
+
+  test("归档成功且产生 commit：收口成功、返回体含归档说明、归档提交先于合并提交落在 change 分支", async () => {
+    const { root, wt, fakeGit, fakeCli } = await setupFinalWithCli()
+    try {
+      // CLI 成功 + porcelain 有 openspec 变化 → 归档 commit 路径
+      fakeGit.openspecScopedDirty.add(wtPathOf(wt))
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("**归档**")
+      expect(out).toContain("openspec archive 归档并提交")
+      expect(out).toContain("committed: 是")
+      // CLI 以 worktree 为 cwd、参数为 archive {changeId} -y --json（不带 --skip-specs / --no-validate）
+      expect(fakeCli.calls.length).toBe(1)
+      expect(fakeCli.calls[0].cwd).toBe(wtPathOf(wt))
+      expect(fakeCli.calls[0].args).toEqual(["archive", CID, "-y", "--json"])
+      // 归档 commit 真实发生：add openspec + commit，且先于合并（合并 commit 尚未产生）
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:add openspec"))).toBe(true)
+      const archiveCommitIdx = fakeGit.callLog.findIndex((l) => l.startsWith("checked:commit -m chore(openspec): archive change"))
+      expect(archiveCommitIdx).toBeGreaterThanOrEqual(0)
+      // 归档提交先于合并提交：commit-tree（合并，run 侧）发生在归档 commit 之后
+      const commitTreeIdx = fakeGit.callLog.findIndex((l) => l.includes("commit-tree") && l.includes(`Merge branch 'change/${CID}'`))
+      expect(commitTreeIdx).toBeGreaterThan(archiveCommitIdx)
+      // 合并真实发生：worktree/分支已销毁
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("归档成功但无文件变化：收口成功、归档说明标 committed: 否", async () => {
+    const { root, wt, fakeGit, fakeCli } = await setupFinalWithCli()
+    try {
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("committed: 否")
+      expect(fakeCli.calls.length).toBe(1)
+      // 无变化 → 无 add/commit 归档提交，合并照常
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:add openspec"))).toBe(false)
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+    } finally { teardown(root) }
+  })
+
+  test("change 目录不存在 → skipped：收口成功且返回体含跳过说明（二次收口幂等）", async () => {
+    const { root, wt, fakeGit, fakeCli } = await setupFinalWithCli()
+    try {
+      rmSync(join(wtPathOf(wt), "openspec", "changes", CID), { recursive: true, force: true })
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("**归档跳过**")
+      expect(out).toContain("change 目录不存在（可能已归档）")
+      expect(out).toContain("不影响收口")
+      // skipped 不触发 CLI，合并收口照常
+      expect(fakeCli.calls.length).toBe(0)
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("branch -D"))).toBe(true)
+    } finally { teardown(root) }
+  })
+
+  test("CLI 未安装（ENOENT）→ skipped：收口成功且返回体含未安装说明", async () => {
+    const { root, wt, fakeGit, fakeCli } = await setupFinalWithCli()
+    try {
+      fakeCli.failEnoent = true
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).toContain("**归档跳过**")
+      expect(out).toContain("openspec CLI 未安装")
+      expect(fakeCli.calls.length).toBe(1)
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+    } finally { teardown(root) }
+  })
+
+  test("归档执行失败 → 收口 blocked 且回退 verify_cleanup，重放（归档幂等跳过）后收口", async () => {
+    const { root, wt, fakeGit, fakeCli } = await setupFinalWithCli()
+    try {
+      fakeCli.failCli = true
+
+      const blocked = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      // blocked 事实文案：归档失败原因 + 三段处理指引，结尾指引重新查询 opx_status
+      expect(blocked).toContain("blocked")
+      expect(blocked).toContain("openspec 归档失败")
+      expect(blocked).toContain(fakeCli.failWithStderr)
+      expect(blocked).toContain("git status")
+      expect(blocked).toContain("user.name/user.email")
+      expect(blocked).toContain('opx_agent_submit，step_id="verify_cleanup"')
+      expect(blocked).toContain("归档幂等跳过")
+      expect(blocked).not.toContain("请分派")
+      // 回退落点：verify_cleanup，completed_at 不写，scope_end 撤销，worktree/分支保留、无合并
+      const rolled = taskItemOf(wt)
+      expect(rolled.phase).toBe("review")
+      expect(rolled.currentStep).toBe("verify_cleanup")
+      expect(rolled.metadata["completed_at"]).toBeUndefined()
+      expect(rolled.metadata["scope_end_oid"]).toBeUndefined()
+      expect(existsSync(wtPathOf(wt))).toBe(true)
+      expect(fakeGit.refUpdates.length).toBe(0)
+
+      // dev 重新提交收尾验证 → done；二次收口时 change 目录已不存在（模拟上次失败后人工清理/已归档）→ 幂等跳过
+      await repassCleanup(wt)
+      expect(taskItemOf(wt).phase).toBe("done")
+      rmSync(join(wtPathOf(wt), "openspec", "changes", CID), { recursive: true, force: true })
+
+      const ok = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+      expect(ok).toContain("任务组已完成并合并到")
+      expect(ok).toContain("**归档跳过**")
       expect(taskItemOf(wt).metadata["completed_at"]).toBeDefined()
       expect(existsSync(wtPathOf(wt))).toBe(false)
     } finally { teardown(root) }

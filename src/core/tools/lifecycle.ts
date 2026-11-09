@@ -5,7 +5,7 @@ import { copyFile, mkdir, readdir, readFile, rmdir, rm } from "node:fs/promises"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
-import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, type DetectChangesResult } from "../git.ts"
+import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, archiveOpenspecChange, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
@@ -1941,6 +1941,31 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
       checkboxWarning = `- **tasks.md 复选框勾选失败**: ${e instanceof Error ? e.message : String(e)}（不影响收尾）`
     }
   }
+  // 收口前归档（change 会话最后任务组）：把 openspec/changes/{changeId}/ 移入 archive/ 并同步 delta
+  // 到主 specs，归档提交随合并带回基准分支。位置在 scope_end_oid 记录之前——端点为当时 change 分支
+  // HEAD，归档提交落在其之前，端点语义自洽。skipped 不阻断，failed 走收尾验证回退。
+  let archiveNote = ""
+  if (!isReview && isFinalTaskGroup(state, item) && worktreePath && branchName) {
+    const archiveRes = await archiveOpenspecChange(worktreePath, params.change_id)
+    if (archiveRes.status === "archived") {
+      archiveNote = `- **归档**: change 已通过 openspec archive 归档并提交（committed: ${archiveRes.committed ? "是" : "否"}）。`
+    } else if (archiveRes.status === "skipped") {
+      archiveNote = `- **归档跳过**: ${archiveRes.reason}（不影响收口）。`
+    } else {
+      const workflow = loadWorkflowFile(resolveWorkflowPath(state))
+      const rolledBack = rollbackToCleanupStep(item, workflow)
+      if (rolledBack) await writeState(ctx.worktree, state)
+      return renderFinalizeBlocked(
+        [`openspec 归档失败：${archiveRes.error}`],
+        [
+          `在 worktree 内检查 \`git status\`：如归档残留未提交文件，视情况提交或还原，使 worktree 恢复干净。`,
+          `归档依赖 git 身份（user.name/user.email），缺失时先配置再重试。`,
+          `处理完成后重新提交收尾验证（opx_agent_submit，step_id="verify_cleanup"），通过后再调用 opx_orch_complete_task_group 重新收口（二次收口时归档幂等跳过）。`,
+        ],
+        { branchName, mergeTarget: state.baseBranch, rolledBack, checkboxWarning },
+      )
+    }
+  }
   // scope_end 端点（change 会话）：勾选本身产生新提交，端点在勾选之后记录为当时 change 分支 HEAD（分支 tip）
   if (!isReview && worktreePath && branchName) {
     const endOid = (await runGit(worktreePath, ["rev-parse", branchName])).trim()
@@ -2052,7 +2077,7 @@ async function completeTaskGroupLocked(params: { change_id: string }, ctx: ToolC
   }
   item.metadata["completed_at"] = new Date().toISOString()
   await writeState(ctx.worktree, state)
-  const notes = [docDriftNote, cleanupNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
+  const notes = [docDriftNote, cleanupNote, archiveNote, checkboxWarning, cleanupResidualWarning].filter(Boolean)
   const doneMessage = branchName
     ? `任务组已完成并合并到 "${mergeTarget}"。`
     : "任务组已完成（无变更分支引用，跳过合并）。"

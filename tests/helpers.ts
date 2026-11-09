@@ -1,4 +1,4 @@
-import { __setGitRunner, type GitRunner } from "../src/core/git"
+import { __setGitRunner, __setOpenspecCliRunner, type GitRunner } from "../src/core/git"
 import { __setMustDoOverride, resolveStepMustDo } from "../src/core/tools/gate"
 import { __setKnownStackTags } from "../src/skills/stacks"
 import { __setSkillScanRootsForTest, __resetSkillCache } from "../src/skills/resolve"
@@ -70,6 +70,9 @@ export class FakeGitRunner implements GitRunner {
   failDiff = false
   /** status --porcelain 按 worktree 配置输出（detectChanges 未提交变更测试用）。 */
   statusPorcelainOutput = new Map<string, string>()
+  /** 仅作用于 `status --porcelain openspec`（带 openspec 路径前缀参数）查询的脏标记：
+   *  收口归档「CLI 成功后 openspec 有变化 → 归档 commit」用例注入用，不影响全量 porcelain 查询。 */
+  openspecScopedDirty = new Set<string>()
   /** 强制 status 失败（git 不可用降级测试用）。 */
   failStatus = false
   /** 强制 runChecked 侧 add 失败（自动提交失败路径测试用）。 */
@@ -211,6 +214,7 @@ export class FakeGitRunner implements GitRunner {
     if (cmd === "status" && rest[0] === "--porcelain") {
       const scopeArg = rest.find((r) => r.startsWith("openspec"))
       if (scopeArg) {
+        if (this.openspecScopedDirty.has(worktree)) return "M  openspec/changes/cid/tasks.md"
         const changeMatch = scopeArg.match(/^openspec\/changes\/([^/]+)/)
         if (changeMatch) {
           const key = `${worktree}-${changeMatch[1]}`
@@ -275,6 +279,10 @@ export class FakeGitRunner implements GitRunner {
       if (this.failStatus) return { success: false, stdout: "", stderr: "fatal: status 失败", exitCode: 1 }
       if (this.statusPorcelainOutput.has(worktree)) {
         return { success: true, stdout: this.statusPorcelainOutput.get(worktree)!, stderr: "", exitCode: 0 }
+      }
+      // openspec 前缀限定查询（收口归档 porcelain 检查用）：独立于全量 statusPorcelainOutput 配置
+      if (this.openspecScopedDirty.has(worktree) && args.some((a) => a.startsWith("openspec"))) {
+        return { success: true, stdout: "M  openspec/changes/cid/tasks.md", stderr: "", exitCode: 0 }
       }
     }
 
@@ -569,6 +577,8 @@ export function setupWorkspace(tmpRoot: string, changeId: string): string {
 
   // 标签词汇注入 + 必做项自动补申（见 installTestSkillEnv）。
   installTestSkillEnv()
+  // openspec CLI 桩统一注入：测试进程不真实外呼 openspec CLI（收口归档路径触达时走 Fake 行为）。
+  installFakeOpenSpecCli()
 
   const tasksMd = `## 1. First Task Group
 
@@ -684,8 +694,33 @@ export function setupWithFakeGit(tmpRoot: string, changeId: string): { worktree:
   return { worktree, fakeGit }
 }
 
+/** Fake openspec CLI runner：记录调用（cwd + args），按用例注入成功/失败/ENOENT 行为。 */
+export class FakeOpenSpecCli {
+  calls: { cwd: string; args: string[] }[] = []
+  /** 强制返回 ENOENT（CLI 未安装）。 */
+  failEnoent = false
+  /** 强制 CLI 非零退出（stderr 用 failWithStderr，为空时用缺省文案）。 */
+  failCli = false
+  failWithStderr = "openspec archive 校验失败：spec delta 格式错误"
+
+  run = async (cwd: string, args: string[]): Promise<{ success: boolean; stdout: string; stderr: string }> => {
+    this.calls.push({ cwd, args })
+    if (this.failEnoent) return { success: false, stdout: "", stderr: "ENOENT" }
+    if (this.failCli) return { success: false, stdout: "", stderr: this.failWithStderr }
+    return { success: true, stdout: "{}", stderr: "" }
+  }
+}
+
+/** 安装 Fake openspec CLI 为全局 runner（模块级注入缝），并返回该实例供用例断言。 */
+export function installFakeOpenSpecCli(): FakeOpenSpecCli {
+  const cli = new FakeOpenSpecCli()
+  __setOpenspecCliRunner(cli.run)
+  return cli
+}
+
 export function teardown(tmpRoot: string): void {
   __setGitRunner(null)
+  __setOpenspecCliRunner(null)
   __setMustDoOverride(null)
   __setKnownStackTags(null)
   // 复位为生产默认 roots 并清缓存，避免全局注入泄漏到后续测试文件
