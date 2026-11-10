@@ -41,7 +41,7 @@ src/mocks/
 ```
 
 - handlers 独立目录存放，`index.ts` 汇总导出；`browser.ts` 与 `server.ts` 都只 import 这一份数组，禁止在测试文件里另写一套内联响应
-- 请求地址用相对路径（`/api/...`），与真实接口前缀一致；接口契约变更时 handlers 同步改，禁止 mock 长期偏离真实契约
+- 请求地址用相对路径（`/api/...`），与真实接口前缀一致；接口契约变更时 handlers 同步改，禁止 mock 长期偏离真实契约；新增 mock 数据须有真实来源（本地优先、测试环境兜底），不得按页面需要臆造，取数与转换方式按项目测试规范执行
 - 未匹配请求：开发与端到端测试用 `onUnhandledRequest: 'error'`（或显式白名单），避免请求静默穿透到真实后端形成"半 mock"
 - 环境变量切换数据源：开发用 `VITE_API_MODE=mock|real`，端到端用 `E2E_API_MODE=mock|real`；real 模式不启动 worker，请求走真实后端/代理，用于联调与发版回归
 - mock 场景数据（空列表、异常、超时、权限不足）由 handlers 按请求参数分支返回，不在测试（或页面）里硬编码

@@ -14,6 +14,9 @@ E2E_API_MODE=real npx playwright test -c e2e/playwright.config.ts
 # 只跑发版回归子集（real 模式常用）
 E2E_API_MODE=real E2E_GREP=@regress npx playwright test -c e2e/playwright.config.ts
 
+# 新增/修改 mock 数据：先从真实接口取数，转成 fixture + 溯源记录（本地优先，测试环境兜底）
+node e2e/support/mock-from-real.mjs --url /api/orders --base-url "$BASE_URL" --token-env TOKEN --source-type local --out src/mocks/fixtures/orders.json
+
 npx playwright show-report playwright-report        # 打开报告
 npm run test:e2e:install  # 安装浏览器（沙箱环境建议装到仓库内目录）
 ```
@@ -22,10 +25,21 @@ npm run test:e2e:install  # 安装浏览器（沙箱环境建议装到仓库内�
 
 ## 数据源：mock / real
 
-- mock 只有一份来源：项目 `src/mocks/handlers/`（开发、e2e、组件测试共用）。e2e 不另写网络拦截，需要新场景数据就在 handlers 里补分支
+- mock 只有一份来源：项目 `src/mocks/handlers/`（开发、e2e、组件测试共用）。e2e 不另写网络拦截；需要新场景数据时，先按「本地 > 测试环境」取真实接口响应，再用 `e2e/support/mock-from-real.mjs` 转成 fixture 与溯源记录，不要按页面需要手写数据
 - `e2e/playwright.config.ts` 把 `E2E_API_MODE` 透传给 dev server；应用侧读同值环境变量（Vite 项目通常是 `VITE_API_MODE`）决定是否启动 mock worker。透传缺失会静默走真实后端
 - `real` 模式必须显式设置 `E2E_API_MODE=real`；登录态用预置账号或 `storageState`，不把账号密码写进用例
 - 未匹配请求应配置为报错（`onUnhandledRequest: 'error'`），禁止静默穿透形成"半 mock"
+- 数据来源优先级：本地真实响应 > 测试环境真实响应 > 契约定义（OpenAPI / TS 类型）；用契约推导的数据集必须在溯源文件里标注「未验证来源」
+- 每个新增或修改的 mock 数据集在 `src/mocks/fixtures/` 下留 `<名称>.source.json`（接口、来源、取数时间、替换清单、脱敏原文），随代码提交
+- 涉及 mock 变更的场景在 mock 与 real 两种模式各跑一次，结果必须一致；real 运行前确认 webServer 真以 `E2E_API_MODE=real` 启动，只跑受影响场景或 `@regress` 只读子集
+
+### 待补数据集
+
+契约定义档（未验证来源）的 mock 数据集登记在这里，补齐真实响应后移出本表：
+
+| 接口 | 数据集 | 未验证原因 |
+|------|--------|-----------|
+| （示例）GET /api/orders | src/mocks/fixtures/orders.json | 本地与测试环境均不可达，按 OpenAPI 推导 |
 
 ## 失败取证
 
