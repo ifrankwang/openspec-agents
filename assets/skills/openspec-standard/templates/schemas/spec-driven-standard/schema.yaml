@@ -12,13 +12,17 @@ artifacts:
       Phase 3. Phase 2 is TIERED by change complexity: for SIMPLE changes
       you write proposal/specs/design/tasks yourself; for COMPLEX changes a
       single fresh generation subagent writes them. No subagent ever writes
-      clarify.md - you write it yourself as the interview record.
+      clarify.md - you write it yourself as the snapshot of final decisions.
 
       Phase 1 - Interview (you): investigate the codebase and existing
       openspec/specs/ first, then interview the user in rounds over a
       decision tree using the frontier mechanics (methodology below),
-      recording questions and answers directly into <changeRoot>/clarify.md
-      as you go (sections below) - there is no separate interview file.
+      writing each decision's final conclusion directly into
+      <changeRoot>/clarify.md (the Decisions section) as you go; when a
+      later decision supersedes an earlier one on the same point, update
+      that entry in place instead of appending a superseded round (the
+      clarify record is a snapshot of final decisions, not an interview
+      transcript) (sections below) - there is no separate interview file.
       HARD-GATE: the interview is over only when every branch of the decision
       tree has been visited, no doubt is left open, nothing is silently
       assumed; then first present a simple, direct plan summary to the user
@@ -297,12 +301,19 @@ artifacts:
         exist, and this confirmation step is still mandatory.
 
       Sections (see template):
-      - **Open Questions**: the unknowns surfaced, one per bullet.
-      - **User Answers**: the user's responses, captured verbatim or summarized.
+      - **Decisions (决策结论)**: one entry per resolved doubt, recording only
+        the final conclusion with a one-line rationale when needed; when a
+        later decision supersedes an earlier one, rewrite the entry in
+        place — superseded conclusions are not kept (e.g. when the
+        responsibility for data formatting moves from backend to frontend,
+        only the final owner remains). The clarify record is a snapshot of
+        final decisions, not an interview transcript.
       - **Related-Surface Survey**: the related-surface survey output (关联场景清点) —
         every consuming entry point / shared processing logic / downstream
         consumer with code evidence, and the scoping verdict for each —
-        every verdict confirmed by the user during the interview. Shared
+        every verdict confirmed by the user during the interview; when a
+        scoping verdict flips (included ↔ excluded), update the entry in
+        place. Shared
         processing logic changes must be covered together with all their
         consuming entry points in the same change.
       - **Architecture Direction**: the crystallized approach, key decisions,
@@ -313,7 +324,9 @@ artifacts:
         implementation outline, the related-surface verdicts and the
         rule-boundary verdicts),
         presented as a plain message only after the interview
-        was exhausted. The rule-boundary conclusions must appear here item by
+        was exhausted. When an architecture direction is reconfirmed
+        (e.g. after an issue reopens the plan confirmation gate), rewrite
+        this section in place — the superseded direction is not kept. The rule-boundary conclusions must appear here item by
         item for changes that add or alter a rule, validation or blocking
         check, or that introduce or reorder an execution path.
         This is the HARD-GATE output.

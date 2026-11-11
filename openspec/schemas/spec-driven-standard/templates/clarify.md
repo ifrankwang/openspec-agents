@@ -1,19 +1,18 @@
-## Open Questions
+## Decisions（决策结论）
 
-<!-- Unknowns surfaced during clarification. One per bullet. Cover: problem & intent,
-     scope, related-surface survey, data model, business rules, integration
-     boundaries, architecture approaches. Resolve them with the user by
-     interviewing in rounds over a decision tree: each round asks every currently
-     answerable question (numbered, each with a recommended answer); keep going
-     until no doubt is left unresolved and nothing is silently assumed. -->
+<!-- One entry per resolved doubt, recording only the FINAL conclusion with a
+     one-line rationale when needed. The clarify record is a snapshot of final
+     decisions, not an interview transcript: when a later decision supersedes
+     an earlier one on the same point, rewrite the entry in place — do not
+     append a superseded round or keep the superseded conclusion. Cover the
+     dimensions below: problem & intent, scope, related-surface survey,
+     data model, business rules, rule boundary, integration boundaries,
+     architecture direction. Division of labour with Architecture Direction:
+     this section records the per-question interview conclusions, while
+     Architecture Direction records only the plan summary the user explicitly
+     confirmed — the same architecture decision is never written to both. -->
 
-- <!-- question -->
-
-## User Answers
-
-<!-- The user's responses, captured verbatim or summarized. -->
-
-- <!-- answer -->
+- <!-- decision -->
 
 ## Related-Surface Survey
 
@@ -24,8 +23,9 @@
      data consumers (readers/writers of the tables, fields, events, or export
      artifacts involved). Every entry carries a scoping verdict (adapted in
      this change, or excluded with a reason) confirmed by the user during the
-     interview — the frontier is not empty until every entry has one. When
-     shared processing logic changes, every consuming
+     interview — the frontier is not empty until every entry has one. When a
+     scoping verdict flips (included ↔ excluded), update the entry in place.
+     When shared processing logic changes, every consuming
      entry point must be adapted in the SAME change; splitting into separate
      changes requires an explicit boundary rationale confirmed by the user. -->
 
@@ -43,7 +43,9 @@
      presented as a plain message listing the key points, never a question-tool
      prompt, and only AFTER the interview was exhausted: presenting the plan or
      asking for its confirmation mid-interview is forbidden, and the recommended
-     answer attached to a question is not the plan). This is
+     answer attached to a question is not the plan). When the direction is
+     reconfirmed, rewrite this section in place — the superseded direction is
+     not kept. This is
      the HARD-GATE output — proposal, specs, design, and tasks must stay consistent
      with what is recorded here. -->
 
