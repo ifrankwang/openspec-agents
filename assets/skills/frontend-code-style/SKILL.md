@@ -81,14 +81,13 @@ frameworks: ["vue", "react"]
 node_modules/
 dist/
 coverage/
-playwright-report/
-test-results/
+e2e/reports/
 *.local
 .env.local
 .env.*.local
 .DS_Store
 ```
 
-- `dist/`、`coverage/`、`playwright-report/`、`test-results/`、依赖目录必须忽略
+- `dist/`、`coverage/`、`e2e/reports/`、依赖目录必须忽略
 - 本地环境变量文件（`.env.local`、`.env.*.local`）必须忽略，`.env` 系列模板可提交
-- 构建报告目录同时加入 dev server 的 watch ignore，避免报告写入触发热更新噪音
+- 构建报告目录同时加入 dev server 的 watch ignore（如 `e2e/reports/`），避免报告写入触发热更新噪音

@@ -54,7 +54,7 @@ src/mocks/
 
 | 路径 | 内容 |
 |------|------|
-| `e2e/` | 端到端测试：Playwright 配置、specs、support、fixtures；产物 `playwright-report/`、`test-results/` 不提交 |
+| `e2e/` | 端到端测试：Playwright 配置、specs、support、fixtures、reporting、reports |
 | `tests/` | 跨模块集成测试、测试基础设施与共享 fixture |
 | `__tests__/` | 单元/组件测试，可与实现同目录（`src/**/__tests__/`）或集中根目录 |
 | `src/**/*.test.ts`、`src/**/*.spec.ts` | 与被测实现同目录的单元测试 |
@@ -73,7 +73,7 @@ src/mocks/
 feat(order): 新增订单列表筛选
 fix(auth): 修复登录态过期未跳转
 refactor(ui): 抽取表格分页组件
-test(e2e): 补充贷款导入回归用例
+test(e2e): 补充订单导入回归用例
 perf(list): 长列表改为虚拟滚动
 docs: 更新前端接入说明
 chore: 升级依赖版本

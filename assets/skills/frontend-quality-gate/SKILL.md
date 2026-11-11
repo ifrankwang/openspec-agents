@@ -182,7 +182,7 @@ sonar.projectName=<项目原key>-<namespace>
 sonar.sources=src
 sonar.tests=src,tests,e2e
 sonar.javascript.lcov.reportPaths=coverage/lcov.info
-sonar.exclusions=node_modules/**,dist/**,coverage/**,playwright-report/**,test-results/**
+sonar.exclusions=node_modules/**,dist/**,coverage/**,e2e/reports/**
 sonar.javascript.file.suffixes=.js,.jsx,.ts,.tsx,.vue
 ```
 

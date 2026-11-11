@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { resolveE2ePaths } from './paths.mjs'
 
 /**
  * 业务场景报告生成器（Playwright Reporter）——两级结构：场景列表 + 场景详情。
@@ -297,8 +298,13 @@ function compareScenario(a, b) {
 
 export default class BusinessReport {
   constructor(options = {}) {
-    this.outputDir = options.outputDir || path.resolve(process.cwd(), 'playwright-report')
-    this.mode = options.mode || 'mock'
+    // 兜底：直接 new 本 reporter（没走 playwright.config.ts）时也落单一报告根，
+    // 路径公式只在 reporting/paths.mjs 里维护，这里不重复；mode 一并传入，
+    // 否则 new BusinessReport({ mode: 'real' }) 会落到 mock 目录
+    const reportMode = options.mode === 'real' ? 'real' : 'mock'
+    this.outputDir =
+      options.outputDir || resolveE2ePaths({ repoRoot: process.cwd(), mode: reportMode }).reportDir
+    this.mode = reportMode
     this.baseURL = options.baseURL || ''
     this.scenarios = []
     this.startedAt = Date.now()
@@ -309,8 +315,8 @@ export default class BusinessReport {
     this.startedAt = Date.now()
     this.repoRoot = config?.rootDir || process.cwd()
     fs.mkdirSync(this.outputDir, { recursive: true })
-    // 只清理本报告自己的产物：outputDir 可能是 playwright-report，同级还有 sample/ 与 real/，
-    // 整目录删除会误伤；旧一轮的 assets 与 HTML/JSON 在这里清掉即可。
+    // 只清理本报告自己的产物：outputDir 是 reports/playwright-report，真实模式还在同级 real/ 下，
+    // 整目录删除会误伤 real 报告；旧一轮的 assets 与 HTML/JSON 在这里清掉即可。
     fs.rmSync(path.join(this.outputDir, 'assets'), { recursive: true, force: true })
     fs.rmSync(path.join(this.outputDir, 'index.html'), { force: true })
     fs.rmSync(path.join(this.outputDir, 'report-data.json'), { force: true })

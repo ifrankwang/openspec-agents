@@ -22,11 +22,11 @@ import type { Page, TestInfo } from '@playwright/test'
 export type Severity = 'P0' | 'P1' | 'P2'
 
 export interface ScenarioMeta {
-/** 用例编号：模块前缀-序号（如 PRJ-001），显式声明不随代码漂移 */
+/** 用例编号：模块前缀-序号（如 ORD-001），显式声明不随代码漂移 */
   id: string
   /** 业务域（报告一级分组）：如 登录与会话 / 项目管理 / 订单导入 / 审批流转 / 导出与批量操作 */
   domain: string
-  /** 业务分支或链路，如 关键字搜索、单据审阅、批量操作 */
+  /** 业务分支或链路，如 关键字搜索、详情查看、批量操作 */
   branch?: string
   /** 前置条件，一句话说明数据与身份前提 */
   precondition?: string
@@ -36,7 +36,7 @@ export interface ScenarioMeta {
 /** 声明当前用例的业务归属；放在用例体第一行 */
 export function scenario(testInfo: TestInfo, meta: ScenarioMeta): void {
   if (!/^[A-Z]{2,4}-\d{3}$/.test(meta.id)) {
-    throw new Error(`scenario() 编号不合法：${meta.id}，应为 模块前缀-三位序号（如 PRJ-001）`)
+    throw new Error(`scenario() 编号不合法：${meta.id}，应为 模块前缀-三位序号（如 ORD-001）`)
   }
   testInfo.annotations.push({ type: 'domain', description: meta.domain })
   testInfo.annotations.push({ type: 'case-id', description: meta.id })

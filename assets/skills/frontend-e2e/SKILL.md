@@ -16,28 +16,34 @@ boundary_hints:
 
 | 项 | 要求 |
 |----|------|
-| 用例脚本 | 交付可执行的用例脚本：`e2e/` 目录、Playwright 配置、support 层（reporter / 证据采集 / fixture）、按「scenario + step」组织的用例；脚本能直接按 README 命令跑起来；涉及 mock 数据变更的，附真实接口溯源记录与 mock / real 双模式一致性证据（契约定义档的数据集除外，须标 unverified 并登记到 `e2e/README.md` 的待补数据集） |
-| 执行报告 | 实际执行过并产出报告：`playwright-report/index.html` 与 `playwright-report/report-data.json` 均存在，报告满足下文硬要求；只写不跑不算完成 |
+| 用例脚本 | 交付可执行的用例脚本：`e2e/` 目录、Playwright 配置、reporting 层（报告生成器与路径解析）、scripts 层（启动器与辅助脚本）、support 层（证据采集 / fixture）、按「scenario + step」组织的用例；脚本能直接按 README 命令跑起来；涉及 mock 数据变更的，附真实接口溯源记录与 mock / real 双模式一致性证据（契约定义档的数据集除外，须标 unverified 并登记到 `e2e/README.md` 的待补数据集） |
+| 执行报告 | 实际执行过并产出报告：`e2e/reports/playwright-report/index.html` 与 `e2e/reports/playwright-report/report-data.json` 均存在（真实模式在 `.../real/` 下），报告满足下文硬要求；截图 / trace 等运行痕迹在系统临时目录、不进仓库；只写不跑不算完成 |
 
 ## 产出物长什么样
 
 一次运行产出两份，同源、不重复维护：
 
-- `playwright-report/index.html`：给人看。**列表页**按「业务域 → 业务分支 → 场景」缩进分组，场景行带用例编号，状态只有 通过 / 失败 / 跳过；**详情页**是该场景的自然语言操作步骤，一步一句话 + 一张截图，失败场景在出错那一步标红，下面给失败证据；从详情返回列表回到原位置并高亮来源行。
-- `playwright-report/report-data.json`：给 CI 和 AI Agent 读。带 `schemaVersion`、`schema`（字段说明）、`summary`、`scenarios[]`，失败场景 `error.raw` 保留接口请求响应全量、控制台记录、断言源码与堆栈，`mode` 字段标明本轮是 mock 还是 real。
+- `e2e/reports/playwright-report/index.html`：给人看。**列表页**按「业务域 → 业务分支 → 场景」缩进分组，场景行带用例编号，状态只有 通过 / 失败 / 跳过；**详情页**是该场景的自然语言操作步骤，一步一句话 + 一张截图，失败场景在出错那一步标红，下面给失败证据；从详情返回列表回到原位置并高亮来源行。
+- `e2e/reports/playwright-report/report-data.json`：给 CI 和 AI Agent 读。带 `schemaVersion`、`schema`（字段说明）、`summary`、`scenarios[]`，失败场景 `error.raw` 保留接口请求响应全量、控制台记录、断言源码与堆栈，`mode` 字段标明本轮是 mock 还是 real。
+- 报告生成时把每步截图复制进报告 `assets/`，报告自包含；运行痕迹在系统临时目录，被系统清掉也不影响看图。
 
 详细版式、证据规则、验收清单见 `references/report-spec.md`，落地新项目前先读一遍。
+
+## 前置
+
+- `@playwright/test` 作为项目 devDependency 安装（按项目包管理器安装，如 `pnpm add -D @playwright/test`）。
+- 项目 `package.json` 带 `"type": "module"`：配置与 e2e 脚本按 ESM 加载，缺了会在加载 config 时报 `import.meta` 相关错误。
 
 ## 落地步骤
 
 1. **侦察**：确认前端框架、dev server 启动命令与端口、接口前缀（默认 `/api`）、登录方式（真实账号 / 预置登录态）、项目 mock 层位置（MSW handlers 目录与启动入口）、以及 dev server 代理配置。这些决定了 `playwright.config.ts` 与 fixture 怎么改。
-2. **铺骨架**：执行 `node scripts/scaffold.mjs --target <项目根>`，把 reporter、证据采集、请求取证、fixture、配置、README 模板拷到 `<项目>/e2e/` 下（同时拷入 `e2e/support/mock-from-real.mjs`，用于把真实响应转成 fixture 与溯源记录），已存在的文件不会覆盖。
+2. **铺骨架**：执行 `node scripts/scaffold.mjs --target <项目根>`，把报告生成器与路径解析（`e2e/reporting/`）、启动器与辅助脚本（`e2e/scripts/`）、证据采集、请求取证、fixture、配置、README 模板拷到 `<项目>/e2e/` 下（同时拷入 `e2e/support/mock-from-real.mjs`，用于把真实响应转成 fixture 与溯源记录），并建好空的 `e2e/specs/` 与 `e2e/fixtures/`；已存在的文件不会覆盖。
 3. **接数据源**：报告结构不关心数据从哪来，但数据集来源受下文「mock 数据来源：真实接口优先」约束；mock 与真实后端走同一条链路切换。
    - mock 模式：复用项目既有 MSW handlers（单一 mock 源，handlers 独立目录，dev、e2e、组件测试共用）。e2e 侧不另写任何网络拦截。
    - real 模式：不启动 mock worker，请求经 dev server 代理打真实后端，用于联调与发版回归。
    - 两种模式由 `E2E_API_MODE=mock|real` 切换，见下文「mock 与真实接口切换」。
 4. **写用例**：写用例前先确认所需 mock 数据已按真实响应转换完成（见下文「mock 数据来源」），不要边写用例边按页面需要补数据。一条 `test` 一条业务场景，第一行 `scenario()` 声明业务域与业务分支，每个操作一行 `step()`。写法见下一节。
-5. **跑并验收**：`npx playwright test -c e2e/playwright.config.ts`（配置放在 `e2e/` 下必须带 `-c`，或在 package.json 里把它封成 `test:e2e` 脚本），打开报告按 `references/report-spec.md` 的验收清单逐条对照；不达标先修报告或用例，不要交付。
+5. **跑并验收**：首次运行先 `npm run test:e2e:install` 安装浏览器（装到 Playwright 默认缓存目录，跨项目复用）；再 `npm run test:e2e`（脚本内部调 `e2e/scripts/run-e2e.mjs`；不要从仓库根直接跑 `npx playwright test`），打开 `e2e/reports/playwright-report/index.html` 按 `references/report-spec.md` 的验收清单逐条对照；不达标先修报告或用例，不要交付。
 
 ## mock 与真实接口切换
 
@@ -113,7 +119,7 @@ node e2e/support/mock-from-real.mjs --response saved-response.json --url /api/xx
 - 涉及 mock 变更的场景在 mock 与 real 两种模式下各跑一次，两次断言结果一致；不一致时以真实响应为准修 mock，不得改用例断言迁就 mock
 - 跑 real 之前先确认 webServer 真以 `E2E_API_MODE=real` 启动：复用已有服务或 `E2E_SKIP_WEBSERVER` 时，服务可能仍以 mock 模式运行，此时的 real 运行无效
 - 只跑受影响场景（`E2E_GREP` 或单个 spec）或只读 `@regress` 子集，避免写操作污染共用环境
-- 证据形态：取数与转换命令 + mock 与 real 两次运行的报告路径
+- 证据形态：取数与转换命令 + mock 与 real 两次运行的报告路径（`e2e/reports/playwright-report/index.html` 与 `e2e/reports/playwright-report/real/index.html`）
 
 ## 取证通道（mock 模式下接口证据不降级）
 
@@ -129,8 +135,8 @@ MSW 在浏览器内由 Service Worker 完成拦截，Playwright 的网络事件�
 
 ```ts
 test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ page }, testInfo) => {
-  scenario(testInfo, { id: 'IMP-004', domain: '贷款导入', branch: '文件校验' })
-  await step(page, testInfo, '进入贷款导入页', () => page.goto('/import'))
+  scenario(testInfo, { id: 'ORD-004', domain: '订单导入', branch: '文件校验' })
+  await step(page, testInfo, '进入订单导入页', () => page.goto('/import'))
   await step(page, testInfo, '选择 25MB 的清单文件上传，应提示文件超过 20MB', () =>
     page.setInputFiles('input[type=file]', 'fixtures/oversize.xlsx')
   )
@@ -141,9 +147,9 @@ test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ 
 - **标题**写业务结果，不写实现：写「批量删除后列表刷新」，不写「点击 #delete-btn 调用 DELETE 接口」。**标题必须写预期结果，不能写缺陷现状**——`test.fail()` 的已知缺陷也一样。反例：「重新上传后选择同一文件不触发解析」（描述的是 bug），正例：「重新选择同一份清单文件后可再次解析」。
 - **步骤句子必须写「操作 + 应发生什么」**。报告在失败处截断，读者只看得到停下来的那一步；如果那一步只写「点击解析文件」，报告就无法回答「本来应该出现什么」。
   反例：`点击解析文件`。正例：`点击解析文件后，应提示文件超过 20MB`。
-- **`scenario()` 是第一行**，`id` 是用例编号（模块前缀-序号，如 `PRJ-001`，模块前缀表由项目在 README 里约定），`domain` 是报告一级分组，`branch` 是二级分组。编号显式声明、不按行号生成，保证不随代码插入漂移；报告按编号展示并支持搜索。
-- **不要设「错误与边界」「联调环境验证」这类横切域**：异常与边界用例归入所属业务模块的对应分支（如导入失败归「贷款导入」）；依赖真实后端预置数据的用例同样归属业务模块，mock 模式下按真实响应为它们转出等价的 handlers 数据，让同一批用例两种模式都执行（是否打真实后端由 `E2E_API_MODE` 决定，不用目录区分）。
-- **发版回归子集用 `@regress` 标签**：只读/无害类用例（查看、导出、列表、登录态）在 `test()` 签名上加 `{ tag: ['@regress'] }`，脚本封成 `test:e2e:regress`（内部 `E2E_GREP=@regress`）；回归目标（真实项目/贷款 id）用 `E2E_REGRESS_*` 环境变量注入 fixture 常量。
+- **`scenario()` 是第一行**，`id` 是用例编号（模块前缀-序号，如 `ORD-001`，模块前缀表由项目在 README 里约定），`domain` 是报告一级分组，`branch` 是二级分组。编号显式声明、不按行号生成，保证不随代码插入漂移；报告按编号展示并支持搜索。
+- **不要设「错误与边界」「联调环境验证」这类横切域**：异常与边界用例归入所属业务模块的对应分支（如导入失败归「订单导入」）；依赖真实后端预置数据的用例同样归属业务模块，mock 模式下按真实响应为它们转出等价的 handlers 数据，让同一批用例两种模式都执行（是否打真实后端由 `E2E_API_MODE` 决定，不用目录区分）。
+- **发版回归子集用 `@regress` 标签**：只读/无害类用例（查看、导出、列表、登录态）在 `test()` 签名上加 `{ tag: ['@regress'] }`，脚本封成 `test:e2e:regress`（内部 `E2E_GREP=@regress`）；回归目标（真实环境里的业务对象 id）用 `E2E_REGRESS_*` 环境变量注入 fixture 常量。
 - **断言放在 `step()` 回调里或步骤之后**；`step()` 会等应用淡入、加载遮罩消失、字体就绪再截图，避免截到灰蒙蒙的中间态。
 - **已知缺陷用 `test.fail()`** 保持规格断言。报告里它按「失败」展示并带完整证据，缺陷清单另记在项目的问题文档里，不要在报告里编「已知问题」分类。
 - 步骤粒度对齐用户视角：一个用户动作一行，不要把「打开页面 + 展开筛选 + 输入关键字」塞成一行。
@@ -158,14 +164,15 @@ test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ 
 
 ## 适配新项目要改的地方
 
-- `e2e/playwright.config.ts`：dev server 命令与端口、`E2E_PORT` 传递、`E2E_API_MODE` 透传给 dev server、报告/trace 输出目录、reporter 的 `mode` 取真实运行模式。
+- `e2e/playwright.config.ts`：dev server 命令与端口、`E2E_API_MODE` 透传给 dev server、reporter 的 `mode` 取真实运行模式。报告与痕迹路径由 `e2e/reporting/paths.mjs` 决定，不要在 config 里另写路径公式。
+- `e2e/reporting/paths.mjs`：报告根、痕迹根与环境变量覆盖语义的唯一实现；一般不用改。`E2E_REPORT_DIR` 显式覆盖报告输出（此时不再叠加 `real/`），两个 env 若是相对路径按 `e2e/` 目录解析，绝对路径原样使用。
 - `e2e/support/evidence.ts`：接口前缀（`E2E_API_PREFIX`，默认 `/api`）。
 - `e2e/support/reporting.ts`：`waitForUiStable()` 里的应用外壳选择器与加载遮罩选择器，按项目实际 DOM 调整；调不好就会出现灰截图。
 - `e2e/support/http-trace.ts`：一般不用改；接口若不走 fetch/XHR（如 WebSocket、SSE），另行补充采集，不得留空导致证据缺失。
 - `e2e/support/test.ts`：叠加项目自己的登录 fixture，保留 fixture 内的请求取证注入与回传，不要用项目自有 fixture 整体覆盖 `page` 而丢掉取证通道。
 - 项目 `src/mocks/browser.ts`：`E2E_API_MODE=mock` 时启动 worker，`real` 时不启动；确保 dev server 启动时能读到该环境变量。
 - 项目 `src/mocks/`：新增或修改 mock 数据时按「mock 数据来源」取数并留溯源记录；mock 数据目录随项目既有布局，e2e 侧不另建一份。
-- `.gitignore`：加 `playwright-report/`、`test-results/`、`.playwright-browsers/`；dev server 的 watch 忽略里也要加报告目录，否则报告写入会触发页面热更新噪音。
+- `.gitignore`：加 `e2e/reports/`，并保留兜底项 `test-results*/`、`playwright-report*/`、`blob-report/`；dev server 的 watch 忽略里加 `e2e/reports/`，否则报告写入会触发无意义的整页刷新。
 - 其他框架或原生项目：先在 SKILL.md frontmatter 的 `frameworks` 声明对应值（如 `["angular"]`），工具代码无需改动；未声明时按框架过滤后本 skill 不会加载。
 
 ## 常见坑
@@ -176,8 +183,9 @@ test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ 
 - **半 mock**：未匹配请求被静默放行到真实后端。`onUnhandledRequest: 'error'` 打开，把漏配的 handlers 补齐。
 - **接口证据为空**：请求追踪注入被项目自有 fixture 覆盖，或接口走了 fetch/XHR 之外的通道。保证 `page` fixture 链路完整，必要时在 `http-trace.ts` 补采集。
 - **mock 数据与真实不符 / handlers 缺分支**：新增数据前先按「mock 数据来源」取真实响应再转，handlers 按参数挂该数据，不要在测试里硬编码注入页面；real 模式跑同一用例失败或字段缺失，通常就是 mock 凭想象写的。
-- **报告写入触发 dev server reload**：Vite 等会监听整个 root，把 `playwright-report/` 加进 watch ignore。
-- **并行跑互相清空产物**：用 `E2E_REPORT_DIR` / `E2E_RESULT_DIR` 给每次运行独立目录，端口也用 `E2E_PORT` 注入。
+- **Vite 监听报告目录**：必须把 `e2e/reports/` 加进 watch ignore，否则每次写报告都会触发无意义的 full-reload。
+- **并行跑互相覆盖产物**：运行痕迹按端口分目录（`run-e2e.mjs` 自动挑端口），并行运行互不可见；一次性验证要单独出报告时用 `E2E_REPORT_DIR=$(mktemp -d)`，不要写进仓库。
+- **从仓库根直接跑 `npx playwright test`**：没有 config 时 Playwright 默认把 `test-results/` 落在仓库根，报告也不会生成；一律 `npm run test:e2e`。
 - **失败现场截图拿不到**：必须在 `page` fixture 的 teardown 里截（页面还活着），不要写在共享模块的 `afterEach` 里。
 - **不要给运行命令加 `--reporter=line/json`**：会覆盖自定义 reporter，报告直接不生成。
 - **假 real**：复用已有 dev server 或设置 `E2E_SKIP_WEBSERVER` 时，服务可能仍以 mock 模式运行，此时 `E2E_API_MODE=real` 的「real 复跑」实际跑的是 mock，一致性验收会假通过。跑前确认 webServer 的启动命令带 `E2E_API_MODE=real`，或重启服务再跑。
@@ -186,4 +194,5 @@ test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ 
 
 - `references/report-spec.md`：报告版式、证据规则、JSON schema、验收清单。
 - `assets/`：可直接拷贝的实现（reporter、证据采集、请求取证、fixture、config、README 模板、mock 取数转换脚本 mock-from-real.mjs）。
+- `assets/run-e2e.mjs` / `open-report.mjs` / `install-browsers.mjs` / `check-case-ids.mjs`：启动器（用例编号预检、端口隔离、过期痕迹清理）、打开报告、安装浏览器、用例编号唯一性检查。
 - `scripts/scaffold.mjs`：一键铺骨架。

@@ -2,6 +2,19 @@
 
 报告是脚本产物，不是分析文档。所有文字来自测试代码里的声明（用例标题、步骤句子、断言源码）和运行时原始数据（控制台、接口、堆栈），不允许出现 AI 生成的结论。
 
+## 产物落点
+
+路径公式只在这里写一次，实现只在 `e2e/reporting/paths.mjs`（`resolveE2ePaths({ repoRoot, mode, port })` 返回 `{ tempRoot, reportDir, resultDir }`）。`playwright.config.ts`、`scripts/run-e2e.mjs`、`reporting/business-reporter.mjs` 都调用它，不要在别处再拼路径。
+
+| 产物 | 位置 | 生命周期 |
+|---|---|---|
+| 正式业务报告（mock） | `<仓库>/e2e/reports/playwright-report/` | 交付物；`index.html` + `report-data.json` + `assets/`（步骤截图副本） |
+| 正式业务报告（real） | `<仓库>/e2e/reports/playwright-report/real/` | 交付物；单独一份，不覆盖 mock 全量报告 |
+| 运行痕迹（截图 / trace / video） | `<os.tmpdir()>/<仓库目录名 slug>-e2e/test-results-<端口>` | 只服务失败排查；按端口分目录，系统定期清理；`run-e2e.mjs` 启动时打印并清理 3 天前的同类目录 |
+| 一次性验证报告 | `E2E_REPORT_DIR=$(mktemp -d)` | 临时验证用，不进仓库 |
+
+覆盖语义：`E2E_REPORT_DIR` / `E2E_RESULT_DIR` 显式设置时直接使用该目录（real 模式不再叠加 `real/`）；相对路径按 `e2e/` 目录解析，绝对路径原样使用。报告写入 `e2e/reports/`，需把该目录加入 `.gitignore` 与 Vite 的 watch ignore；项目根不再出现 `playwright-report/`、`test-results/`。
+
 ## 一、页面结构
 
 ### 列表页
@@ -70,7 +83,7 @@
   "scenarios": [
     {
       "id": "s1",
-      "caseId": "PRJ-001（用例编号，模块前缀-序号）",
+      "caseId": "ORD-001（用例编号，模块前缀-序号）",
       "title": "业务场景一句话（写预期结果，不写缺陷现状）",
       "domain": "业务域（不设「错误与边界」「联调环境验证」这类横切域）",
       "branch": "业务分支",
@@ -105,5 +118,5 @@
 - [ ] 接口证据的请求/响应是完整原文且已脱敏；JSON 树能展开、全部展开、复制。
 - [ ] 断言证据含源码、期望、实际；元素不存在时给「未找到该元素」而不是空。
 - [ ] `report-data.json` 有 `schemaVersion` 与 `schema`，失败场景带 `error.raw`。
-- [ ] 报告目录已 gitignore，且 dev server 不监听它。
+- [ ] 已把 `e2e/reports/` 加入 `.gitignore` 与 Vite 的 watch ignore；项目根无 `test-results/`、`playwright-report/`；痕迹目录在系统临时目录。
 - [ ] 页面无前端报错（打开报告控制台干净）。
