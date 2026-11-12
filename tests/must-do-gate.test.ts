@@ -257,6 +257,56 @@ describe("assertMustDoCoverage 申报格式与覆盖度", () => {
     expect(() => assertMustDoCoverage(["compile", "deep_scan"], [NO_CHANGE_CHECK])).not.toThrow()
     expect(() => assertMustDoCoverage(["compile"], [{ step: "no_change", completed: false }])).toThrow(/跳过原因/)
   })
+
+  test("no_change 豁免不覆盖 dimension_skill_review：未单独申报 → 拒绝", () => {
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], [NO_CHANGE_CHECK]))
+      .toThrow(/dimension_skill_review/)
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], [NO_CHANGE_CHECK]))
+      .toThrow(/整体豁免不覆盖/)
+    expect(uncoveredMustDo({ must_do: { always: ["compile", "dimension_skill_review"] } }, [NO_CHANGE_CHECK]))
+      .toEqual(["dimension_skill_review"])
+  })
+
+  test("no_change 豁免 + dimension_skill_review 单独申报（completed=true 附核对结论）→ 通过", () => {
+    const checks = [
+      NO_CHANGE_CHECK,
+      { step: "dimension_skill_review", completed: true, evidence: "逐 skill 核对完成，命中 2 项已报 issue" },
+    ]
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], checks)).not.toThrow()
+    expect(uncoveredMustDo({ must_do: { always: ["compile", "dimension_skill_review"] } }, checks)).toEqual([])
+  })
+
+  test("no_change 豁免 + dimension_skill_review 置未完成（合法结构化 skip_reason）→ 通过", () => {
+    const checks = [
+      NO_CHANGE_CHECK,
+      {
+        step: "dimension_skill_review", completed: false,
+        skip_reason: '{"item":"dimension_skill_review","category":"用户裁定豁免","adjudication":"user_response","note":"本轮无审查范围内代码"}',
+      },
+    ]
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], checks)).not.toThrow()
+    expect(uncoveredMustDo({ must_do: { always: ["compile", "dimension_skill_review"] } }, checks)).toEqual([])
+  })
+
+  test("no_change 豁免 + dimension_skill_review 申报缺证据/缺 skip_reason → 按格式拒绝", () => {
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], [
+      NO_CHANGE_CHECK, { step: "dimension_skill_review", completed: true },
+    ])).toThrow(/evidence/)
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], [
+      NO_CHANGE_CHECK, { step: "dimension_skill_review", completed: false },
+    ])).toThrow(/跳过原因/)
+  })
+
+  test("无 no_change 声明时 dimension_skill_review 与其他必做项同口径逐项覆盖", () => {
+    const checks = [
+      { step: "compile", completed: true, evidence: "e" },
+      { step: "dimension_skill_review", completed: true, evidence: "逐 skill 核对结论" },
+    ]
+    expect(uncoveredMustDo({ must_do: { always: ["compile", "dimension_skill_review"] } }, checks)).toEqual([])
+    expect(() => assertMustDoCoverage(["compile", "dimension_skill_review"], [
+      { step: "compile", completed: true, evidence: "e" },
+    ])).toThrow(/dimension_skill_review/)
+  })
 })
 
 // ─── review 端：verify_tool 提交门禁 ───

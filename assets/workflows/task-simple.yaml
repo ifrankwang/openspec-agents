@@ -16,6 +16,8 @@ max_retries: 10
 common:
   instructions:
     - "非 OpenCode 直载形态（MCP 或原生工具接入的 agent 客户端）调用 opx_* 工具时，须携带 `_agent` 参数并传自身角色名（如 openspec-developer）；缺省会被视为编排主代理视角，将拿不到自身角色的执行视图与操作指引"
+    - "按 Skill 加载清单逐项加载列出的 skill（不可跳步）并遵循其全部规范"
+    - "逐项检视所有已加载 skill 的全部规范条目并确认满足（不满足则补做，不得跳过）；对维度规范类 skill 逐章节核对审查范围内代码"
 
 phases:
   - name: in_progress
@@ -99,6 +101,7 @@ phases:
             - behavior_surface
             - case_matrix
             - negative_probe
+            - dimension_skill_review
           backend:
             - api_script
             - api_execution
@@ -120,6 +123,7 @@ phases:
           - "本次变更仅含测试代码（判定：视图「变更范围」文件清单全部命中已加载技术栈 skill 定义的测试代码路径，且无生产代码、接口契约、构建与测试配置等非测试文件）时，豁免②③按业务链路清单抽样重放，仅验证①④；豁免时 must_do_checks 中②③置 completed=false，并以结构化 skip_reason 申报（格式：{\"item\":\"<对应验证项>\",\"category\":\"<降级类别>\",\"adjudication\":\"user_response|unattended_auto|env_unavailable\",\"note\":\"<说明>\"}），note 注明「本次变更仅含测试代码，豁免抽样重放」及判定依据；⑤⑥⑦的实现核验在纯测试代码变更场景无对象，其断言证据核验并入④测试代码质量"
           - "读取 design.md 的 API 定义（请求/响应结构、数据模型）与 specs/ 下相关 spec.md（需求细节、验收标准与数据产出要求），用于准备测试数据、对照 API 合约与选样核心链路"
           - "加载匹配维度 skill 做维度审查：以 spec 验收标准、行为组与数据产出要求为锚对照审查实现，skill 检查点清单与 dev 必做项申报对照兜底（抽查申报遗漏项——检查点清单锚定同一 skill，必做项清单锚定 workflow step，仅执行模式从重走清单变为 dev 申报走清单 + 本审查兜底抽查），结合领域知识做拓展审查（skill 仅为最低基准，主力在清单之外）；顺带发现的非本轮缺陷按对应维度严重级别标准报 issue，禁止静默丢弃"
+          - "维度规范逐 skill 核对的锚点为变更范围（本轮 diff/变更文件及既有代码中该 skill 规范对应的违规面），复核轮不因聚焦收敛而豁免逐 skill 核对申报；dimension_skill_review 申报不受 no_change 整体豁免覆盖"
           - "审查新 issue 前先查看视图「待复核」区块中的既有 issue（仅本审查者报源），避免语义重复"
           - "报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）：本 reviewer 不归属任一质量维度，dimension 即该 issue 归属的目标质量维度"
           - "当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档"

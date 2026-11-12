@@ -13,10 +13,16 @@
  * adjudication 裁定方式枚举：user_response=用户答复、unattended_auto=无人值守自动降级、
  * env_unavailable=环境不可用（note 须记录尝试）。
  *
- * 必做覆盖口径：核验申报（completed=true + 描述注明核验方式与抽验样本，step 名首段 token 命中必做项）
- * 是高成本必做项的合法覆盖形态——仅限 workflow 指令白名单限定的高成本必做项（deep_scan），低成本
- * 必做项必须实跑后申报。覆盖判定只认 step 名 token 命中，不区分实跑与核验形态（机制层不拦截低成本项
- * 误用核验申报形态，白名单约束由 workflow 指令与门禁错误提示承载）。
+ * 必做项申报口径分三类：
+ *   ① 工具实跑申报（completed=true + 执行命令与结果摘要）——低成本必做项的默认口径，必须实跑后申报；
+ *   ② 高成本核验申报（completed=true + evidence 描述核验方式与抽验样本）——仅限 workflow 指令白名单
+ *      限定的高成本必做项（deep_scan），核验 dev 申报并抽验命中项，不重扫全量；
+ *   ③ 人工核对申报（completed=true + evidence 记录核对对象与结论）——逐条核对类必做项
+ *      （dimension_skill_review）的合法口径：无确定性工具可跑，以逐 skill/逐章节核对记录与
+ *      命中/未命中结论作为证据。
+ * 覆盖判定只认 step 名 token 命中，不区分三类形态（机制层不拦截口径误用，白名单约束由 workflow
+ * 指令与门禁错误提示承载）。例外：词表项 dimension_skill_review 不被 no_change 整体豁免覆盖
+ * （见 NO_CHANGE_EXEMPTED_ITEMS），声明整体豁免时仍须单独申报该项。
  */
 import { MUST_DO_ALWAYS_KEY } from "../workflow/loader.ts"
 import type { StepMustDoGroups } from "../workflow/types.ts"
@@ -148,6 +154,13 @@ export function resolveStepMustDo(
  */
 export const NO_CHANGE_TOKEN = "no_change"
 
+/**
+ * 不被 no_change 整体豁免覆盖的必做项：无代码变更直提（或注释/文档性变更免全量）时，
+ * 这些项的核对对象依然存在（如已加载规范对既有代码的核对不依赖本轮 diff），声明整体豁免时
+ * 仍须逐项单独申报（completed=true + 核对结论，或 completed=false + 合法结构化 skip_reason）。
+ */
+export const NO_CHANGE_EXEMPTED_ITEMS = ["dimension_skill_review"] as const
+
 /** 申报是否含 no_change 整体豁免声明（覆盖度豁免 / implement 侧 diff 事实核对共用同一判定）。 */
 export function hasNoChangeDeclaration(checks: MustDoCheck[] | undefined): boolean {
   return (checks ?? []).some((c) => stepToken(c.step) === NO_CHANGE_TOKEN)
@@ -165,7 +178,9 @@ export function uncoveredMustDo(
   // 全量豁免声明：无代码/配置变更直提、或经审查确认仅注释/文档性变更免全量时，
   // 以一条 step 名首段为该 token 的条目声明整体豁免必做清单（completed=false +
   // 合法结构化 skip_reason，说明判定依据）；其余场景仍逐项申报。
-  if (hasNoChangeDeclaration(list)) return []
+  // 豁免不覆盖 NO_CHANGE_EXEMPTED_ITEMS 中的核对类项——这些项的核对对象不依赖本轮变更，
+  // 声明整体豁免时仍须单独申报。
+  if (hasNoChangeDeclaration(list)) return uncoveredUnderNoChange(must, list)
   const covered = new Set<string>()
   for (const c of list) {
     const token = stepToken(c.step)
@@ -181,6 +196,19 @@ export function mustDoChecksOfStep(metadata: Record<string, unknown>, stepId: st
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return []
   const list = (raw as Record<string, unknown>)[stepId]
   return Array.isArray(list) ? (list as MustDoCheck[]) : []
+}
+
+/**
+ * no_change 整体豁免下的剩余必做项：整体豁免不覆盖 NO_CHANGE_EXEMPTED_ITEMS 中的核对类项，
+ * 这些项要么在 must_do_checks 中单独申报（step 名首段命中即视为覆盖），要么列入未覆盖返回。
+ */
+function uncoveredUnderNoChange(must: string[], list: MustDoCheck[]): string[] {
+  const covered = new Set<string>()
+  for (const c of list) {
+    const token = stepToken(c.step)
+    if (NO_CHANGE_EXEMPTED_ITEMS.includes(token as never)) covered.add(token)
+  }
+  return must.filter((m) => NO_CHANGE_EXEMPTED_ITEMS.includes(m as never) && !covered.has(m))
 }
 
 /**
@@ -213,13 +241,22 @@ export function assertMustDoChecksFormat(checks: MustDoCheck[]): void {
  * 必做清单覆盖度门禁（implement / review 双端共用）：先校验申报格式，再校验生效必做项逐项覆盖。
  * - requiredItems 为当前 step 的生效清单（resolveStepMustDo 产出，调用方按会话项目栈传入）；
  * - requiredItems 为空 → 只校验申报格式（无清单的 step 不设覆盖门槛，不误伤）；
- * - 含 no_change 整体豁免声明 → 只校验申报格式（豁免事实核对由调用方按 diff 能力执行）。
+ * - 含 no_change 整体豁免声明 → 豁免清单内必做项（豁免事实核对由调用方按 diff 能力执行），
+ *   但 NO_CHANGE_EXEMPTED_ITEMS 中的核对类项不被豁免，仍须单独申报。
  */
 export function assertMustDoCoverage(requiredItems: string[], checks: MustDoCheck[] | undefined): void {
   const list = checks ?? []
   assertMustDoChecksFormat(list)
   if (requiredItems.length === 0) return
-  if (hasNoChangeDeclaration(list)) return
+  if (hasNoChangeDeclaration(list)) {
+    const missing = uncoveredUnderNoChange(requiredItems, list)
+    if (missing.length === 0) return
+    throw new Error(
+      `no_change 整体豁免不覆盖以下核对类必做项（其核对对象不依赖本轮变更）：${missing.join("、")}。\n` +
+      `请逐项单独申报：completed=true 附核对对象与结论记录，或 completed=false + 合法结构化 skip_reason ` +
+      `（格式：${SKIP_REASON_FORMAT}）。`,
+    )
+  }
   const covered = new Set<string>()
   for (const c of list) {
     const token = stepToken(c.step)
@@ -232,6 +269,7 @@ export function assertMustDoCoverage(requiredItems: string[], checks: MustDoChec
     `请按本 step 必做清单逐项执行并逐项申报结果（completed=true + evidence）；` +
     `确实无法执行的必做项须以 completed=false + 结构化 skip_reason 申报降级理由` +
     `（格式：${SKIP_REASON_FORMAT}）。` +
-    `低成本必做项必须实跑后申报；核验申报仅限 workflow 指令白名单限定的高成本必做项。`
+    `申报口径分三类：工具实跑申报（低成本项必须实跑后申报）、核验申报（仅限 workflow 指令白名单限定的` +
+    `高成本必做项，附核验方式与抽验样本）、人工核对申报（核对类必做项，附核对对象与结论记录）。`
   )
 }

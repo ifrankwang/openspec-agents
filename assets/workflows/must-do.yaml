@@ -55,3 +55,6 @@ items:
   e2e_run:
     description: 端到端用例实跑并产出报告
     evidence: 执行命令 + 报告产物路径（HTML 与机器可读报告）
+  dimension_skill_review:
+    description: 按已加载的维度规范类 skill 逐章节核对审查范围内代码，逐 skill 申报核对结论
+    evidence: 逐 skill 的核对清单（skill 名 + 核对章节 + 核对文件范围）与命中/未命中结论，命中项须已报 issue

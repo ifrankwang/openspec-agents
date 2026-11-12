@@ -17,7 +17,8 @@ common:
     - "调用编排工具一律使用工具列表中的实际名称：DSH 下为 `opx_*` 原生名（无 `mcp__` 前缀），MCP 接入形态（如 Claude Code / Codex / ZCode）为 `mcp__<server>__*`（如 `mcp__opx__status`、`mcp__opx__agent_submit`）；若工具列表中没有这些工具且存在 `dev_tool_search`，先用 `dev_tool_search` 搜索 `opx` 并一次性解锁全部需要的工具（含 `todo_write`）；禁止用 shell 查找 opx/openspec/MCP 配置"
     - "首次调用 opx_status 前不要探查仓库结构或状态文件；工具未解锁时只用 dev_tool_search 解锁，解锁后立即调用 opx_status"
     - "调用 opx_status 获取动态上下文（{{worktree_path}}、审查范围、上轮会话摘要）"
-    - "按 Skill 加载清单加载匹配的 skill 并遵循其全部规范"
+    - "按 Skill 加载清单逐项加载列出的 skill（不可跳步）并遵循其全部规范"
+    - "逐项检视所有已加载 skill 的全部规范条目并确认满足（不满足则补做，不得跳过）；对维度规范类 skill 逐章节核对审查范围内代码"
     - "阅读 `{{worktree_path}}/AGENTS.md` 项目规范"
     - "需要外部框架/工具的权威文档（规则语义、API 用法、配置说明）时，优先通过文档检索渠道获取，禁止直接翻源码"
     - "完成后调用 opx_agent_submit 提交裁决或失败上报"
@@ -89,6 +90,7 @@ phases:
             - behavior_surface
             - case_matrix
             - negative_probe
+            - dimension_skill_review
           backend:
             - api_script
             - api_execution
@@ -101,8 +103,8 @@ phases:
           on_fail: implement
         instructions:
           - "依据 opx_status 提供的变更检测结果分流：无代码/配置变更且本层无待复核/待裁定项 → 直接提交 passed，不运行全量工具检查，并以一条 step 名首段为 no_change 的 must_do_checks 申报本轮整体豁免必做清单（completed=false + 结构化 skip_reason 注明判定依据）；无变更但有本层待复核/待裁定项 → 仅复核/裁定待处理项后提交，不跑全量工具扫描；有变更 → 加载质量门类 skill 获取工具清单与映射规则，按视图「本 step 必做清单」逐项执行全部确定性工具检查，将工具输出映射为统一 issue 结构后提交"
-          - "审查锚点按视图「审查范围」：PR 区间形态为 base..head 区间（首轮）或检查点增量（修复轮）；全量形态为整个代码库——全量形态下的工具违规无论是否本轮引入一律映射为 issue，不得以不在变更清单为由丢弃"
-          - "「有变更」分支先审查上方「本次变更证据」区块的变更文件清单与区间 diff 内容后自行判断：若确认本次变更仅为注释/文档性且无逻辑影响，可自行决定跳过全量工具检查直接提交 passed（must_do_checks 以 step=no_change 申报整体豁免必做清单）；无法确认或含逻辑/结构变更，必须顺序运行全部确定性工具检查；裁量仅免除全量工具扫描，不免除复核/裁定——本层 blocking issue 仍须处理至终态后提交"
+          - "审查锚点按视图「审查范围」：PR 区间形态为区间内全部代码（首轮为 base..head 区间、修复轮为检查点增量对应文件及其关联面）；全量形态为整个代码库——全量形态下的工具违规无论是否本轮引入一律映射为 issue，不得以不在变更清单为由丢弃"
+          - "「有变更」分支先审查上方「本次变更证据」区块的变更文件清单与区间 diff 内容后自行判断：若确认本次变更仅为注释/文档性且无逻辑影响，可自行决定跳过全量工具检查直接提交 passed（must_do_checks 以 step=no_change 申报整体豁免必做清单；dimension_skill_review 不被该豁免覆盖，仍须单独申报）；无法确认或含逻辑/结构变更，必须顺序运行全部确定性工具检查；裁量仅免除全量工具扫描，不免除复核/裁定——本层 blocking issue 仍须处理至终态后提交"
           - "回归验证（独立审查场景，无 spec 验收标准——以既有测试与行为基线为锚）：①构建通过；②既有测试全量执行不引入新失败——首轮跑出的存量失败按 issue 上报进入处置通道（审并修模式进修复闭环或豁免，只审模式进报告），修复轮出现「上轮未登记的新失败」即回归、verdict=failed 并报 issue（说明失败用例与归因）；③可启动服务时按已加载技术栈 skill 的隔离启动规范隔离启动做冒烟与既有测试脚本（接口测试与端到端测试）执行（存在时），验证后按已加载的清理规范幂等清理（含 verdict=failed 轮次）；无法启动服务或无脚本时 ③ 置 completed=false 并以结构化 skip_reason 申报"
           - "测试设计核验（独立审查无 spec：行为面从变更 diff 与既有实现独立推导）：独立产出行为面清单与用例矩阵，核对既有与新增测试对行为面的覆盖、断言强度与实施正确性（检查点按已加载测试设计规范与任务维度判例执行）；自行对关键用例执行反向探针——改坏被测实现 → 确认对应用例变红 → 原样还原实现 → 全量用例复跑全绿，把改坏点与还原确认结果编入 must_do_checks 的 negative_probe 申报；用例未变红视为该用例无对抗力，须报 issue；无测试对象（无代码、接口契约与数据口径变更）时以 completed=false + 结构化 skip_reason 申报；不得跳过核验直接提交通过"
           - "本 step 能力集含测试类能力，须按已加载测试规范申报对应必做项（接口测试为 api_script/api_execution，端到端测试为 e2e_script/e2e_run）：脚本类必做项对应「变更涉及的行为有对应测试脚本」，执行类必做项对应「按已加载测试规范执行脚本实跑」；变更不涉及对应行为（接口契约、数据口径或端到端行为）时，对应两项均置 completed=false，category 填 not_applicable、adjudication 按实际裁定方式填，note 写判定依据；变更涉及对应行为但隔离环境不可用（服务无法启动、隔离实例不可用）时，仅执行类必做项置 completed=false，category 与 adjudication 均填 env_unavailable，note 记录尝试过程，脚本类必做项仍须实查脚本存在性，脚本缺失按「变更行为无对应脚本」判例报 issue，不得以环境不可用为由跳过；多类测试语义分开，不得混用"
