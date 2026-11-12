@@ -17,6 +17,14 @@ frameworks: ["vue", "react"]
 - 推荐配置（项目已有 `.prettierrc` 以其为准）：`printWidth: 100`、`singleQuote: true`、`semi: false`、`trailingComma: "all"`、`arrowParens: "always"`
 - 格式分歧改配置而不是逐文件手工调整；禁止在代码里用 `prettier-ignore` 规避正常格式化（特殊排版除外，且须有理由）
 
+## 样式管理标准化
+
+- 组件样式主方案全项目唯一：scoped SFC / CSS Modules / utility-first 之一，或项目已选定的等价方案；并存多套样式方案按技术债口径处理
+- 设计令牌单一来源：颜色、间距、圆角、字号、阴影以 CSS variables（或所选 utility 方案的 theme 配置）集中声明，组件样式引用令牌；禁止业务样式硬编码魔法值 → Medium
+- 例外（不强制走令牌）：SVG 图形/图标内部样式、图表库配置与数据可视化色板、第三方组件样式覆盖、一次性动效的关键帧/缓动值；业务布局、间距与主题相关样式仍必须用令牌，新增可复用颜色/间距应沉淀为令牌而非就地硬编码
+- 全局样式只承载三类：reset、令牌声明、少量工具类；组件样式一律走主方案的隔离机制（scoped / module / utility 前缀），禁止全局裸类名承载组件样式（与命名约定章节的 BEM 条目衔接，同文件内不算双源）
+- 禁止行内样式承载布局与视觉，动态主题计算除外 → Medium
+
 ## ESLint
 
 - 基线：`eslint` + `typescript-eslint` + 框架插件（Vue 用 `eslint-plugin-vue`，React 用 `eslint-plugin-react` / `eslint-plugin-react-hooks`）
@@ -49,8 +57,8 @@ frameworks: ["vue", "react"]
 
 - 新代码用 `<script setup lang="ts">` + Composition API；Options API 仅用于存量维护，不做新功能
 - props / emits 用类型声明：`defineProps<Props>()`、`defineEmits<{ (e: 'save', value: Order): void }>()`；禁止运行时数组/对象声明（丢失类型）
-- 单文件组件顺序：`<script>` → `<template>` → `<style scoped>`
-- 样式默认 `scoped`；跨组件样式用 `:deep()` 且注明原因，禁止全局样式污染组件
+- 单文件组件顺序：`<script>` → `<template>` → `<style>`
+- 采用 scoped 样式方案时按「样式管理标准化」章节执行；跨组件样式用 `:deep()` 且注明原因，禁止全局样式污染组件
 - 模板中避免复杂表达式（多层三元、函数调用链、对象字面量）→ 提取 computed 或脚本常量
 - `v-for` 必须带稳定 `key`（业务 id），禁止用数组下标
 - `v-html` 仅在渲染经净化的富文本时使用，普通文本禁止用 `v-html` 输出
