@@ -284,7 +284,7 @@ describe("common + step 语义渲染", () => {
     expect(out).toContain("## 操作指引")
     // common.instructions 继承（worktree_path 插值）
     expect(out).toContain("调用 opx_status 获取动态上下文（/wt、变更范围、上轮会话摘要）")
-    expect(out).toContain("按 Skill 加载清单加载匹配的 skill 并遵循其全部规范")
+    expect(out).toContain("按 Skill 加载清单逐项加载列出的 skill（不可跳步）并遵循其全部规范")
     expect(out).toContain("完成后调用 opx_agent_submit 提交裁决或失败上报")
     // step.instructions 追加
     expect(out).toContain("按 Task 项顺序逐个实现，聚焦当前子任务，不超出执行边界")

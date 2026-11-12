@@ -16,7 +16,8 @@ common:
     - "调用编排工具一律使用工具列表中的实际名称：DSH 下为 `opx_*` 原生名（无 `mcp__` 前缀），MCP 接入形态（如 Claude Code / Codex / ZCode）为 `mcp__<server>__*`（如 `mcp__opx__status`、`mcp__opx__agent_submit`）；若工具列表中没有这些工具且存在 `dev_tool_search`，先用 `dev_tool_search` 搜索 `opx` 并一次性解锁全部需要的工具（含 `todo_write`）；禁止用 shell 查找 opx/openspec/MCP 配置"
     - "首次调用 opx_status 前不要探查仓库结构或状态文件；工具未解锁时只用 dev_tool_search 解锁，解锁后立即调用 opx_status"
     - "调用 opx_status 获取动态上下文（{{worktree_path}}、审查范围、上轮会话摘要）"
-    - "按 Skill 加载清单加载匹配的 skill 并遵循其全部规范"
+    - "按 Skill 加载清单逐项加载列出的 skill（不可跳步）并遵循其全部规范"
+    - "逐项检视所有已加载 skill 的全部规范条目并确认满足（不满足则补做，不得跳过）；对维度规范类 skill 逐章节核对审查范围内代码"
     - "阅读 `{{worktree_path}}/AGENTS.md` 项目规范"
     - "需要外部框架/工具的权威文档（规则语义、API 用法、配置说明）时，优先通过文档检索渠道获取，禁止直接翻源码"
     - "完成后调用 opx_agent_submit 提交裁决或失败上报"
@@ -154,12 +155,13 @@ phases:
           - id: openspec-reviewer-maintainability
             capability_tags: [maintainability, tool-improvement]
         must_do:
-          always: []
+          always:
+            - dimension_skill_review
         transitions:
           on_pass: done
           on_fail: implement
         instructions:
-          - "加载匹配维度 skill，审查锚点按视图「审查范围」（PR 区间形态为 base..head 区间 + 修复轮检查点增量，全量形态为整个代码库），结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）；顺带发现的其他缺陷按本维度严重级别标准报 issue，禁止静默丢弃"
+          - "加载匹配维度 skill，审查锚点按视图「审查范围」（PR 区间形态为区间内全部代码——首轮为 base..head 区间 + 修复轮检查点增量，全量形态为整个代码库），结合 skill 规范与领域知识做拓展审查（skill 仅为最低基准）；顺带发现的其他缺陷按本维度严重级别标准报 issue，禁止静默丢弃；dimension_skill_review 申报不受 no_change 整体豁免覆盖"
           - "审查新 issue 前先查看视图「待复核」区块中的既有 issue（仅本维度报源），避免语义重复"
           - "报本维度新 issue 前先判断该问题能否通过调整确定性质量扫描工具配置（规则收紧/新增规则/配置增强）统一收敛：可工具化 → 双报业务 issue（file=违规现场）与工具改进 issue（file=规则/配置文件，suggestion 含规则草案+验证命令，末尾标 [tool_eligible]，且与业务 issue 同维度），两条 file 不同、方案不同，不构成语义重复，必须双报；不可工具化 → 仅报业务 issue。工具化判断细节与规则草案模板遵循已加载的工具改进类 skill，未加载时仅报业务 issue、跳过工具改进环节；提交时在 must_do_checks 中记录工具化判断结论"
           - "复核自己报的本维度已修复待复核（review 态）issue：通过置 done，不通过驳回（附驳回原因，issue 回待修复并累计修复未过次数）"

@@ -736,12 +736,10 @@ function renderAgentWorking(
   lines.push(...renderSkillSuggestions(ctxAgent, caps, state.stacks ?? null))
   lines.push("## 操作指引", "")
   let n = 0
-  lines.push(`${n++}. 按上方「Skill 加载清单」逐项加载列出的 skill（不可跳步）`)
   if (tg.worktreePath && tg.baseRef) {
   lines.push(`${n++}. 用上方「变更范围」命令获取本任务组的已提交变更文件清单，作为本次实施/修改范围；审查/报告范围以当前 step 指令为准`)
   }
   lines.push(`${n++}. 执行当前 step（\`${rec.stepId}\`）职责范围内的全部工作——遵循所有已加载 skill 的全部规范与约束`)
-  lines.push(`${n++}. 逐项检视所有已加载 skill 的 MUST 规范，确认全部满足（不满足则补做，不得跳过）`)
   // 通用指引（common.instructions）→ step 专属指引（step.instructions）合并渲染为编号步骤
   for (const instruction of common?.instructions ?? []) {
     lines.push(`${n++}. ${interpolateText(instruction, stepCtx)}`)
@@ -778,17 +776,23 @@ function renderMustDoChecklist(
     if (meta?.evidence) lines.push(`  - 证据要求：${meta.evidence}`)
   }
   lines.push("")
-  lines.push("**提交申报示例**（`must_do_checks`，逐项对齐上方清单）：", "")
+  lines.push("**提交申报示例**（`must_do_checks`，逐项对齐上方清单，口径按必做项类型分三类）：", "")
   lines.push("```json")
   lines.push('"must_do_checks": [')
   const sample = items.slice(0, 2)
   sample.forEach((id, i) => {
     const sep = i === sample.length - 1 && items.length <= sample.length ? "" : ","
-    lines.push(`  { "step": "${id}", "completed": true, "evidence": "<执行命令 + 结果摘要>" }${sep}`)
+    lines.push(`  { "step": "${id}", "completed": true, "evidence": "<按申报口径填写>" }${sep}`)
   })
   if (items.length > sample.length) lines.push("  …（其余必做项同上逐项申报）")
   lines.push("]")
   lines.push("```")
+  lines.push("")
+  lines.push(
+    "申报口径三类：①工具实跑申报——低成本必做项，evidence 填执行命令 + 结果摘要；" +
+    "②核验申报——仅限 workflow 指令白名单限定的高成本必做项，evidence 填核验方式 + 抽验样本；" +
+    "③人工核对申报——核对类必做项，evidence 填核对对象 + 结论记录。",
+  )
   lines.push("")
   lines.push(
     `无法执行的必做项置 \`completed=false\` 并附结构化 \`skip_reason\`（格式：\`${SKIP_REASON_FORMAT}\`）；` +

@@ -62,22 +62,23 @@ const EXPECTED = {
     always: [
       "env", "compile", "format", "architecture", "static_analysis", "unit_test", "coverage",
       "deep_scan", "config_check", "behavior_surface", "case_matrix", "negative_probe",
+      "dimension_skill_review",
     ],
     backend: ["api_script", "api_execution", "chain_map"],
     frontend: ["e2e_script", "e2e_run"],
   },
   analyze: { always: [] },
-  verify_quality: { always: [] },
+  verify_quality: { always: ["dimension_skill_review"] },
 } as const
 
 // ─── 词表完整性 ───
 
 describe("must-do 词表完整性", () => {
-  test("词表收录全部必做项 id（含 chain_map）", () => {
+  test("词表收录全部必做项 id（含 chain_map 与 dimension_skill_review）", () => {
     const expectedIds = [
       "env", "compile", "format", "architecture", "static_analysis", "unit_test", "coverage",
       "deep_scan", "config_check", "api_script", "api_execution", "behavior_surface", "case_matrix",
-      "negative_probe", "e2e_script", "e2e_run", "chain_map",
+      "negative_probe", "e2e_script", "e2e_run", "chain_map", "dimension_skill_review",
     ]
     expect(Object.keys(MUST_DO_CATALOG).sort()).toEqual([...expectedIds].sort())
   })
@@ -253,15 +254,13 @@ describe("resolveStepMustDo 四种会话结果", () => {
     ])
   })
 
-  test("analyze / verify_quality：always 为空数组 → 生效清单为空（不设门禁）", () => {
+  test("verify_quality：always 恒含 dimension_skill_review（四种会话口径一致）", () => {
     for (const { wf } of WORKFLOWS) {
-      for (const stepId of ["analyze", "verify_quality"]) {
-        const entry = wf.stepMap.get(stepId)
-        if (!entry) continue
-        expect(entry.step.must_do).toEqual({ always: [] })
-        for (const session of Object.values(SESSIONS)) {
-          expect(resolveStepMustDo(entry.step, session)).toEqual([])
-        }
+      const entry = wf.stepMap.get("verify_quality")
+      if (!entry) continue
+      expect(entry.step.must_do).toEqual({ always: ["dimension_skill_review"] })
+      for (const session of Object.values(SESSIONS)) {
+        expect(resolveStepMustDo(entry.step, session)).toEqual([...EXPECTED.verify_quality.always])
       }
     }
   })
