@@ -617,6 +617,26 @@ function parsePorcelainPaths(out: string): string[] {
 }
 
 /**
+ * 列出主仓库暂存区中「不在允许集合内」的已暂存路径（`git diff --cached --name-only`）。
+ * allowedPaths 既支持精确文件路径（如 `.gitignore`），也支持目录前缀（如 `openspec/changes/<id>`）：
+ * 目录项命中自身或其子路径。供各类「只提交指定路径」的前置断言复用，避免夹带用户其它暂存。
+ * 复用点：reconcileMainPollution 的 index 干净校验、生成目录忽略守卫的提交前置断言（DRY）。
+ */
+export async function listStagedPathsOutside(
+  worktree: string,
+  allowedPaths: readonly string[],
+): Promise<string[]> {
+  const cachedOut = await runGit(worktree, ["diff", "--cached", "--name-only"])
+  const staged = cachedOut.split("\n").map((l) => l.trim()).filter(Boolean)
+  return staged.filter(
+    (p) => !allowedPaths.some((a) => {
+      const dir = a.replace(/\/+$/, "")
+      return p === dir || p.startsWith(`${dir}/`)
+    }),
+  )
+}
+
+/**
  * 解析主仓库根：`.git` 为目录则该目录即主仓库根；`.git` 为文件（linked worktree）时经 discoverRepoRoot 推导。
  * 解析失败（非 git 仓库等）返回 null，降级行为由调用方决定。
  */
@@ -780,9 +800,7 @@ export async function reconcileMainPollution(
 
   let staged = false
   try {
-    const cachedOut = await runGit(mainRepo, ["diff", "--cached", "--name-only"])
-    const stagedOutside = cachedOut.split("\n").map((l) => l.trim()).filter(Boolean)
-      .filter((p) => p !== changeDir && !p.startsWith(`${changeDir}/`))
+    const stagedOutside = await listStagedPathsOutside(mainRepo, [changeDir])
     if (stagedOutside.length > 0) {
       throw new Error(
         `主仓库 index 除 \`${changeDir}\` 外存在其它已暂存内容，拒绝自动合并污染文档：\n` +

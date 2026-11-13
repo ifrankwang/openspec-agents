@@ -27,6 +27,36 @@ export function deepFreeze<T>(value: T): T {
 
 // ─── Fake Git ───
 
+/**
+ * 生成目录忽略守卫（ensureGeneratedDirsIgnored）的 git 视图模拟。null = 不启用（既有命令行为不变）。
+ * 仅接管守卫专属命令形态（check-ignore -v / rev-parse --verify HEAD / status --porcelain -- .gitignore /
+ * add -N -- .gitignore / commit --only -- .gitignore），与既有分流互不误撞。
+ */
+export interface GitignoreSim {
+  /** `git check-ignore -v` 是否命中（HEAD/工作树版本已含守卫条目）：命中返回 ".gitignore:2:<entry>\t<entry>" */
+  checkIgnoreHit?: boolean
+  /** .gitignore 相对 HEAD 的状态：缺省 clean=已跟踪且干净；untracked=全新未跟踪；user-dirty=有用户其它未提交改动 */
+  gitignoreStatus?: "clean" | "untracked" | "user-dirty"
+  /** .gitignore 是否未纳入 index 跟踪（文件不存在或未 add）：true 时 commit --only 未先 add -N 会报 pathspec 不匹配（贴真实 git） */
+  untracked?: boolean
+  /** .gitignore 之外的已暂存路径（diff --cached --name-only 输出）：非空 = 主仓库暂存区含其它改动 */
+  stagedOutside?: string[]
+  /** 当前检出分支；缺省回落 FakeGitRunner.currentBranch */
+  currentBranch?: string
+  /** detached HEAD：true 时 rev-parse --abbrev-ref HEAD 返回 "HEAD" */
+  detached?: boolean
+  /** 全新未跟踪文件未 add -N 时 commit --only 是否失败（默认 true，模拟真实 git pathspec 不匹配） */
+  commitOnlyFailsWithoutAddN?: boolean
+  /** 强制 commit --only 失败（守卫提交失败分支测试用，如 add 后文件被并发删除的竞态） */
+  forceCommitOnlyFail?: boolean
+  /** 强制 add -N 失败（守卫 intent-to-add 失败降级分支测试用；true 时 add -N 不登记 addNDone 且返回失败） */
+  forceAddNFail?: boolean
+  /** add -N 是否已执行（runChecked 侧写入，用例只读断言） */
+  addNDone?: boolean
+  /** commit 成功后 rev-parse --verify HEAD 返回的 oid；缺省回落 defaultBranchOid */
+  commitOid?: string
+}
+
 export class FakeGitRunner implements GitRunner {
   worktrees = new Map<string, { branch: string; path: string }>()
   baseRef = "base000000000000000000000000000000000001"
@@ -105,6 +135,10 @@ export class FakeGitRunner implements GitRunner {
   /** 本地分支集合（rev-parse --verify refs/heads/<name> 与 for-each-ref refs/heads 判定源）。 */
   localBranches = new Set<string>(["main", "master"])
 
+  /** 生成目录忽略守卫测试专用：null = 不启用（既有测试行为完全不变）。启用后按下列字段模拟
+   *  .gitignore 在版本库 / index / 工作树中的视图，供 ensureGeneratedDirsIgnored 的提交路径断言。 */
+  gitignoreSim: GitignoreSim | null = null
+
   async run(worktree: string, args: string[]): Promise<string> {
     this.callLog.push(args.join(" "))
     this.callSites.push({ dir: worktree, args, checked: false })
@@ -156,6 +190,39 @@ export class FakeGitRunner implements GitRunner {
     if (cmd === "merge-base") return this.baseRef
     if (cmd === "for-each-ref" && rest.some((a) => a.includes("refs/heads"))) {
       return Array.from(this.localBranches).join("\n")
+    }
+    // 生成目录忽略守卫专用分流（gitignoreSim 启用时才生效，null = 既有逻辑完全不变）
+    if (this.gitignoreSim !== null) {
+      const sim = this.gitignoreSim
+      // check-ignore -v -- <entry>：命中 → ".gitignore:2:<entry>\t<entry>"；未命中 → ""（真实 git 退出码 1，run 侧空串即未命中）
+      if (cmd === "check-ignore" && rest[0] === "-v" && rest[1] === "--") {
+        const entry = rest[2] ?? ""
+        return sim.checkIgnoreHit === true ? `.gitignore:2:${entry}\t${entry}` : ""
+      }
+      // rev-parse --abbrev-ref HEAD：detached → "HEAD"；否则 sim 分支优先，缺省回落 runner 分支
+      if (cmd === "rev-parse" && rest[0] === "--abbrev-ref" && rest[1] === "HEAD") {
+        return sim.detached === true ? "HEAD" : sim.currentBranch ?? this.currentBranch
+      }
+      // status --porcelain -- .gitignore：带 `--` 尾参的定点查询，与既有全量 porcelain 分流区分
+      if (cmd === "status" && rest[0] === "--porcelain" && rest[1] === "--" && rest[2] === ".gitignore") {
+        if (sim.gitignoreStatus === "untracked") return "?? .gitignore"
+        if (sim.gitignoreStatus === "user-dirty") return " M .gitignore"
+        return ""
+      }
+      // rev-parse --verify HEAD：返回 commitOid（缺省回落 defaultBranchOid）。形态无 refs/heads 前缀，
+      // 与 runChecked 侧 refs/heads/<branch> 存在性校验分流互不干扰
+      if (cmd === "rev-parse" && rest[0] === "--verify" && rest[1] === "HEAD") {
+        return sim.commitOid ?? this.defaultBranchOid
+      }
+      // diff --cached --name-only：stagedOutside 非空 = 主仓库暂存区含 .gitignore 之外的已暂存改动
+      if (cmd === "diff" && rest[0] === "--cached" && rest[1] === "--name-only") {
+        return (sim.stagedOutside ?? []).join("\n")
+      }
+      // add -N -- .gitignore：登记到 sim（intent-to-add），供 commit --only 分流判定
+      if (cmd === "add" && rest[0] === "-N" && rest[1] === "--" && rest[2] === ".gitignore") {
+        sim.addNDone = true
+        return ""
+      }
     }
     if (cmd === "rev-list" && rest[0] === "--count") {
       if (rest[1] && /^[0-9a-f]{7,}\.\./.test(rest[1])) return String(this.mainAheadCount)
@@ -248,6 +315,34 @@ export class FakeGitRunner implements GitRunner {
       return this.localBranches.has(branch)
         ? { success: true, stdout: this.defaultBranchOid, stderr: "", exitCode: 0 }
         : { success: false, stdout: "", stderr: `fatal: refs/heads/${branch}: not a valid ref`, exitCode: 128 }
+    }
+
+    // 生成目录忽略守卫专用分流（runChecked 侧）：add -N / commit --only -- .gitignore
+    if (this.gitignoreSim !== null) {
+      const sim = this.gitignoreSim
+      if (cmd === "add" && args[1] === "-N" && args[2] === "--" && args[3] === ".gitignore") {
+        if (sim.forceAddNFail === true) {
+          return { success: false, stdout: "", stderr: "fatal: add -N 失败", exitCode: 128 }
+        }
+        sim.addNDone = true
+        return { success: true, stdout: "", stderr: "", exitCode: 0 }
+      }
+      // commit -m <msg> --only -- .gitignore：全新未跟踪且未 add -N 时模拟真实 pathspec 不匹配错误
+      const dashIdx = args.indexOf("--")
+      if (cmd === "commit" && args.includes("--only") && dashIdx >= 0 && args[dashIdx + 1] === ".gitignore") {
+        if (sim.forceCommitOnlyFail === true) {
+          return { success: false, stdout: "", stderr: "fatal: commit --only 失败", exitCode: 1 }
+        }
+        if (sim.untracked === true && sim.commitOnlyFailsWithoutAddN !== false && sim.addNDone !== true) {
+          return {
+            success: false,
+            stdout: "",
+            stderr: "error: pathspec '.gitignore' did not match any file(s) known to git",
+            exitCode: 1,
+          }
+        }
+        return { success: true, stdout: "", stderr: "", exitCode: 0 }
+      }
     }
 
     if (cmd === "diff") {

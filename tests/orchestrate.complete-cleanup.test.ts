@@ -945,4 +945,24 @@ describe("收口归档（openspec archive）", () => {
       expect(existsSync(wtPathOf(wt))).toBe(false)
     } finally { teardown(root) }
   })
+
+  test("主仓库 .gitignore 无关脏条目 + 合并写入不含 .gitignore → 收口成功不 blocked", async () => {
+    const { root, wt, fakeGit, fakeCli } = await setupFinalWithCli()
+    try {
+      // 主仓库存在无关未暂存脏条目：含 .gitignore（守卫写入工作树后用户未提交的形态）+ 一个无关文件。
+      // 合并写入清单不含 .gitignore → 重合判定不命中 → 不 blocked，走 update-ref 推进收口。
+      fakeGit.statusPorcelainOutput.set(wt, " M .gitignore\n M some-unrelated.txt")
+      fakeGit.mergeWrittenOut = "src/feature.java"
+
+      const out = await complete_task_group.execute({ change_id: CID }, makeOrchCtx(wt))
+
+      expect(out).toContain("任务组已完成并合并到")
+      expect(out).not.toContain("blocked")
+      // 合并真实推进（worktreeless 路径：commit-tree + update-ref），worktree/分支已销毁
+      expect(fakeGit.commitShas.length).toBeGreaterThan(0)
+      expect(fakeGit.refUpdates.length).toBeGreaterThan(0)
+      expect(existsSync(wtPathOf(wt))).toBe(false)
+      expect(fakeCli.calls.length).toBe(1)
+    } finally { teardown(root) }
+  })
 })

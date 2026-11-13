@@ -2,11 +2,13 @@ import path from "path"
 import { createHash } from "node:crypto"
 import type { Dirent } from "node:fs"
 import { copyFile, mkdir, readdir, readFile, rmdir, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import type { OrchestrateState, TaskItem, TaskStatus, WorkflowMode, ReviewScope } from "../types.ts"
 import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_STEPS, REVIEW_TASK_GROUP_ID } from "../types.ts"
 import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, archiveOpenspecChange, type DetectChangesResult } from "../git.ts"
-import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock } from "../state.ts"
+import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock, getStatePath, getLegacyStateDir } from "../state.ts"
+import { ensureGeneratedDirsIgnored, type EnsureGeneratedDirsIgnoredOpts } from "../gitignore.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
 import { parseTaskGroupsFromContent, parseTasksForGroupFromContent, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
@@ -765,6 +767,25 @@ async function resolveChangeDocContent(
   return null
 }
 
+/**
+ * 生成目录忽略守卫的统一包装（init 与 set_worktree 共用）：
+ * - 必须在任何 state 读之前调用——readStateByChangeId 的迁移会在「读」时 mkdir/writeFile
+ *   `openspec/states/`，晚于守卫则这些文件会先于 `.gitignore` 生效落入版本库视野。
+ * - opts 由调用方按能否精确判定传入：能拿到 state 时传固化基准分支与 fix=none 跳过提交标记；
+ *   拿不到时（如 init 顶部 state 读会触发迁移，不能提前读）按 baseBranch=null 的保守语义处理。
+ */
+async function runGitignoreGuard(
+  ctx: ToolContext,
+  opts: EnsureGeneratedDirsIgnoredOpts,
+): Promise<string> {
+  return ensureGeneratedDirsIgnored(ctx.worktree, opts)
+}
+
+/** 把守卫返回片段并入工具返回体：始终保留片段，不丢弃、不塞流转指令。 */
+function withGitignoreGuard(guardNote: string, body: string): string {
+  return `${body}\n\n${guardNote}`
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_init")
 
@@ -784,16 +805,29 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 会话项目栈两入口必传 + 标签动态校验（早于入口分流与任何状态变更/落盘，错误可读）
   assertProjectStacks(args)
 
+  // 生成目录忽略守卫：assertProjectStacks 之后、入口分流之前，且早于任何 state 读
+  // （readStateByChangeId 的 needsUpgrade 迁移会在「读」时 mkdir/writeFile openspec/states/）。
+  // 三分支共用一次调用；参数按入参推导（不读 state，避免触发迁移写盘）：
+  // - review_scope 入口 fix=none 跳过提交仍写工作树；pr 会话以 head_ref 为基准分支；
+  // - change 入口用显式 base_branch（缺省 null = 同分支可提交的保守语义）。
+  // 既有 review 会话与固化基准分支的精确判定由 setWorktreeExecute 的二次守卫承担。
+  const guardNote = await runGitignoreGuard(ctx, {
+    baseBranch: args.review_scope?.scope_type === "pr"
+      ? args.review_scope.head_ref ?? null
+      : args.base_branch ?? null,
+    skipCommit: args.review_scope?.fix === "none",
+  })
+
   // 入口分流：review_scope（独立审查会话）与 change_id/task_group_id 互斥——同传报错、都不传报错
   if (args.review_scope !== undefined) {
-    return initReviewSession(args, ctx)
+    return withGitignoreGuard(guardNote, await initReviewSession(args, ctx))
   }
   if (!args.change_id || !args.task_group_id) {
     if (args.change_id) {
       // 已存在的独立审查会话按 change_id（会话 id）恢复：虚拟组 review，task_group_id 可缺省
       const existing = await readStateByChangeId(ctx.worktree, args.change_id)
       if (existing?.kind === "review") {
-        return initReviewRecovery(args, existing, ctx)
+        return withGitignoreGuard(guardNote, await initReviewRecovery(args, existing, ctx))
       }
     }
     throw new Error(
@@ -1082,7 +1116,7 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   if (args.recovery?.review_layer && (state.mode ?? "full") === "simple") {
     parts.push("\n\n⚠️ simple 模式无 review 子层（仅 quality_review 单层审查），recovery.review_layer 参数未生效。")
   }
-  return parts.join("")
+  return withGitignoreGuard(guardNote, parts.join(""))
 }
 
 /** 独立审查会话的 worktree 引用绑定（双基准拆分）：
@@ -1545,6 +1579,30 @@ async function ensureChangeWorktree(
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_set_worktree")
+  // 守卫在函数最开头、readStateByWorktree 之前（该读同样可能触发 needsUpgrade 迁移写盘）：
+  // state 已存在，可精确判定固化基准分支与 fix=none。只读原始状态文件窥探这两个字段，
+  // 不调用 readStateBy*（避免读时迁移先于守卫落盘）。
+  // 会话未初始化（新旧布局状态文件均缺失）时跳过守卫：此时调用注定抛「未初始化」，
+  // 守卫属无效调用产生副作用（可能产生 add/commit）。裸读仅 existsSync 判存在，
+  // 不触发任何迁移写盘；守卫不能移到 state 读之后，否则同样有迁移先于守卫的写盘问题。
+  const stateFileExists = existsSync(getStatePath(ctx.worktree, params.change_id)) ||
+    existsSync(path.join(getLegacyStateDir(ctx.worktree), `${params.change_id}.json`))
+  let preexisting: { baseBranch?: unknown; kind?: unknown; reviewScope?: { fix?: unknown } } | null = null
+  try {
+    const raw = await readFile(getStatePath(ctx.worktree, params.change_id), "utf-8")
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    preexisting = {
+      baseBranch: parsed["baseBranch"],
+      kind: parsed["kind"],
+      reviewScope: parsed["reviewScope"] as { fix?: unknown } | undefined,
+    }
+  } catch { /* 状态文件缺失/损坏：按保守语义只写工作树，后续读会自行报错或重建 */ }
+  const guardNote = stateFileExists
+    ? await ensureGeneratedDirsIgnored(ctx.worktree, {
+      baseBranch: typeof preexisting?.baseBranch === "string" ? preexisting.baseBranch : null,
+      skipCommit: preexisting?.kind === "review" && (preexisting as any).reviewScope?.fix === "none",
+    })
+    : ""
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
   const item = state.workItems.find((w) => w.id === `task:${state.taskGroupId}`)
@@ -1593,11 +1651,11 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   let planSkipNote = ""
   if (detached) {
     const plan = await resolveDetachedPlan(repoRoot, state)
-    if (plan.blocked) return plan.blocked
+    if (plan.blocked) return withGitignoreGuard(guardNote, plan.blocked)
     planSkipNote = plan.skipNote ?? ""
   } else if (crossBranch) {
     const plan = await resolveCrossBranchPlan(repoRoot, state, currentBranch)
-    if (plan.blocked) return plan.blocked
+    if (plan.blocked) return withGitignoreGuard(guardNote, plan.blocked)
     planSync = plan.sync ?? false
     planSkipNote = plan.skipNote ?? ""
   }
@@ -1608,9 +1666,11 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   if (!detached && !crossBranch) {
     const changeStatus = await runGit(repoRoot, ["status", "--porcelain", `openspec/changes/${state.changeId}/`])
     if (changeStatus.trim().length > 0) {
-      const addResult = await runGitChecked(repoRoot, ["add", `openspec/changes/${state.changeId}/`])
+      const changeDir = `openspec/changes/${state.changeId}/`
+      const addResult = await runGitChecked(repoRoot, ["add", "--", changeDir])
       if (!addResult.success) throw new Error(`change 目录 git add 失败：${addResult.stderr}`)
-      const commitResult = await runGitChecked(repoRoot, ["commit", "-m", "docs(openspec): auto-commit before worktree setup"])
+      // --only + pathspec 限定：只提交该目录，隔离用户其它已暂存文件（无 pathspec 的 commit 会卷入全部 staged）
+      const commitResult = await runGitChecked(repoRoot, ["commit", "-m", "docs(openspec): auto-commit before worktree setup", "--only", "--", changeDir])
       if (!commitResult.success) throw new Error(`change 目录 git commit 失败：${commitResult.stderr}`)
     }
   }
@@ -1687,12 +1747,12 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     await writeContextToWorktree(storedPath, state.changeId, state.taskGroupId)
   }
 
-  return [
+  return withGitignoreGuard(guardNote, [
     `- **状态**: ${reused ? "复用已有 worktree" : "已创建 worktree"}`,
     `- **路径**: \`${item.metadata["worktree_path"]}\``,
     `- **分支**: \`${branch}\``,
     ...(planNote ? ["", planNote] : []),
-  ].join("\n")
+  ].join("\n"))
 }
 
 export async function statusExecute(params: StatusParams, ctx: ToolContext): Promise<string> {
