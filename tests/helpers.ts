@@ -2,6 +2,7 @@ import { __setGitRunner, __setOpenspecCliRunner, type GitRunner } from "../src/c
 import { __setMustDoOverride, resolveStepMustDo } from "../src/core/tools/gate"
 import { __setKnownStackTags } from "../src/skills/stacks"
 import { __setSkillScanRootsForTest, __resetSkillCache } from "../src/skills/resolve"
+import { __setContainerRunner, type ContainerRunner } from "../src/core/containers"
 import { REPO_SKILL_SCAN_ROOTS } from "../src/skills/scan"
 import { loadWorkflowFile, resolveWorkflowPath } from "../src/core/workflow/loader"
 import { agent_submit } from "../src/adapters/opencode/tools"
@@ -573,12 +574,24 @@ export const TEST_STACKS = ["backend", "frontend"]
 export const TEST_FRAMEWORKS = ["java", "vue", "react"]
 
 /**
+ * 离线容器运行器：两个运行时都按「命令不存在」失败，compose 探测也拿不到产物。
+ * 默认注入它，避免每个 init/set_worktree 用例真实起 docker/podman 子进程（单次最多等 2s）。
+ */
+export const OFFLINE_CONTAINER_RUNNER: ContainerRunner = {
+  async run(cmd) {
+    return { stdout: "", stderr: `${cmd}: not found`, exitCode: 127 }
+  },
+}
+
+/**
  * 统一安装测试环境，供各测试文件自建 fixture 复用：分字段标签词汇注入（init 动态校验可通过）
- * + 必做项申报自动补申（见 installAutoMustDoChecks）。需要真实门禁拒绝行为的用例显式构造申报。
+ * + 必做项申报自动补申（见 installAutoMustDoChecks）+ 离线容器探测注入。
+ * 需要真实门禁拒绝行为的用例显式构造申报；需要容器命中场景的用例自行覆盖运行器注入。
  */
 export function installTestSkillEnv(): void {
   __setSkillScanRootsForTest(REPO_SKILL_SCAN_ROOTS)
   __setKnownStackTags({ stacks: TEST_STACKS, frameworks: TEST_FRAMEWORKS })
+  __setContainerRunner(OFFLINE_CONTAINER_RUNNER)
   installAutoMustDoChecks()
 }
 
@@ -855,6 +868,7 @@ export function teardown(tmpRoot: string): void {
   // 复位为生产默认 roots 并清缓存，避免全局注入泄漏到后续测试文件
   __setSkillScanRootsForTest(null)
   __resetSkillCache()
+  __setContainerRunner(null)
   if (existsSync(tmpRoot)) {
     for (const entry of readdirSync(tmpRoot)) {
       try { rmSync(join(tmpRoot, entry), { recursive: true, force: true }) } catch {}

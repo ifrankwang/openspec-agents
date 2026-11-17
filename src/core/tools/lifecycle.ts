@@ -9,6 +9,8 @@ import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, archiveOpenspecChange, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock, getStatePath, getLegacyStateDir } from "../state.ts"
 import { ensureIgnoreBaseline, type EnsureIgnoreBaselineOpts } from "../gitignore.ts"
+import { probeContainers } from "../containers.ts"
+import { ensureProjectConfigsForSession } from "../project-config.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
 import { parseTaskGroupsFromContent, parseTasksForGroupFromContent, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
@@ -559,10 +561,11 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
       )
     }
     const stacksNote = adoptOrAssertSessionStacks(state, args)
-    const guardNote = await runGitignoreGuard(ctx, reviewBaselineOpts(scope, state.stacks ?? {
+    const guardSession: SessionStacks = state.stacks ?? {
       project_stacks: args.project_stacks,
       project_frameworks: args.project_frameworks,
-    }))
+    }
+    const guardNote = await runBaselineGuards(ctx, reviewBaselineOpts(scope, guardSession), guardSession)
     if (args.recovery) {
       const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
       if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
@@ -600,7 +603,7 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
     reviewScope: scope,
     stacks: { project_stacks: args.project_stacks, project_frameworks: args.project_frameworks },
   }
-  const guardNote = await runGitignoreGuard(ctx, reviewBaselineOpts(scope, state.stacks!))
+  const guardNote = await runBaselineGuards(ctx, reviewBaselineOpts(scope, state.stacks!), state.stacks!)
   await writeState(ctx.worktree, state)
   const granularityLabel = scope.granularity === "thorough" ? "三层审查（工具检查 → 回归验证 → 五维度质量审查）" : "单层合并审查"
   const fixLabel = scope.fix === "fix" ? "审并修（失败回退修复后重审）" : "只审不修（issue 报告即交付物）"
@@ -644,10 +647,11 @@ async function initReviewRecovery(params: InitParams, state: OrchestrateState, c
   if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
   const stacksNote = adoptOrAssertSessionStacks(state, args)
   const scope = state.reviewScope!
-  const guardNote = await runGitignoreGuard(ctx, reviewBaselineOpts(scope, state.stacks ?? {
+  const guardSession: SessionStacks = state.stacks ?? {
     project_stacks: args.project_stacks,
     project_frameworks: args.project_frameworks,
-  }))
+  }
+  const guardNote = await runBaselineGuards(ctx, reviewBaselineOpts(scope, guardSession), guardSession)
   if (args.recovery) {
     applyRecoveryState(item, args.recovery, [], state)
     await writeState(ctx.worktree, state)
@@ -836,6 +840,28 @@ function withGitignoreGuard(guardNote: string, body: string): string {
   return guardNote.length > 0 ? `${body}\n\n${guardNote}` : body
 }
 
+/**
+ * 项目级扫描平台配置补齐（init 与 set_worktree 共用）。
+ * - 排在忽略基线守卫之后：两类基线互不依赖，但顺序固定便于阅读返回体；
+ * - 容器探测只做一次，结果直接传给收集，避免重复起子进程；
+ * - 只写工作树（不 add、不 commit），review 会话 fix=none 同样只落盘不提交。
+ */
+async function runProjectConfigGuard(ctx: ToolContext, session: SessionStacks | null): Promise<string> {
+  const probe = await probeContainers(ctx.worktree)
+  return ensureProjectConfigsForSession(ctx.worktree, session, probe)
+}
+
+/** 忽略基线与扫描平台配置串成一段返回片段（忽略基线在前）。 */
+async function runBaselineGuards(
+  ctx: ToolContext,
+  ignoreOpts: EnsureIgnoreBaselineOpts,
+  session: SessionStacks | null,
+): Promise<string> {
+  const ignoreNote = await runGitignoreGuard(ctx, ignoreOpts)
+  const configNote = await runProjectConfigGuard(ctx, session)
+  return ignoreNote.length > 0 ? `${ignoreNote}\n${configNote}` : configNote
+}
+
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
   assertOrchestrator(ctx, "opx_orch_init")
 
@@ -912,10 +938,10 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
     project_stacks: args.project_stacks,
     project_frameworks: args.project_frameworks,
   }
-  const guardNote = await runGitignoreGuard(ctx, {
+  const guardNote = await runBaselineGuards(ctx, {
     baseBranch: args.base_branch ?? state?.baseBranch ?? null,
     session: guardSession,
-  })
+  }, guardSession)
   // 形态已声明但无框架覆盖：不拒绝（技术栈可能不在词表内），但常驻警告到会话补齐为止
   const shapeWarnings = shapeCoverageWarnings(guardSession)
 
@@ -1667,14 +1693,14 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
         }
       : null
   const guardNote = stateFileExists
-    ? await runGitignoreGuard(ctx, {
+    ? await runBaselineGuards(ctx, {
       baseBranch: typeof preexisting?.baseBranch === "string" ? preexisting.baseBranch : null,
       skipCommit: preexisting?.kind === "review" && (preexisting as any).reviewScope?.fix === "none",
       session: preexistingSession,
-    })
+    }, preexistingSession)
     : ""
   const stacksFallbackNote = stateFileExists && preexistingSession === null
-    ? "- **忽略基线提示**: 状态文件未记录会话项目栈（旧布局），本次只补框架级基线；能力级基线需重新初始化会话后补齐。"
+    ? "- **忽略基线提示**: 状态文件未记录会话项目栈（旧布局），本次只补框架级基线；能力级基线需重新初始化会话后补齐。\n- **扫描平台配置提示**: 状态文件未记录会话项目栈（旧布局），未按形态补齐项目级扫描配置。"
     : ""
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")

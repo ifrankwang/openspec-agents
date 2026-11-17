@@ -18,6 +18,7 @@ import { join } from "node:path"
 
 import { ensureIgnoreBaseline } from "../src/core/gitignore"
 import { __setGitRunner } from "../src/core/git"
+import { __setContainerRunner } from "../src/core/containers"
 import { init, set_worktree } from "../src/adapters/opencode/tools"
 import { createFakeGit, FakeGitRunner, installTestSkillEnv, makeOrchCtx, INIT_PROJECT_STACKS, teardown } from "./helpers"
 import type { SessionStacks } from "../src/skills/stacks"
@@ -440,6 +441,64 @@ describe("init / set_worktree 实测", () => {
     expect((err as Error).message).toContain("opx_orch_init")
     expect(fake.callLog.some((l) => l.startsWith("checked:add"))).toBe(false)
     expect(fake.callLog.some((l) => l.startsWith("checked:commit"))).toBe(false)
+  })
+})
+
+describe("init 实测：扫描平台配置补齐", () => {
+  function makeChangeRepo(prefix: string, changeId: string): { dir: string; fake: FakeGitRunner } {
+    installTestSkillEnv()
+    const dir = mkdtempSync(join(tmpdir(), prefix))
+    tempDirs.push(dir)
+    mkdirSync(join(dir, "openspec", "changes", changeId), { recursive: true })
+    writeFileSync(
+      join(dir, "openspec", "changes", changeId, "tasks.md"),
+      "## 1. First Task Group\n\n- [ ] 1.1 Task one [spec:spec-a]\n",
+      "utf-8",
+    )
+    const fake = createFakeGit()
+    fake.gitignoreSim = {}
+    fake.gitignoreSim.currentBranch = "main"
+    __setGitRunner(fake)
+    return { dir, fake }
+  }
+
+  test("探测到匹配容器 → 按 skill 模板创建配置，且不提交", async () => {
+    const { dir, fake } = makeChangeRepo("opx-config-init-", "config-cid")
+    // installTestSkillEnv 默认注入离线探测，这里覆盖为命中一个容器
+    __setContainerRunner({
+      async run(cmd) {
+        if (cmd === "docker") {
+          return { stdout: "sonarqube:9.9-community\tsonarqube\t0.0.0.0:9000->9000/tcp\n", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "", stderr: `${cmd}: not found`, exitCode: 127 }
+      },
+    })
+
+    const orch = makeOrchCtx(dir)
+    const out = await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: "config-cid", task_group_id: "1", mode: "simple" },
+      orch,
+    )
+
+    const content = readFileSync(join(dir, "sonar-project.properties"), "utf-8")
+    expect(content).toContain(`sonar.projectKey=${dir.split("/").pop()!.toLowerCase()}`)
+    expect(content).toContain("sonar.sources=src/main/java")
+    expect(out).toContain("扫描平台配置")
+    expect(out).toContain("已创建 `sonar-project.properties`")
+    // 只写工作树：任何 git 动作（add / commit / status）都不得触及新配置文件
+    expect(fake.callLog.some((l) => l.includes("sonar-project.properties"))).toBe(false)
+  })
+
+  test("容器运行时不可用 → 跳过并说明，不建空文件", async () => {
+    const { dir } = makeChangeRepo("opx-config-init-none-", "config-none")
+    const orch = makeOrchCtx(dir)
+    const out = await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: "config-none", task_group_id: "1", mode: "simple" },
+      orch,
+    )
+
+    expect(out).toContain("未检测到容器运行时，跳过")
+    expect(existsSync(join(dir, "sonar-project.properties"))).toBe(false)
   })
 })
 
