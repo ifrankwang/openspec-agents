@@ -1,6 +1,6 @@
 ---
 name: frontend-architecture
-description: 前端架构分层规范——页面/组件/composable-hook/store/api 职责分层与依赖方向、按 feature 切分 vs 按类型切分、状态管理边界、路由与页面职责。architecture-evolution 的前端配套。
+description: 前端架构分层规范——页面/组件/composable-hook/store/api 职责分层与依赖方向、按 feature 切分 vs 按类型切分、状态管理边界、路由与页面职责、错误码消费。architecture-evolution 的前端配套。
 capabilities: ["architecture"]
 stacks: ["frontend"]
 frameworks: ["vue", "react"]
@@ -84,6 +84,32 @@ module.exports = {
 - 规则首次落地先在现状上实测命中数，误报清零后再启用（不接受"先 error 再逐条 ignore"）
 - 路径前缀（`src/features` 还是 `src/modules`）按项目实际目录调整；规则名保持语义化
 - 校验：`pnpm exec depcruise src --config .dependency-cruiser.cjs --output-type json > depcruise.json`，用 `.summary.error` 与 `.summary.warn` 核对
+
+## 错误码消费
+
+接口层统一解包响应，把服务端错误、网关错误、网络错误都归一为统一结构再向上传递：
+
+```
+interface AppError {
+  kind: 'network' | 'business' | 'auth'
+  code: number        // 业务错误码（数字），与后端契约同源
+  httpStatus?: number
+  retryable: boolean
+  message: string     // 已经映射好的用户可读文案
+}
+```
+
+- 解包只在一处做（http 客户端拦截器或 api 层的统一响应处理），禁止各页面自己判断 `res.code === 0`、自己读 `res.data`
+- 按业务错误码映射用户可见提示与后续动作（重试 / 跳转 / 联系支持），映射表集中维护；禁止在各页面各自 if-else 判断错误码 → 分散判断按 Medium
+- 禁止把后端原始 message 直接展示给用户：原始 message 只用于日志与排障，面向用户的文案从映射表取，映射缺失时回退通用提示
+- 错误码与提示文案的映射表随接口契约一起维护，新增错误码同批补映射；契约里有码而映射表没有 → Medium
+- 前后端错误码口径必须同源：错误码来自接口契约（枚举或生成的常量），禁止前端硬编码契约中未定义的数字码 → 前端出现未定义的码按 Medium
+- 业务码为数字，禁止按字符串比较（`code === '40301'`），也禁止把数字码转成字符串后再判断
+- 三类错误必须区分处理，禁止一律弹「系统异常」：
+  - 网络错误（超时、断网、5xx）：可重试，给出重试入口，保留用户已填内容
+  - 业务错误（4xx + 业务错误码）：按码给具体提示与可行动作，不自动重试
+  - 鉴权失效（401 / 令牌过期 / 无权限 403）：统一跳登录或提示权限不足，禁止逐页面各写一套 → 未统一按 Medium
+- 未捕获错误须有兜底：全局错误处理器把未知错误归一后记录并给用户确定结果，禁止静默吞掉导致界面停在加载态
 
 ## 按 feature 切分 vs 按类型切分
 

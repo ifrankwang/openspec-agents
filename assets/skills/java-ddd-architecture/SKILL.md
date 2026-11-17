@@ -1,6 +1,6 @@
 ---
 name: java-ddd-architecture
-description: 仅限 Java 后端开发场景。DDD 四层分层与六边形（Hexagonal）两种架构风格 Java 实现——Java 代码实现规范、Spring DI、MapStruct、ArchUnit 规则。DDD 方法论见 ddd-architecture。适用场景同前。
+description: 仅限 Java 后端开发场景。DDD 四层分层与六边形（Hexagonal）两种架构风格 Java 实现——Java 代码实现规范、Spring DI、MapStruct、ArchUnit 规则、术语表落地检查。DDD 方法论见 ddd-architecture。适用场景同前。
 capabilities: ["architecture"]
 stacks: ["backend"]
 frameworks: ["java"]
@@ -448,6 +448,24 @@ public class SearchProviderClient {                 // infrastructure/acl 实现
 | 22 | Infrastructure 能力必须通过 Port 接口被内核访问——每项 infra 能力（持久化、消息、外部集成、缓存、文件、LLM 等）先在内核定义 Port 再提供 Adapter 实现，domain/application/interfaces 禁止直接依赖具体基础设施实现类 | 技术栈无法替换、架构腐化 |
 
 **声明**：上表同时适用于四层与六边形两种风格。六边形风格下"domain"指内核（domain + application 合并语义），多数规则表述不变——规则 1（内核零框架依赖）、规则 2（依赖方向不可逆）、规则 3、规则 8、规则 9、规则 16、规则 18、规则 19、规则 20、规则 21、规则 22 在两种风格下均一致。仅 Port 定义位置相关条目注明差异：规则 17 的领域事件契约仍在内核（domain/model/event）定义、事件 handler 实现仍在 infrastructure；Repository、EventPublisher、OrderGenerationPort 等 Port 接口在四层下固定定义于 domain，六边形下可为 domain（driven port）或 application（driving port），但全项目须一致。
+
+## 术语表落地检查
+
+以下为可核对项，用于判定统一语言是否真的落到代码，而不只停留在文档里。
+
+| # | 核对项 | 不满足的判定 |
+|---|--------|-------------|
+| 1 | 每个限界上下文有独立的术语表文件，覆盖该上下文的核心概念（聚合、实体、值对象、关键状态与业务动作） | 缺术语表，或只列少量概念 → Medium |
+| 2 | 代码中的类名、方法名、字段名、枚举值与该上下文的术语表一致（含约定的英文名），禁止自行翻译、缩写、同义替换 | 命名与术语表不一致 → Medium |
+| 3 | 同一概念只允许一个词：出现同义多词（同一事物在不同类里叫 `Order` / `Trade`）即为漂移 | 同义多词 → Medium |
+| 4 | 同一术语跨限界上下文必须含义一致；确属不同概念时必须使用不同术语名（或带上下文前缀），禁止同名不同义 | 同名不同义 → Medium |
+| 5 | 新增概念先入术语表再落代码：代码里出现术语表未收录的核心概念即为漂移 | 未入表先落码 → Low |
+| 6 | 废弃术语在术语表中标注替代项，代码中不得新增使用旧词 | 旧词无替代标注，或被继续新增使用 → Low |
+| 7 | 术语表与代码命名不一致时以术语表为准并修正代码；术语表本身有误时先改表再改码，禁止只改一边 | 只改代码不改表，或只改表不改代码 → Medium |
+
+- 术语表条目字段：术语、英文名、含义、所在聚合或上下文、代码位置；缺「代码位置」则无法核对一致性，缺「含义」则无法判定漂移
+- 术语表须可被检索（与代码同仓、随变更一起提交）；散落在对话记录或外部文档附件里的清单不计
+- 枚举值属于术语的一部分：状态机状态、类型枚举的命名与取值含义须在术语表中可查
 
 ## Port / Adapter 模式
 

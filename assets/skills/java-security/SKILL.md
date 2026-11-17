@@ -1,6 +1,6 @@
 ---
 name: java-security
-description: Java 后端安全实现规范（security-baseline 的 Java 配套）。MyBatisPlus 注入防护、POI OOM 防范、LangChain4j 安全配置、Spring 安全配置、SLF4J 日志脱敏。
+description: Java 后端安全实现规范（security-baseline 的 Java 配套）。MyBatisPlus 注入防护、POI OOM 防范、LangChain4j 安全配置、Spring 安全配置、SLF4J 日志脱敏、依赖合规落地（依赖树核对、BOM 收敛、私服顺序与依赖混淆防护）。
 capabilities: ["security"]
 stacks: ["backend"]
 frameworks: ["java"]
@@ -59,3 +59,13 @@ SXSSFWorkbook wb = new SXSSFWorkbook(new XSSFWorkbook(inputStream), 100);
 - Spring Cloud OpenFeign：`feign.client.config.<service>.connect-timeout` / `read-timeout`
 - 所有超时值 > 0，普通 HTTP 建议 10-30s
 - 通用原则见 security-baseline §外部调用超时与重试
+
+## 依赖合规落地
+
+- 构建需能产出依赖树：`mvn dependency:tree` 给出直接与传递依赖，核对实际引入范围；只看 `pom.xml` 里声明的直接依赖不足以判定引入面
+- 依赖版本统一由 BOM（`dependencyManagement` 导入的 BOM 或父 POM）收敛，禁止各模块各自指定版本；同一依赖出现多个版本时以依赖树实际解析结果排查，版本不收敛即为不满足
+- 仓库顺序与私服优先级需明确：只允许公司私服与可信公共仓库，镜像配置集中管理；禁止在 `pom.xml` 里散落 `repositories` 声明或引入来源不明仓库（依赖混淆风险）
+- 依赖坐标须与官方一致：核对 groupId / artifactId / 命名空间，警惕与知名库近似但发布者不同的包（依赖混淆的典型手法）
+- 传递依赖漏洞同样处置：通过 `dependencyManagement` 钉版或排除后验证兼容并复扫，禁止只升级直接依赖
+- SNAPSHOT 依赖不得进入生产构建；确需使用的内部 SNAPSHOT 须说明场景，并在发布前转为正式版本
+- 构建可重复：依赖解析不依赖本地仓库残留，CI 上能干净拉取；产物附带依赖清单便于核对

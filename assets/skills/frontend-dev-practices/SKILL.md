@@ -1,6 +1,6 @@
 ---
 name: frontend-dev-practices
-description: 前端开发实践规范——pnpm 包管理约定、构建与启动命令、MSW mock 体系（单一 mock 源与 E2E_API_MODE 切换）、测试代码路径定义、提交规范、依赖管理。仅在 Vue / React 前端项目使用。
+description: 前端开发实践规范——pnpm 包管理约定、构建与启动命令、浏览器与设备基线、MSW mock 体系（单一 mock 源与 E2E_API_MODE 切换）、测试代码路径定义、提交规范、依赖管理。仅在 Vue / React 前端项目使用。
 capabilities: ["dev-practices"]
 stacks: ["frontend"]
 frameworks: ["vue", "react"]
@@ -26,6 +26,17 @@ frameworks: ["vue", "react"]
 - 前端环境变量只放非敏感配置（接口前缀、开关、埋点 id）；密钥一律不进前端环境变量与产物
 - `.env.local` / `.env.*.local` 不进仓库；`dist/`、`coverage/`、`node_modules/` 不进仓库
 - 构建产物目录、缓存目录（`node_modules/.vite`）纳入 `.gitignore` 与 dev server watch ignore
+
+## 浏览器与设备基线
+
+- `browserslist` 必须显式声明（`package.json` 的 `browserslist` 字段或 `.browserslistrc`），禁止留空依赖工具默认值 → Medium
+- 声明内容与公司统一的浏览器标准一致：公司统一使用 Edge 时，只声明实际支持的 Edge 版本区间（如 `Edge >= 120`），不为其他浏览器保留无谓降级；无基线依据的跨浏览器分支按冗余代码清理
+- 构建目标与声明的基线一致：`build.target`、esbuild / babel 目标、是否启用 legacy 插件，都要能从基线推出来；支持范围调整时 `browserslist` 与构建目标同步改，只改一处 → Medium
+- 不得为不在基线内的浏览器引入 polyfill、特性探测降级分支或兼容注释；出现无对应基线项的兼容代码 → Low
+- 新语法与新 API 先确认基线支持范围再使用；不确定时以基线最低版本的实际支持情况为准
+- 不得用 UA 嗅探替代基线声明：运行时分支只用于确有差异的行为，且须注明对应的基线项
+- 需核对公司统一部署的浏览器版本与统一设置（缩放、安全策略、扩展限制）下功能可用 → Medium
+- 基线调整属于项目规范变更，须同步更新声明与校验；只在代码里临时绕过不算调整
 
 ## mock 体系（MSW）
 
@@ -89,14 +100,14 @@ build: 调整构建压缩配置
 - 新增依赖说明用途与体积影响；为单个小函数引入整包 → Medium
 - 同类能力只保留一套（请求库、状态库、UI 库、日期库、工具库），并存按技术债口径处理
 - 定期清理未使用依赖（`knip` 或等价工具）；依赖漏洞扫描按安全规范执行
-- 升级依赖后必须跑类型检查与全量测试；主版本升级须有迁移记录
+- 升级依赖后必须跑类型检查与全量测试
 
 ## 调试
 
 - 优先用浏览器 DevTools、Vue DevTools / React DevTools、网络面板与性能面板
 - 提交前清理临时 console、断点、调试开关
 - 环境判断集中封装，禁止业务代码里散落 `import.meta.env.DEV` 分支
-- 线上问题排查用 sourcemap 上传到内部监控平台，不把 sourcemap 发布到静态目录（见发布产物安全要求）
+- 线上问题排查用已上传到监控平台的 sourcemap，不把 sourcemap 发布到静态目录
 
 ## 新功能开发与缺陷修复
 

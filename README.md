@@ -194,13 +194,39 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 - `orchestrator` —— 编排准则，主代理按它分派子代理、推进流程。
 - `openspec-standard` —— 提案标准初始化。
 
-**通用规范**：DDD 分层与六边形、REST 接口约定、数据库设计约定、安全审查基线、确定性质量门、测试设计、技术债识别、架构演进审查、API 自动化测试、隔离环境清理。
+**通用规范**：DDD 分层与六边形、REST 接口约定（含接口版本演进与废弃、时间与时区）、数据库设计约定、安全审查基线、确定性质量门、测试设计、技术债识别、架构演进审查、API 自动化测试、隔离环境清理。
 
-**Java 后端配套**：在通用规范之上补齐 Java / Spring 的实现细节 —— Lombok、日志与命名约定、REST 接口的 Java 实现、MyBatisPlus 与 Flyway、DDD 的 Java 实现与 ArchUnit 规则、Maven / Spotless / PMD / 质量扫描平台接入、工具规则改进、Java 开发实践、Java 安全实现、Java 性能与可维护性、Java 技术债形态。
+**Java 后端配套**：在通用规范之上补齐 Java / Spring 的实现细节 —— Lombok、日志与命名约定、REST 接口的 Java 实现、MyBatisPlus 与 Flyway、DDD 的 Java 实现与 ArchUnit 规则、术语表落地检查、Maven / Spotless / PMD / 质量扫描平台接入、工具规则改进、Java 开发实践（事务与并发、消息与缓存一致性、可观测性、发布与回滚）、Java 安全实现（含依赖合规落地）、Java 性能与可维护性、Java 技术债形态。
 
-**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、TypeScript 严格度与可维护性、代码风格与 ESLint / Prettier、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现、前端开发实践（pnpm / MSW mock）、前端技术债形态、前端 e2e（Playwright）与工具规则改进。
+**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、错误码消费、TypeScript 严格度与可维护性、国际化落位、代码风格与 ESLint / Prettier、可访问性基线、响应式基线、设计系统与组件库治理、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现（含真实用户监测与错误上报）、前端开发实践（pnpm / MSW mock / 浏览器与设备基线）、前端技术债形态、前端 e2e（Playwright）与工具规则改进。
 
 skill 用「形态标签」（`stacks`：backend / frontend）与「框架标签」（`frameworks`：java / vue / react）声明自己适配哪类项目。初始化编排会话时必传本项目的形态栈与框架栈（`opx_orch_init` 的 `project_stacks` / `project_frameworks`，独立审查入口同样必传），skill 清单与必做清单门禁都按这份声明过滤：skill 声明的标签与会话同通道取值有交集即加载，未声明该通道的 skill 视为通用、始终加载；两个值域分字段校验，跨字段混用或传入未声明的值会被直接拒绝。扩展新框架不需要改工具代码——新增或替换 skill 时在 frontmatter 写 `stacks` / `frameworks` 即可被动态识别。
+
+### 规范覆盖对照
+
+人工对照用的覆盖视图：说明标准规范里哪些类别由哪个 skill 承担、在什么前提下成立。**非穷举清单，非门禁**——skill 是判据的最低基准，审查者仍须结合领域知识扩展覆盖。
+
+| 规范类别 | 承担 skill | 适用前提 |
+|---|---|---|
+| 可访问性 | `frontend-code-style` | 直接核对（语义标签、表单标签、键盘可达、焦点样式、颜色非唯一载体）；无障碍合规等级项目自定 |
+| 国际化 | `frontend-code-maintainability` | 第一层（文案集中、统一格式化、显式时区）直接核对；第二层（key 规范、复数与语序、缺译回退）需已接入对应底座（语言包与翻译流程）；多语言范围项目自定 |
+| 响应式与浏览器基线 | `frontend-code-style`（响应式布局）、`frontend-dev-practices`（浏览器与设备基线） | 响应式布局（断点、溢出、hover 依赖、缩放场景）直接核对；浏览器基线的版本区间与构建目标需已接入对应底座（公司浏览器标准），公司电脑统一设置下的可用性直接核对 |
+| 真实用户监测与错误上报 | `frontend-security` | 需已接入对应底座（监控平台或错误上报平台） |
+| 错误码消费 | `frontend-architecture` | 直接核对 |
+| 设计系统与组件库治理 | `frontend-code-style` | 控件唯一实现直接核对；组件版本与升级口径需已接入对应底座（组件库与设计令牌来源） |
+| 事务与并发 | `java-dev-practices` | 直接核对 |
+| 消息与缓存一致性 | `java-dev-practices` | 直接核对 |
+| 可观测性 | `java-dev-practices` | 需已接入对应平台（监控平台） |
+| 发布与回滚 | `java-dev-practices` | 需已接入对应平台（发布流水线） |
+| 依赖合规 | `java-security`（Java 落地）、`security-baseline`（许可与漏洞扫描口径） | 直接核对（依赖树、BOM 收敛、私服顺序、依赖混淆防护）；许可证策略与依赖漏洞扫描需已接入对应平台（许可策略 / 依赖扫描流水线） |
+| API 版本演进与废弃 | `api-conventions` | 直接核对 |
+| 术语表落地 | `java-ddd-architecture` | 直接核对 |
+
+- 「直接核对」指不依赖额外底座，按仓库现状即可判定；「需已接入对应底座 / 平台」指判据建立在项目已接好的语言包、监控平台、组件库、发布流水线或公司浏览器标准之上，这些承载物不在项目里时该规范不成立（不属于可直接核对的类别）。
+- 公司统一浏览器时，只核对窗口尺寸、浏览器最低版本与公司电脑统一设置，不做跨浏览器种类兼容。
+- 无障碍合规等级、多语言范围、支持哪些浏览器种类属于项目自定项：由项目明确声明，未声明时按表中「直接核对」部分的最低基线核对。
+
+维护要求：增删或重命名 skill 时同步核对此小节。
 
 ## 独立审查会话
 

@@ -1,6 +1,6 @@
 ---
 name: frontend-security
-description: 前端安全规范——XSS 输出审查、发布产物禁带 sourcemap、敏感信息禁入 localStorage、依赖漏洞扫描、CSP、postMessage 校验。security-baseline 的前端配套。
+description: 前端安全规范——XSS 输出审查、发布产物禁带 sourcemap、真实用户监测与错误上报、敏感信息禁入 localStorage、依赖漏洞扫描、CSP、postMessage 校验。security-baseline 的前端配套。
 capabilities: ["security"]
 stacks: ["frontend"]
 frameworks: ["vue", "react"]
@@ -26,12 +26,24 @@ frameworks: ["vue", "react"]
 - 禁止把 `.map` 提交仓库、打进 Docker 镜像或部署到静态资源目录 → 出现即 High（源码与内部逻辑泄露）
 - `build.sourcemap: 'hidden'` 仍会产出文件，必须配合上传后删除，不得直接发布
 
+## 真实用户监测与错误上报
+
+适用于已接入监控或错误上报平台的项目。
+
+- 上报字段必须白名单：只上报显式列出的字段（页面路径、错误类型、业务错误码、耗时、构建版本、链路标识（用于与后端日志串联）），禁止整对象、整个 store、整个组件 props、整个请求 / 响应对象直接上报 → High
+- 禁止上报凭证与个人敏感信息：token、Cookie、`Authorization` 头、手机号、身份证号、地址、银行卡、密码、请求原文（含 query 与 body）一律不得进入上报 payload → High
+- 禁止上报业务明文数据（订单详情、客户资料）；确需定位问题时用业务标识或其脱敏值
+- 上报必须限流与采样：同类错误按时间窗口去重、设上行速率上限、按比例采样；禁止在循环或高频回调里逐条上报 → 未限流按 Medium（上报风暴与页面卡顿）
+- 上报失败不得影响主流程：上报走异步并包异常处理，不得把异常抛回业务代码；上报 SDK 初始化失败时降级为不报，不阻塞渲染与交互 → Medium
+- 上报的堆栈需与发布产物 sourcemap 对应：上报携带构建版本号或提交标识，确保堆栈能还原到具体源码版本
+- 上报通道鉴权与域名白名单：上报发往固定域名，该域名在 `connect-src` 中显式列出；上报用独立凭证、可撤销，禁止复用业务登录凭证
+- 采样率与开关若支持远程调整，下发接口同样做鉴权与来源校验，禁止匿名可写
+
 ## 敏感信息禁入 localStorage
 
 - token / refresh token / 用户敏感数据禁止存 `localStorage` 与 `sessionStorage` → High
 - 会话优先 httpOnly + Secure + SameSite cookie；如确需前端持有 token，须说明威胁模型并做短时效 + 可撤销
-- 禁止把 token、手机号、身份证号、地址等写进 URL 参数、日志、错误上报 payload
-- 埋点/监控上报前做字段白名单，禁止整对象/整个 store 上报
+- 禁止把 token、手机号、身份证号、地址等写进 URL 参数与前端日志
 - 前端环境变量（`VITE_` 前缀）会打进产物 → 禁止放密钥、口令；密钥只能在后端/网关
 - 页面上的敏感信息展示按需脱敏（如身份证、手机号中间位打码），不整串回显
 
@@ -77,7 +89,6 @@ base-uri 'self';
 - 文件上传前端校验（类型/大小）只作体验兜底，服务端必须复核；文件名不参与服务端路径拼接
 - 下载链接禁止用用户可控文件名直接拼接；`Content-Disposition` 由服务端控制
 - 路由守卫只做导航与体验控制，权限判定以服务端为准；前端隐藏入口不等于安全
-- 错误上报/日志禁止携带完整请求体、响应体中的凭据与个人信息
 - iframe 嵌入第三方内容时配置 `sandbox`，仅开放必要能力
 - 剪贴板、摄像头、地理位置等敏感 API 使用前有明确用户动作触发，不静默调用
 - WebSocket 鉴权在建立连接时校验，消息体做结构校验；禁止把 token 放 URL query
