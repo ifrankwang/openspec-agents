@@ -47,34 +47,67 @@ export interface CollectSuppressionOpts {
   index?: SkillTagIndex
 }
 
+/** 解析结果：可识别声明 + 无法识别的声明条数（视图显式披露，不静默丢弃）。 */
+export interface ParsedSuppressionConfig {
+  declarations: SuppressionConfigDeclaration[]
+  skippedDeclarations: number
+}
+
+/** 一次收集的结果：实际解析出的忽略条目 + 无法识别的声明条数。 */
+export interface SuppressionSnapshot {
+  entries: SuppressionEntry[]
+  skippedDeclarations: number
+}
+
 function stripBom(text: string): string {
   return text.replace(/^\uFEFF/, "")
 }
 
-/** 解析 skill 的 suppression-config.yaml：只接受数组，逐项校验 file/format/key，非法项跳过。 */
-export function parseSuppressionConfig(content: string): SuppressionConfigDeclaration[] {
+/**
+ * 解析 skill 的 suppression-config.yaml：只接受数组，逐项校验 file/format/key。
+ * 非法项（非对象、缺 file、未知 format、properties 形态缺 key、整文件非数组）计入 skipped，
+ * 由视图渲染「已跳过 N 条未识别声明」，避免资产写错时静默丢条目。
+ */
+export function parseSuppressionConfigWithSkips(content: string): ParsedSuppressionConfig {
   let raw: unknown
   try {
     raw = yaml.load(stripBom(content))
   } catch {
-    return [] // 资产损坏按未声明处理，不阻断视图渲染
+    return { declarations: [], skippedDeclarations: 1 } // 资产损坏按一条未识别声明处理，不阻断视图渲染
   }
-  if (!Array.isArray(raw)) return []
-  const out: SuppressionConfigDeclaration[] = []
+  if (!Array.isArray(raw)) return { declarations: [], skippedDeclarations: 1 }
+  const declarations: SuppressionConfigDeclaration[] = []
+  let skippedDeclarations = 0
   for (const item of raw) {
-    if (item === null || typeof item !== "object") continue
+    if (item === null || typeof item !== "object") {
+      skippedDeclarations += 1
+      continue
+    }
     const rec = item as Record<string, unknown>
     const file = typeof rec.file === "string" ? rec.file.trim() : ""
-    if (file === "") continue
+    if (file === "") {
+      skippedDeclarations += 1
+      continue
+    }
     if (rec.format === "glob-list") {
-      out.push({ file, format: "glob-list" })
+      declarations.push({ file, format: "glob-list" })
     } else if (rec.format === "properties-key-glob-list") {
       const key = typeof rec.key === "string" ? rec.key.trim() : ""
-      if (key === "") continue
-      out.push({ file, format: "properties-key-glob-list", key })
+      if (key === "") {
+        skippedDeclarations += 1
+        continue
+      }
+      declarations.push({ file, format: "properties-key-glob-list", key })
+    } else {
+      skippedDeclarations += 1
     }
   }
-  return out
+  return { declarations, skippedDeclarations }
+}
+
+/** 兼容入口：只取可识别声明（未识别条数由 parseSuppressionConfigWithSkips 提供）。 */
+export function parseSuppressionConfig(content: string): SuppressionConfigDeclaration[] {
+  return parseSuppressionConfigWithSkips(content).declarations
 }
 
 /** 逗号分隔的 glob 列表（去空白、去空项；`#` 开头的项视为注释）。 */
@@ -139,16 +172,20 @@ function entryMatchesExemption(entry: SuppressionEntry, record: ExemptionRecord)
 /**
  * 收集命中会话形态的 skill 声明的抑制配置条目：skill 资产 → 声明的配置文件 → 按 format 解析 glob。
  * 配置文件不存在（平台未落地该配置）时跳过，不报错；条目按 (file, pattern) 去重并标注来源。
+ * 同时返回无法识别的声明条数，供视图显式披露（不静默丢弃）。
  */
-export function collectSuppressionEntries(
+export function collectSuppressionSnapshot(
   repoRoot: string,
   session: SessionStacks | null,
   opts: CollectSuppressionOpts = {},
-): SuppressionEntry[] {
-  if (!session || session.project_stacks.length === 0) return []
+): SuppressionSnapshot {
+  if (!session || session.project_stacks.length === 0) {
+    return { entries: [], skippedDeclarations: 0 }
+  }
   const index = opts.index ?? scanSkillTags()
   const seen = new Set<string>()
   const entries: SuppressionEntry[] = []
+  let skippedDeclarations = 0
 
   for (const skill of [...index.skillTags.keys()].sort()) {
     if (!matchesSessionShapes(index.skillStacks.get(skill) ?? [], session)) continue
@@ -159,9 +196,12 @@ export function collectSuppressionEntries(
 
     let declarations: SuppressionConfigDeclaration[] = []
     try {
-      declarations = parseSuppressionConfig(readFileSync(configPath, "utf-8"))
+      const parsed = parseSuppressionConfigWithSkips(readFileSync(configPath, "utf-8"))
+      declarations = parsed.declarations
+      skippedDeclarations += parsed.skippedDeclarations
     } catch {
-      continue // 不可读资产按未声明处理
+      skippedDeclarations += 1 // 不可读资产按一条未识别声明处理
+      continue
     }
 
     for (const decl of declarations) {
@@ -187,9 +227,21 @@ export function collectSuppressionEntries(
     }
   }
 
-  return entries.sort((a, b) =>
-    a.file === b.file ? a.pattern.localeCompare(b.pattern) : a.file.localeCompare(b.file),
-  )
+  return {
+    entries: entries.sort((a, b) =>
+      a.file === b.file ? a.pattern.localeCompare(b.pattern) : a.file.localeCompare(b.file),
+    ),
+    skippedDeclarations,
+  }
+}
+
+/** 兼容入口：只要忽略条目（未识别条数由 collectSuppressionSnapshot 提供）。 */
+export function collectSuppressionEntries(
+  repoRoot: string,
+  session: SessionStacks | null,
+  opts: CollectSuppressionOpts = {},
+): SuppressionEntry[] {
+  return collectSuppressionSnapshot(repoRoot, session, opts).entries
 }
 
 /** 双向核对：配置里的每条忽略要有对应豁免记录；声明配置抑制意图的豁免记录要有配置落点。 */

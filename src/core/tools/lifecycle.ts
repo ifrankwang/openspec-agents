@@ -932,23 +932,12 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 已固化项目栈 → 要求本次 init 与之一致；旧会话无 stacks → 补齐（升级在途会话）
   const stacksNote = state ? adoptOrAssertSessionStacks(state, args) : null
 
-  // 忽略基线守卫：排在栈参数校验 + 会话栈一致性校验之后，按最终确定的 stacks 选资产
-  // （传错 stacks 时上面已抛错，不落盘任何忽略改动）。
-  const guardSession: SessionStacks = state?.stacks ?? {
-    project_stacks: args.project_stacks,
-    project_frameworks: args.project_frameworks,
-  }
-  const guardNote = await runBaselineGuards(ctx, {
-    baseBranch: args.base_branch ?? state?.baseBranch ?? null,
-    session: guardSession,
-  }, guardSession)
-  // 形态已声明但无框架覆盖：不拒绝（技术栈可能不在词表内），但常驻警告到会话补齐为止
-  const shapeWarnings = shapeCoverageWarnings(guardSession)
-
   // 规划文档来源按序回落（worktree → 主仓库工作树 → 基准分支版本库）：跨分支发起后主仓库工作树
   // 已无规划文档副本，换任务组重入 init 依赖该回落链才解析得到任务组。
   // 第三级必须用「会话固化的基准分支」：state 已存在且本次未传 base_branch 时，当前检出分支可能已切走
   // （跨分支发起/重入），拿当前检出分支去 git show 会读错分支甚至读不到。
+  // 该解析/校验排在忽略基线守卫之前：无效 change（缺 tasks.md、任务组不存在）必须在写盘与提交之前失败，
+  // 否则守卫已补齐 .gitignore 并提交，留下半成品。
   const fallbackBaseBranch = state?.baseBranch || baseBranch
   const tasksContent = await resolveChangeDocContent(
     ctx.worktree,
@@ -977,6 +966,19 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   for (const g of parsedGroups) {
     tasksByGroup.set(g.id, parseTasksForGroupFromContent(tasksContent!, g.id))
   }
+
+  // 忽略基线守卫：排在栈参数校验 + 会话栈一致性校验之后、规划文档/任务组校验之后，按最终确定的 stacks 选资产
+  // （传错 stacks 或无效 change 时上面已抛错，不落盘任何忽略改动、不产生提交）。
+  const guardSession: SessionStacks = state?.stacks ?? {
+    project_stacks: args.project_stacks,
+    project_frameworks: args.project_frameworks,
+  }
+  const guardNote = await runBaselineGuards(ctx, {
+    baseBranch: args.base_branch ?? state?.baseBranch ?? null,
+    session: guardSession,
+  }, guardSession)
+  // 形态已声明但无框架覆盖：不拒绝（技术栈可能不在词表内），但常驻警告到会话补齐为止
+  const shapeWarnings = shapeCoverageWarnings(guardSession)
 
   // 执行边界改由提案阶段产出到 clarify.md：init 解析当前任务组边界，待 task item 重建/恢复完成后
   // 写入 metadata（不新增 init 参数）。解析失败/文件缺失不阻塞 init——实施视图按整个 worktree 处理。
@@ -1700,7 +1702,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     }, preexistingSession)
     : ""
   const stacksFallbackNote = stateFileExists && preexistingSession === null
-    ? "- **忽略基线提示**: 状态文件未记录会话项目栈（旧布局），本次只补框架级基线；能力级基线需重新初始化会话后补齐。\n- **扫描平台配置提示**: 状态文件未记录会话项目栈（旧布局），未按形态补齐项目级扫描配置。"
+    ? "- **旧布局提示**: 状态文件未记录会话项目栈（旧布局），本次只补框架级基线；能力级基线与项目级扫描配置需重新初始化会话后补齐。"
     : ""
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")

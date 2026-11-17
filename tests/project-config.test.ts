@@ -270,4 +270,117 @@ describe("ensureProjectConfigsForSession / 报告文案", () => {
     })
     expect(note).toContain("按 compose 文件识别")
   })
+
+  test("运行时可用但零匹配：回落读 compose 文本一次，命中则照常补齐并标注容器未运行", async () => {
+    const repo = setupSkills([
+      { name: "java-gate", stacks: ["backend"], match: ["sonarqube"], files: { "sonar-project.properties": SONAR_TEMPLATE } },
+    ])
+    writeFileSync(join(repo, "docker-compose.yml"), "services:\n  sonarqube:\n    image: sonarqube:9.9-community\n")
+    const note = await ensureProjectConfigsForSession(repo, BACKEND, probeWith(["postgres:16"]))
+    expect(note).toContain("已创建 `sonar-project.properties`")
+    expect(note).toContain("按 compose 文件识别（容器未在运行）")
+    expect(existsSync(join(repo, "sonar-project.properties"))).toBe(true)
+  })
+
+  test("运行时可用但没有任何容器在运行：文案区分「没有容器在运行」", async () => {
+    const repo = setupSkills([
+      { name: "java-gate", stacks: ["backend"], match: ["sonarqube"], files: { "sonar-project.properties": SONAR_TEMPLATE } },
+    ])
+    const note = await ensureProjectConfigsForSession(repo, BACKEND, probeWith([]))
+    expect(note).toContain("没有容器在运行")
+    expect(note).not.toContain("检测到容器但无匹配的平台")
+  })
+})
+
+describe("C1 同仓多形态：按键合并、不重复键、冲突入报告", () => {
+  const FRONTEND = { project_stacks: ["frontend"], project_frameworks: ["vue"] }
+  const MONOREPO = { project_stacks: ["frontend", "backend"], project_frameworks: ["vue", "java"] }
+
+  function setupMonorepo(): string {
+    return setupSkills([
+      {
+        name: "fe-gate",
+        stacks: ["frontend"],
+        frameworks: ["vue"],
+        match: ["sonarqube"],
+        files: {
+          "sonar-project.properties": [
+            "# 前端扫描配置",
+            "sonar.projectKey={{project.key}}",
+            "sonar.sources=src",
+            "sonar.exclusions=node_modules/**",
+            "",
+          ].join("\n"),
+        },
+      },
+      {
+        name: "java-gate",
+        stacks: ["backend"],
+        frameworks: ["java"],
+        match: ["sonarqube"],
+        files: {
+          "sonar-project.properties": [
+            "# 后端扫描配置",
+            "sonar.projectKey=backend-key",
+            "sonar.sources=src/main/java",
+            "sonar.java.binaries=target/classes",
+            "",
+          ].join("\n"),
+        },
+      },
+    ])
+  }
+
+  test("目标文件无重复键，冲突键点名键名与来源", async () => {
+    const repo = setupMonorepo()
+    expect(collectProjectConfigAssets(FRONTEND, probeWith(["sonarqube:9.9"]), { index: scanSkillTags() })).toHaveLength(1)
+    const assets = collectProjectConfigAssets(MONOREPO, probeWith(["sonarqube:9.9"]), { index: scanSkillTags() })
+    expect(assets).toHaveLength(2)
+    const report = await ensureProjectConfigs(repo, assets)
+    const content = readFileSync(join(repo, "sonar-project.properties"), "utf-8")
+    const keyLines = content.split("\n").filter((l) => /^sonar\.projectKey\s*=/.test(l))
+    expect(keyLines).toHaveLength(1) // 同键只写一次，后写不覆盖前写
+    const sourceLines = content.split("\n").filter((l) => /^sonar\.sources\s*=/.test(l))
+    expect(sourceLines).toHaveLength(1)
+    expect(content).toContain("sonar.java.binaries=target/classes") // 后端独有键照常补齐
+    const conflicts = report.targets[0].conflicts
+    expect(conflicts.map((c) => c.key).sort()).toEqual(["sonar.projectKey", "sonar.sources"])
+    const keyConflict = conflicts.find((c) => c.key === "sonar.projectKey")!
+    expect(keyConflict.sources).toHaveLength(2)
+    // 冲突提示出现在报告文本里
+    const note = await ensureProjectConfigsForSession(repo, MONOREPO, probeWith(["sonarqube:9.9"]))
+    expect(note).toContain("冲突键")
+  })
+})
+
+describe("H1 追加注释不重复写入", () => {
+  test("连续两轮各删除不同键后 init：注释行始终只有 1 行", async () => {
+    const repo = setupSkills([
+      { name: "java-gate", stacks: ["backend"], match: ["sonarqube"], files: { "sonar-project.properties": SONAR_TEMPLATE } },
+    ])
+    const assets = collectProjectConfigAssets(BACKEND, probeWith(["sonarqube:9.9"]), { index: scanSkillTags() })
+    await ensureProjectConfigs(repo, assets)
+    const target = join(repo, "sonar-project.properties")
+
+    // 第一轮：删掉 sonar.host.url 后 init
+    const round1 = readFileSync(target, "utf-8")
+      .split("\n")
+      .filter((l) => !l.startsWith("sonar.host.url="))
+      .join("\n")
+    writeFileSync(target, round1)
+    await ensureProjectConfigs(repo, assets)
+    expect(readFileSync(target, "utf-8").split("# 由编排初始化补齐：")).toHaveLength(2)
+
+    // 第二轮：再删掉 sonar.sources 后 init
+    const round2 = readFileSync(target, "utf-8")
+      .split("\n")
+      .filter((l) => !l.startsWith("sonar.sources="))
+      .join("\n")
+    writeFileSync(target, round2)
+    await ensureProjectConfigs(repo, assets)
+    const final = readFileSync(target, "utf-8")
+    expect(final.split("# 由编排初始化补齐：")).toHaveLength(2) // 注释仍只有 1 行
+    expect(final).toContain("sonar.host.url=http://localhost:9000")
+    expect(final).toContain("sonar.sources=src/main/java")
+  })
 })

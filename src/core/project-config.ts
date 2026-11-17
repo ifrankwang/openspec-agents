@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path"
 import { findSkillPath } from "../skills/scan.ts"
 import { scanSkillTags, type SkillTagIndex } from "../skills/resolve.ts"
 import { matchesSessionShapes, type SessionStacks } from "../skills/stacks.ts"
-import type { ContainerInfo, ContainerProbeResult } from "./containers.ts"
+import { collectComposeTexts, type ContainerInfo, type ContainerProbeResult } from "./containers.ts"
 
 /**
  * 项目级扫描平台配置基线。
@@ -24,6 +24,9 @@ export const CONTAINER_MATCH_FILE = "container-match"
 const APPEND_COMMENT_PREFIX = "# 由编排初始化补齐："
 const TARGET_LABEL = "扫描平台配置"
 
+/** 命中来源：运行中容器 / compose 文件文本（运行时不可用）/ compose 文件文本（运行时可用但零匹配）。 */
+export type ProjectConfigDetectedVia = "runtime" | "compose" | "compose-idle"
+
 /** 单个 skill 提供的一个目标文件模板（同一目标可有多个 skill 来源，写入时合并条目）。 */
 export interface ProjectConfigAsset {
   skill: string
@@ -34,12 +37,19 @@ export interface ProjectConfigAsset {
   /** 命中的 container-match 词。 */
   matchedWords: string[]
   /** 命中来源：运行中容器或 compose 文件文本。 */
-  detectedVia: "runtime" | "compose"
+  detectedVia: ProjectConfigDetectedVia
 }
 
 export interface CollectProjectConfigOpts {
   /** skill 索引覆盖（测试注入；缺省扫描当前 skill 索引）。 */
   index?: SkillTagIndex
+}
+
+/** 同键不同值的冲突键（键名 + 涉及来源）。 */
+export interface ProjectConfigConflict {
+  key: string
+  /** 冲突涉及的 skill（首值来源在前）。 */
+  sources: string[]
 }
 
 /** 目标文件的处理结果。 */
@@ -49,7 +59,9 @@ export interface ProjectConfigTargetReport {
   /** 本次实际追加的键（新建时为空）。 */
   addedKeys: string[]
   sources: string[]
-  detectedVia: "runtime" | "compose"
+  detectedVia: ProjectConfigDetectedVia
+  /** 同键不同值的冲突键；创建时以首个来源的值为准，绝不静默后写覆盖。 */
+  conflicts: ProjectConfigConflict[]
 }
 
 export interface ProjectConfigReport {
@@ -116,8 +128,8 @@ function readTemplate(file: string): string | null {
  * 收集形态命中且声明了 container-match 的 skill 的配置模板。
  *
  * - 只取 `matchesSessionShapes(skillStacks, session)` 命中的 skill（形态维度，与忽略基线一致）；
- * - 命中判定 = 任一匹配词命中运行中容器的镜像名/容器名；运行时不可用时，改为 compose 文件
- *   文本包含该词（此时 detectedVia = "compose"）；
+ * - 命中判定 = 任一匹配词命中运行中容器的镜像名/容器名；零匹配时再按 compose 文件文本包含
+ *   该词回落（运行时不可用标 `compose`，运行时可用但容器未在运行标 `compose-idle`）；
  * - 旧会话（session 缺失或 project_stacks 为空）不补齐，返回空。
  */
 export function collectProjectConfigAssets(
@@ -138,13 +150,14 @@ export function collectProjectConfigAssets(
     if (words.length === 0) continue // 未声明 container-match = 该 skill 不提供配置基线
 
     let matchedWords = words.filter((word) => matchWordAgainstContainers(word, containers.containers))
-    let detectedVia: "runtime" | "compose" = "runtime"
-    if (matchedWords.length === 0 && containers.runtime === null && containers.composeHits.length > 0) {
+    let detectedVia: ProjectConfigDetectedVia = "runtime"
+    if (matchedWords.length === 0 && containers.composeHits.length > 0) {
       matchedWords = words.filter((word) => {
         const pattern = globPattern(word)
         return containers.composeHits.some((text) => pattern.test(text))
       })
-      detectedVia = "compose"
+      // 运行时可用但零匹配时，命中的是 compose 声明、容器并未在运行：来源要显式标注该差异。
+      detectedVia = containers.runtime === null ? "compose" : "compose-idle"
     }
     if (matchedWords.length === 0) continue
 
@@ -199,6 +212,64 @@ function ensureTrailingEol(content: string, eol: string): string {
   return content.length > 0 && !content.endsWith("\n") ? `${content}${eol}` : content
 }
 
+const CONFIG_KEY_LINE = /^\s*([A-Za-z0-9_.\-]+)\s*=\s*(.*)$/
+
+/**
+ * 多来源模板按键合并（创建分支）：以首个模板为基，后续模板只补缺失键。
+ *
+ * 同一目标被多个 skill 声明时（前后端同仓）不能直接拼接模板——拼接会产生重复键，
+ * 而 properties 语义下后写覆盖前写，等于静默篡改前一个来源的值。这里统一按键合并：
+ * 首值生效，同键不同值记入 conflicts（点名键名与来源），由报告显式披露。
+ */
+function mergeTemplatesByKey(
+  group: readonly ProjectConfigAsset[],
+  slug: string,
+): { lines: string[]; conflicts: ProjectConfigConflict[] } {
+  const baseLines = renderProjectConfigTemplate(group[0].template, slug).split(/\r?\n/)
+  const values = new Map<string, { value: string; skill: string }>()
+  for (const raw of baseLines) {
+    const m = raw.match(CONFIG_KEY_LINE)
+    if (!m || values.has(m[1])) continue
+    values.set(m[1], { value: m[2].trim(), skill: group[0].skill })
+  }
+
+  const appended: string[] = []
+  const conflicts: ProjectConfigConflict[] = []
+  for (const asset of group.slice(1)) {
+    const rendered = renderProjectConfigTemplate(asset.template, slug)
+    for (const raw of rendered.split(/\r?\n/)) {
+      const m = raw.match(CONFIG_KEY_LINE)
+      if (!m) continue
+      const key = m[1]
+      const value = m[2].trim()
+      const known = values.get(key)
+      if (!known) {
+        values.set(key, { value, skill: asset.skill })
+        appended.push(raw)
+        continue
+      }
+      if (known.value === value) continue
+      const existing = conflicts.find((c) => c.key === key)
+      if (existing) {
+        if (!existing.sources.includes(asset.skill)) existing.sources.push(asset.skill)
+      } else {
+        conflicts.push({ key, sources: [known.skill, asset.skill] })
+      }
+    }
+  }
+
+  // 基模板尾部空行与追加行之间不留空行（保持原模板尾行紧接补齐键）。
+  while (baseLines.length > 0 && baseLines[baseLines.length - 1].trim() === "") baseLines.pop()
+  return { lines: [...baseLines, ...appended], conflicts }
+}
+
+/** 多来源命中来源合并：compose-idle（容器未在运行）信息量最高，优先披露。 */
+function mergeDetectedVia(group: readonly ProjectConfigAsset[]): ProjectConfigDetectedVia {
+  if (group.some((a) => a.detectedVia === "compose-idle")) return "compose-idle"
+  if (group.some((a) => a.detectedVia === "compose")) return "compose"
+  return "runtime"
+}
+
 /**
  * 按目标文件名合并多个 skill 的模板并补齐项目根配置。
  *
@@ -224,9 +295,9 @@ export async function ensureProjectConfigs(
 
   for (const [target, group] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const sources = [...new Set(group.map((a) => a.skill))].map((s) => `skill \`${s}\``)
-    const detectedVia: "runtime" | "compose" = group.some((a) => a.detectedVia === "compose")
-      ? "compose"
-      : "runtime"
+    const detectedVia = mergeDetectedVia(group)
+    // 模板间同键不同值的冲突与动作无关：文件已完整时也要报，避免「先创建后重跑」把冲突吞掉。
+    const merged = mergeTemplatesByKey(group, slug)
     const filePath = join(repoRoot, target)
 
     let before: string | null = null
@@ -237,10 +308,17 @@ export async function ensureProjectConfigs(
     }
 
     if (before === null) {
-      const template = group.map((a) => renderProjectConfigTemplate(a.template, slug)).join("\n")
-      const content = template.endsWith("\n") ? template : `${template}\n`
+      const text = merged.lines.join("\n")
+      const content = text.endsWith("\n") ? text : `${text}\n`
       if (!opts.dryRun) await writeFile(filePath, content, "utf-8")
-      targets.push({ target, action: "created", addedKeys: [], sources, detectedVia })
+      targets.push({
+        target,
+        action: "created",
+        addedKeys: [],
+        sources,
+        detectedVia,
+        conflicts: merged.conflicts,
+      })
       continue
     }
 
@@ -263,21 +341,24 @@ export async function ensureProjectConfigs(
     }
 
     if (addedKeys.length === 0) {
-      targets.push({ target, action: "complete", addedKeys: [], sources, detectedVia })
+      targets.push({ target, action: "complete", addedKeys: [], sources, detectedVia, conflicts: merged.conflicts })
       continue
     }
 
     const eol = before.includes("\r\n") ? "\r\n" : "\n"
-    const parts = [`${APPEND_COMMENT_PREFIX}${sources.join("、")}`, ...lines]
+    // 注释只在文件内尚无该前缀时写一次：连续多轮补齐不同键不能重复堆注释行。
+    const parts = before.includes(APPEND_COMMENT_PREFIX)
+      ? lines
+      : [`${APPEND_COMMENT_PREFIX}${sources.join("、")}`, ...lines]
     const content = `${ensureTrailingEol(before, eol)}${parts.join(eol)}${eol}`
     if (!opts.dryRun) await writeFile(filePath, content, "utf-8")
-    targets.push({ target, action: "appended", addedKeys, sources, detectedVia })
+    targets.push({ target, action: "appended", addedKeys, sources, detectedVia, conflicts: merged.conflicts })
   }
 
   return { targets }
 }
 
-export type ProjectConfigSkipReason = "no-session" | "no-runtime" | "no-match"
+export type ProjectConfigSkipReason = "no-session" | "no-runtime" | "no-containers" | "no-match"
 
 /** 跳过原因的统一文案（挂在 init / set_worktree 返回体）。 */
 export function renderProjectConfigSkip(reason: ProjectConfigSkipReason): string {
@@ -286,23 +367,36 @@ export function renderProjectConfigSkip(reason: ProjectConfigSkipReason): string
       ? "会话未记录项目栈，跳过。"
       : reason === "no-runtime"
         ? "未检测到容器运行时，跳过。"
-        : "检测到容器但无匹配的平台，跳过。"
+        : reason === "no-containers"
+          ? "容器运行时可用，但没有容器在运行，跳过。"
+          : "检测到容器但无匹配的平台，跳过。"
   return `- **${TARGET_LABEL}**: ${detail}`
 }
 
 /** 结构化报告 → markdown 片段。 */
 export function renderProjectConfigReport(report: ProjectConfigReport): string[] {
   return report.targets.map((entry) => {
-    const via = entry.detectedVia === "compose" ? "（按 compose 文件识别）" : ""
+    const via =
+      entry.detectedVia === "compose-idle"
+        ? "（按 compose 文件识别（容器未在运行））"
+        : entry.detectedVia === "compose"
+          ? "（按 compose 文件识别）"
+          : ""
     const sources = entry.sources.join("、")
+    const conflictNote =
+      entry.conflicts.length === 0
+        ? ""
+        : `\n  - 冲突键（同键不同值，已保留首个来源的值）：${entry.conflicts
+            .map((c) => `\`${c.key}\`（${c.sources.map((s) => `skill \`${s}\``).join(" vs ")}）`)
+            .join("、")}`
     if (entry.action === "created") {
-      return `- **${TARGET_LABEL}**: 已创建 \`${entry.target}\`（来源：${sources}）${via}`
+      return `- **${TARGET_LABEL}**: 已创建 \`${entry.target}\`（来源：${sources}）${via}${conflictNote}`
     }
     if (entry.action === "appended") {
       const keys = entry.addedKeys.join("、")
-      return `- **${TARGET_LABEL}**: \`${entry.target}\` 已补齐 ${entry.addedKeys.length} 项：${keys}（来源：${sources}）${via}`
+      return `- **${TARGET_LABEL}**: \`${entry.target}\` 已补齐 ${entry.addedKeys.length} 项：${keys}（来源：${sources}）${via}${conflictNote}`
     }
-    return `- **${TARGET_LABEL}**: \`${entry.target}\` 已存在且完整。`
+    return `- **${TARGET_LABEL}**: \`${entry.target}\` 已存在且完整。${conflictNote}`
   })
 }
 
@@ -320,10 +414,20 @@ export async function ensureProjectConfigsForSession(
     return renderProjectConfigSkip("no-session")
   }
   const assets = collectProjectConfigAssets(session, probe)
-  if (assets.length === 0) {
-    const nothingDetected = probe.runtime === null && probe.composeHits.length === 0
-    return renderProjectConfigSkip(nothingDetected ? "no-runtime" : "no-match")
+  // 运行时可用但零匹配：compose 文本在运行时探测成功时不会被读取，这里再回落读一次；
+  // 命中则照常补齐（来源标注容器未在运行），两处都失败才跳过。
+  const resolved = assets.length === 0 && probe.runtime !== null
+    ? collectProjectConfigAssets(session, { ...probe, composeHits: collectComposeTexts(repoRoot) })
+    : assets
+  if (resolved.length === 0) {
+    if (probe.runtime === null && probe.composeHits.length === 0) {
+      return renderProjectConfigSkip("no-runtime")
+    }
+    if (probe.runtime !== null && probe.containers.length === 0) {
+      return renderProjectConfigSkip("no-containers")
+    }
+    return renderProjectConfigSkip("no-match")
   }
-  const report = await ensureProjectConfigs(repoRoot, assets, opts)
+  const report = await ensureProjectConfigs(repoRoot, resolved, opts)
   return renderProjectConfigReport(report).join("\n")
 }

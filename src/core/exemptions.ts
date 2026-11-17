@@ -9,7 +9,7 @@ import type { Dimension, ReviewLayer } from "./types.ts"
 /**
  * 项目级跨 change 豁免清单（跨 change 共享，写主仓库根的状态目录）。
  *
- * 痛点背景：worktree 模式下每个新 change 是全新状态账本 + 全新 Sonar 项目，tool review 全量扫描
+ * 痛点背景：worktree 模式下每个新 change 是全新状态账本 + 全新扫描平台项目，tool review 全量扫描
  * 会把存量已裁定豁免的安全问题重新报为阻塞 issue，dev 每轮重新豁免。此模块把「裁定认可（dismissed）」
  * 的豁免结论落为 (rule+file+line) 清单，后续 change 的 tool review 提报命中清单时降为 Info 级，
  * 不阻塞、无需重复豁免。

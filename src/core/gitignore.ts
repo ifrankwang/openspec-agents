@@ -4,6 +4,7 @@ import { runGit, runGitChecked, listStagedPathsOutside } from "./git.ts"
 import {
   collectIgnoreBaseline,
   normalizeIgnoreLine,
+  resolveIgnoreBaselineRoot,
   type IgnoreBaselineEntry,
 } from "./ignore-baseline.ts"
 import type { SessionStacks } from "../skills/stacks.ts"
@@ -28,6 +29,8 @@ export interface EnsureIgnoreBaselineOpts {
   skipCommit?: boolean
   /** 会话项目栈；缺省/null = 旧会话未固化项目栈，只补框架级基线。 */
   session?: SessionStacks | null
+  /** 框架级基线目录覆盖（测试注入；缺省按模块位置上溯探测）。 */
+  baselineRoot?: string | null
 }
 
 /** 单个目标文件的计划与安全判定结果。 */
@@ -41,6 +44,8 @@ interface FilePlan {
   sources: string[]
   /** 用户显式 `!<entry>` 保留的基线条目（原始行）。 */
   preserved: string[]
+  /** 因该条目是某条否定行的父路径而跳过追加（条目 + 命中的否定行）。 */
+  preservedByNegation: { entry: string; negation: string }[]
   /** `git status --porcelain -- <f>` 原始输出（trim 后）。 */
   statusRaw: string
   /** 纯未跟踪：唯一状态行恰好为 `?? <f>`。 */
@@ -89,7 +94,9 @@ function planTarget(
   const missing: string[] = []
   const sources: string[] = []
   const preserved: string[] = []
+  const preservedByNegation: { entry: string; negation: string }[] = []
   const seen = new Set<string>()
+  const negatedBodies = [...negated]
 
   const push = (line: string, source?: string): void => {
     const key = normalizeEntry(line)
@@ -99,8 +106,11 @@ function planTarget(
     if (source && !sources.includes(source)) sources.push(source)
   }
 
-  // 强制覆盖组：纳入 wanted 集合，但不因用户 `!` 否定而放弃补齐。
-  for (const entry of GENERATED_DIR_ENTRIES) push(entry)
+  // 强制覆盖组：纳入 wanted 集合，但不因用户 `!` 否定而放弃补齐。仅 `.gitignore` 承载编排产物，
+  // `.prettierignore` 等其它目标只补基线条目。
+  if (target === ".gitignore") {
+    for (const entry of GENERATED_DIR_ENTRIES) push(entry)
+  }
 
   for (const { line, source } of baseline) {
     const key = normalizeEntry(line)
@@ -108,6 +118,18 @@ function planTarget(
     if (negated.has(key)) {
       // 用户显式保留：尊重其意图，绝不追加。
       if (!preserved.includes(line)) preserved.push(line)
+      continue
+    }
+    // 父目录条目会因 git 后写优先击败子路径否定（如追加 `dist/` 会推翻 `!dist/keep.txt`）：
+    // 命中子路径否定时跳过追加，并在报告里点名保留的是哪条否定行。
+    const childNegation = key.length > 0
+      ? negatedBodies.find((body) => body.startsWith(`${key}/`))
+      : undefined
+    if (childNegation) {
+      const negation = `!${childNegation}`
+      if (!preservedByNegation.some((p) => p.entry === line && p.negation === negation)) {
+        preservedByNegation.push({ entry: line, negation })
+      }
       continue
     }
     push(line, source)
@@ -123,6 +145,7 @@ function planTarget(
     missing,
     sources,
     preserved,
+    preservedByNegation,
     statusRaw,
     untrackedOnly,
     userDirty: !clean && !untrackedOnly,
@@ -183,8 +206,15 @@ async function precheckCommit(
   return null
 }
 
-function renderBaselineLines(plans: readonly FilePlan[], hasPrettierBaseline: boolean): string[] {
+function renderBaselineLines(
+  plans: readonly FilePlan[],
+  hasPrettierBaseline: boolean,
+  baselineMissing: boolean,
+): string[] {
   const lines: string[] = []
+  if (baselineMissing) {
+    lines.push("- **忽略基线**: 基线资产缺失，本次只补编排产物条目。")
+  }
   for (const plan of plans) {
     if (plan.missing.length === 0) {
       lines.push(`- **忽略基线**: \`${plan.target}\` 已齐全，未改动文件。`)
@@ -201,6 +231,13 @@ function renderBaselineLines(plans: readonly FilePlan[], hasPrettierBaseline: bo
     if (plan.preserved.length === 0) continue
     const entries = plan.preserved.map((e) => `\`!${e}\``).join("、")
     lines.push(`- **用户显式保留**: \`${plan.target}\` 中的 ${entries} 未追加（用户已显式保留）。`)
+  }
+  for (const plan of plans) {
+    for (const item of plan.preservedByNegation) {
+      lines.push(
+        `- **用户显式保留**: \`${plan.target}\` 已保留你的 \`${item.negation}\`，故未追加 \`${item.entry}\`。`,
+      )
+    }
   }
   if (!hasPrettierBaseline) {
     lines.push("- **`.prettierignore` 基线**: 当前声明的形态没有 `.prettierignore` 基线，未创建该文件。")
@@ -228,7 +265,8 @@ export async function ensureIgnoreBaseline(
   repoRoot: string,
   opts: EnsureIgnoreBaselineOpts = {},
 ): Promise<string> {
-  const baseline = collectIgnoreBaseline(opts.session ?? null)
+  const baselineRoot = opts.baselineRoot === undefined ? resolveIgnoreBaselineRoot() : opts.baselineRoot
+  const baseline = collectIgnoreBaseline(opts.session ?? null, { baselineRoot })
   const baselineByTarget = new Map(baseline.map((b) => [b.target, b.entries]))
   const targets = [...new Set([".gitignore", ...baseline.map((b) => b.target)])].sort((a, b) =>
     a.localeCompare(b),
@@ -264,6 +302,7 @@ export async function ensureIgnoreBaseline(
   const lines = renderBaselineLines(
     plans,
     baseline.some((b) => b.target === ".prettierignore"),
+    baselineRoot === null,
   )
   const probe = await probeIgnoreSources(repoRoot)
   if (probe.length > 0) lines.push(`- **辅助校验**: ${probe.join("；")}。`)

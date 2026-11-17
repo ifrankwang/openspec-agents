@@ -502,5 +502,76 @@ describe("init 实测：扫描平台配置补齐", () => {
   })
 })
 
+describe("子路径否定与产物强制组归属", () => {
+  test("`!dist/keep.txt` 存在 → 不追加父目录 `dist/`，报告点名保留项", async () => {
+    const { repo } = makeRepo({ gitignore: "!dist/keep.txt\n" })
+
+    const out = await ensureIgnoreBaseline(repo, { baseBranch: "main", session: FRONTEND_SESSION })
+
+    const lines = valueLines(readText(repo, ".gitignore"))
+    expect(lines).not.toContain("dist/")
+    expect(lines).toContain("!dist/keep.txt")
+    expect(out).toContain("已保留你的 `!dist/keep.txt`，故未追加 `dist/`")
+  })
+
+  test("精确否定 `!dist/` → 行为不变（尊重用户保留，不追加）", async () => {
+    const { repo } = makeRepo({ gitignore: "!dist/\n" })
+
+    const out = await ensureIgnoreBaseline(repo, { baseBranch: "main", session: FRONTEND_SESSION })
+
+    const lines = valueLines(readText(repo, ".gitignore"))
+    expect(lines).not.toContain("dist/")
+    expect(out).toContain("用户显式保留")
+    expect(out).toContain("`!dist/`")
+  })
+
+  test("编排产物强制组只写 .gitignore：.prettierignore 不含 .worktree/", async () => {
+    const { repo } = makeRepo({ gitignore: "", prettierignore: "" })
+
+    await ensureIgnoreBaseline(repo, { baseBranch: "main", session: FRONTEND_SESSION })
+
+    expect(valueLines(readText(repo, ".gitignore"))).toContain(".worktree/")
+    expect(valueLines(readText(repo, ".prettierignore"))).not.toContain(".worktree/")
+    expect(valueLines(readText(repo, ".prettierignore"))).toContain("pnpm-lock.yaml")
+  })
+
+  test("基线资产缺失 → 返回体显式报「只补编排产物条目」，不静默退化", async () => {
+    const { repo } = makeRepo({ gitignore: "" })
+
+    const out = await ensureIgnoreBaseline(repo, {
+      baseBranch: "main",
+      session: null,
+      baselineRoot: null,
+    })
+
+    const lines = valueLines(readText(repo, ".gitignore"))
+    expect(lines).toContain(".worktree/")
+    expect(lines).not.toContain(".DS_Store")
+    expect(out).toContain("基线资产缺失，本次只补编排产物条目")
+  })
+})
+
+describe("init 前置校验：无效 change 不写盘不提交", () => {
+  test("change 目录无 tasks.md → 抛错且零 git 写动作、零 .gitignore 写入、零 states", async () => {
+    installTestSkillEnv()
+    const dir = mkdtempSync(join(tmpdir(), "opx-init-notasks-"))
+    tempDirs.push(dir)
+    mkdirSync(join(dir, "openspec", "changes", "no-tasks"), { recursive: true })
+    const fake = createFakeGit()
+    fake.gitignoreSim = {}
+    fake.gitignoreSim.currentBranch = "main"
+    __setGitRunner(fake)
+
+    const orch = makeOrchCtx(dir)
+    await expect(
+      init.execute({ ...INIT_PROJECT_STACKS, change_id: "no-tasks", task_group_id: "1", mode: "simple" }, orch),
+    ).rejects.toThrow(/tasks\.md/)
+
+    expect(fake.callLog.some((l) => l.startsWith(COMMIT_LINE_PREFIX))).toBe(false)
+    expect(existsSync(join(dir, ".gitignore"))).toBe(false)
+    expect(existsSync(join(dir, "openspec", "states"))).toBe(false)
+  })
+})
+
 // teardown 由 bun 自动执行 afterEach；显式引用避免未使用告警
 void teardown

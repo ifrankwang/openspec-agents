@@ -5,19 +5,21 @@
  * 双向核对的两个不一致方向、一致时两侧均为空。
  */
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
   checkSuppressionConsistency,
   collectSuppressionEntries,
+  collectSuppressionSnapshot,
   parseGlobList,
   parsePropertiesGlobList,
   parseSuppressionConfig,
+  parseSuppressionConfigWithSkips,
 } from "../src/core/suppression"
 import type { ExemptionRecord } from "../src/core/exemptions"
-import { __resetSkillCache } from "../src/skills/resolve"
+import { __resetSkillCache, __setSkillScanRootsForTest } from "../src/skills/resolve"
 import { installTestSkillEnv, teardown } from "./helpers"
 import type { SessionStacks } from "../src/skills/stacks"
 
@@ -54,6 +56,7 @@ afterEach(() => {
     }
   }
   teardown(EMPTY_ROOT)
+  __setSkillScanRootsForTest(null)
   __resetSkillCache()
 })
 
@@ -156,6 +159,69 @@ describe("format 解析", () => {
       { file: "a.properties", format: "properties-key-glob-list", key: "exclusions" },
       { file: "b.txt", format: "glob-list" },
     ])
+  })
+
+  test("未识别声明计数：未知 format / 缺 key / 缺 file / 非数组 都计入 skipped，不静默丢弃", () => {
+    const parsed = parseSuppressionConfigWithSkips(
+      [
+        "- file: a.properties",
+        "  format: properties-key-glob-list",
+        "  key: exclusions",
+        "- file: c.properties",
+        "  format: properties-key-glob-list",
+        "- file: d.txt",
+        "  format: unknown",
+        "- file: \"\"",
+        "- 纯字符串",
+      ].join("\n"),
+    )
+    expect(parsed.declarations).toEqual([
+      { file: "a.properties", format: "properties-key-glob-list", key: "exclusions" },
+    ])
+    expect(parsed.skippedDeclarations).toBe(4)
+
+    // 整文件非数组 / YAML 损坏：按一条未识别声明处理
+    expect(parseSuppressionConfigWithSkips("file: a.properties\n").skippedDeclarations).toBe(1)
+    expect(parseSuppressionConfigWithSkips("a: [unclosed\n").skippedDeclarations).toBe(1)
+    // 全部合法时不产生跳过计数
+    expect(parseSuppressionConfigWithSkips("- file: b.txt\n  format: glob-list\n").skippedDeclarations).toBe(0)
+  })
+})
+
+describe("未识别声明的收集计数（视图披露口径）", () => {
+  test("skill 资产含不可识别声明 → entries 只含合法条目，skippedDeclarations 计数", () => {
+    const root = mkdtempSync(join(tmpdir(), "opx-suppression-skip-"))
+    tempDirs.push(root)
+    const skillDir = join(root, "skills", "bad-gate")
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      `---\nname: bad-gate\ndescription: 测试用 skill\ncapabilities: ["quality-gate"]\n` +
+        `stacks: ["backend"]\nframeworks: ["java"]\n---\n\n## 测试\n`,
+    )
+    writeFileSync(
+      join(skillDir, "suppression-config.yaml"),
+      [
+        "- file: a.properties",
+        "  format: properties-key-glob-list",
+        "  key: exclusions",
+        "- file: b.txt",
+        "  format: unknown-format",
+        "- file: c.properties",
+        "  format: properties-key-glob-list",
+        "",
+      ].join("\n"),
+    )
+    __setSkillScanRootsForTest([join(root, "skills")])
+    __resetSkillCache()
+    const repo = makeRepo()
+    writeFileSync(join(repo, "a.properties"), "exclusions=src/x/**\n", "utf-8")
+    const session: SessionStacks = { project_stacks: ["backend"], project_frameworks: ["java"] }
+
+    const snapshot = collectSuppressionSnapshot(repo, session)
+
+    expect(snapshot.entries.map((e) => e.pattern)).toEqual(["src/x/**"])
+    expect(snapshot.skippedDeclarations).toBe(2) // 未知 format 1 条 + properties 缺 key 1 条
   })
 })
 

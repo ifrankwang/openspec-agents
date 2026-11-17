@@ -3,7 +3,7 @@ import type { WorkItem, StepConfig, WorkflowCommon, MustDoCatalog } from "./type
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
 import { EXEMPTED_HIT_KEY, matchesExemption, exemptionTargetOfChild } from "../exemptions.ts"
 import type { ExemptionRecord } from "../exemptions.ts"
-import { checkSuppressionConsistency, collectSuppressionEntries } from "../suppression.ts"
+import { checkSuppressionConsistency, collectSuppressionSnapshot } from "../suppression.ts"
 import type { LoadedWorkflow } from "./loader.ts"
 import type { EngineRecommendation } from "./engine.ts"
 import type { DetectChangesResult } from "../git.ts"
@@ -639,12 +639,16 @@ function renderAgentWorking(
     ].join("\n")
   }
 
-  // 配置忽略 ↔ 豁免记录双向核对（verify_tool 视图）：机器核对结论，纯展示、不参与门禁判定。
-  // 三分支共用同一份区块，避免无变更分支看不到配置一致性结论。
-  const suppressionLines =
-    step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool"
-      ? renderSuppressionConsistencySection(tg.worktreePath, state.stacks ?? null, exemptionItems)
-      : []
+  // 本 step 必做清单区块：与门禁共用 resolveStepMustDo 单一解析入口（按会话项目栈分组取并集），
+  // 逐项渲染 id + 词表 description + evidence 要求，并给出 must_do_checks 提交示例。
+  const mustDoItems = resolveStepMustDo(step ?? undefined, state.stacks ?? null)
+
+  // 配置忽略 ↔ 豁免记录双向核对：机器核对结论，纯展示、不参与门禁判定。
+  // 生效必做清单含 config_check 即渲染（full 的 verify_tool、simple 的 quality_review 都覆盖），
+  // 不按 step id 字面量判断，避免 simple 模式看不到一致性结论。三分支共用同一份区块。
+  const suppressionLines = mustDoItems.includes("config_check")
+    ? renderSuppressionConsistencySection(tg.worktreePath, state.stacks ?? null, exemptionItems)
+    : []
 
   // tool review 检查点增量三分支（A4）：仅 verify_tool 的 reviewer-tool 且提供了变更检测结果时生效；
   // toolChanges 缺省（未预计算）时维持既有全量渲染，不误伤其他 agent/step 的通用渲染。
@@ -707,9 +711,6 @@ function renderAgentWorking(
     )
   }
   lines.push(...renderStepSemantics(step, common, stepCtx))
-  // 本 step 必做清单区块：与门禁共用 resolveStepMustDo 单一解析入口（按会话项目栈分组取并集），
-  // 逐项渲染 id + 词表 description + evidence 要求，并给出 must_do_checks 提交示例。
-  const mustDoItems = resolveStepMustDo(step ?? undefined, state.stacks ?? null)
   lines.push(...renderMustDoChecklist(mustDoItems, mustDoCatalog, rec.stepId))
   lines.push(...suppressionLines)
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
@@ -1113,23 +1114,38 @@ function renderSuppressionConsistencySection(
   exemptionItems: ExemptionRecord[] | undefined,
 ): string[] {
   if (!repoRoot) return []
-  const entries = collectSuppressionEntries(repoRoot, session ?? null)
-  const { unmatchedConfig, unmatchedExemptions } = checkSuppressionConsistency(entries, exemptionItems ?? [])
   const lines = ["## 配置忽略与豁免一致性", ""]
+  // 会话未固化项目栈（旧会话）：形态无法解析，抑制配置读不出来。此时必须显式说「未核对」，
+  // 不能把「一条都没读到」渲染成「一致（0 条）」——那会让缺失看起来像通过。
+  if (!session || session.project_stacks.length === 0) {
+    lines.push("未核对（会话未固化项目栈）。", "")
+    return lines
+  }
+  const { entries, skippedDeclarations } = collectSuppressionSnapshot(repoRoot, session)
+  const { unmatchedConfig, unmatchedExemptions } = checkSuppressionConsistency(entries, exemptionItems ?? [])
+  const skipLine =
+    skippedDeclarations > 0 ? `已跳过 ${skippedDeclarations} 条未识别声明（format 不在枚举、缺 key 或非数组）。` : ""
   if (unmatchedConfig.length === 0 && unmatchedExemptions.length === 0) {
+    if (entries.length === 0 && skipLine !== "") {
+      lines.push(skipLine, "")
+      return lines
+    }
     lines.push(`配置忽略条目与豁免记录一致（${entries.length} 条）。`, "")
+    if (skipLine !== "") lines.push(skipLine, "")
     return lines
   }
   lines.push(
     "配置忽略条目与豁免记录必须成对：每条配置忽略要有对应豁免记录，每条豁免记录也要在配置里找到落点。",
     "",
   )
+  if (skipLine !== "") lines.push(skipLine, "")
   if (unmatchedConfig.length > 0) {
     lines.push("配置里有但豁免记录缺失：", "")
     for (const entry of unmatchedConfig) {
       lines.push(`- ${entry.file} → ${entry.pattern}（来源：${entry.source}）`)
     }
     lines.push("")
+    lines.push("模板基线排除项首次写入时需登记对应豁免记录，登记后本区块才会显示为一致。", "")
   }
   if (unmatchedExemptions.length > 0) {
     lines.push("豁免记录声称配置抑制但配置里无对应忽略：", "")

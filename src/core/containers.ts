@@ -127,6 +127,11 @@ function readComposeTexts(repoRoot: string, files: readonly string[]): string[] 
   return texts
 }
 
+/** 读取仓库根 compose 文件文本（运行时探测成功时也能单独取用，供零匹配二次回落）。 */
+export function collectComposeTexts(repoRoot: string): string[] {
+  return readComposeTexts(repoRoot, findComposeFiles(repoRoot))
+}
+
 /**
  * 探测本机容器运行时；两个运行时都不可用时退回 compose 文件文本。
  * repoRoot 用于定位 compose 文件（缺省不探测 compose）。
@@ -152,7 +157,7 @@ export async function probeContainers(
     }
   }
 
-  const composeHits = readComposeTexts(repoRoot, findComposeFiles(repoRoot))
+  const composeHits = collectComposeTexts(repoRoot)
   if (composeHits.length > 0) {
     return { runtime: null, containers: [], composeHits, source: "compose" }
   }

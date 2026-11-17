@@ -187,6 +187,7 @@ sonar.javascript.file.suffixes=.js,.jsx,.ts,.tsx,.vue
 ```
 
 - 执行：从项目根配置读出 `sonar.projectKey` 作为原始 key，追加 `-<namespace>` 后显式传入：`sonar-scanner -Dsonar.projectKey=<项目原key>-<namespace>`
+- 扫描参数一律经命令行显式传入，扫描执行期禁止改动 `sonar-project.properties`，避免影响质量门配置检查
 - 结果拉取：`/api/issues/search?componentKeys=<key>&types=BUG,VULNERABILITY,CODE_SMELL&ps=500`
 - 质量门状态：`/api/qualitygates/project_status?projectKey=<key>`
 - 每条扫描结果提取 file / line / rule / severity / message，按 SonarQube 原始严重级别保留（BLOCKER→Critical、CRITICAL→Critical、MAJOR→High/Medium、MINOR→Low、INFO→Info），映射不明确的按同维度统一判例处理
