@@ -1,8 +1,9 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.ts"
 import type { WorkItem, StepConfig, WorkflowCommon, MustDoCatalog } from "./types.ts"
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
-import { EXEMPTED_HIT_KEY } from "../exemptions.ts"
+import { EXEMPTED_HIT_KEY, matchesExemption, exemptionTargetOfChild } from "../exemptions.ts"
 import type { ExemptionRecord } from "../exemptions.ts"
+import { checkSuppressionConsistency, collectSuppressionEntries } from "../suppression.ts"
 import type { LoadedWorkflow } from "./loader.ts"
 import type { EngineRecommendation } from "./engine.ts"
 import type { DetectChangesResult } from "../git.ts"
@@ -120,33 +121,20 @@ function renderWorkflowStatusViewCore(
   }
   if (rec.agents.includes(ctxAgent)) {
     const step = rec.stepId ? (workflow.stepMap.get(rec.stepId)?.step ?? null) : null
-    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, workflow.mustDoCatalog, options.toolChanges, options.exemptedHits, exemptionHintCtx(options.exemptionItems))
+    return renderAgentWorking(item, rec, step, workflow.common, ctxAgent, options.state, options.tg, workflow.mustDoCatalog, options.toolChanges, options.exemptedHits, exemptionHintCtx(options.exemptionItems), options.exemptionItems)
   }
   return renderGate(rec, item, ctxAgent)
 }
 
-/** 渲染期豁免清单提示上下文（纯只读，不写状态）：items 原始清单 + 预构建 (rule+file)→line 映射。
- *  映射在渲染入口构建一次，逐条 issue 渲染时 O(1) 查映射，避免循环内重复扫描清单。 */
+/** 渲染期豁免清单提示上下文（纯只读，不写状态）：items 原始清单，逐条 issue 渲染时按共享匹配函数查找。 */
 interface ExemptionHintCtx {
   items: ExemptionRecord[]
-  ruleFileLines: Map<string, number>
-}
-
-/** 从豁免清单构建 (rule+file)→line 映射：rule 或 file 任一缺失的条目不参与（与 exemptionKeyOf 宁漏勿误一致）。 */
-function buildRuleFileLineMap(items: ExemptionRecord[]): Map<string, number> {
-  const m = new Map<string, number>()
-  for (const it of items) {
-    if (typeof it.rule === "string" && it.rule !== "" && typeof it.file === "string" && it.file !== "") {
-      m.set([it.rule, it.file].join("\u0000"), it.line ?? 0)
-    }
-  }
-  return m
 }
 
 /** 豁免清单为空时不构建提示上下文（渲染链零额外开销）。 */
 function exemptionHintCtx(items: ExemptionRecord[] | undefined): ExemptionHintCtx | undefined {
   if (!items || items.length === 0) return undefined
-  return { items, ruleFileLines: buildRuleFileLineMap(items) }
+  return { items }
 }
 
 function renderCheckpoint(rec: EngineRecommendation, workflow: LoadedWorkflow, item: WorkItem, state?: OrchestrateState): string {
@@ -636,6 +624,7 @@ function renderAgentWorking(
   toolChanges?: DetectChangesResult,
   exemptedHits?: number,
   exemptionCtx?: ExemptionHintCtx,
+  exemptionItems?: ExemptionRecord[],
 ): string {
   // worktree 就绪阻断（置于顶部）：未就绪时拒绝执行，渲染 ⛔ 视图，不输出 ✅ 执行视图内容
   if (!isWorktreeReady(tg)) {
@@ -650,16 +639,23 @@ function renderAgentWorking(
     ].join("\n")
   }
 
+  // 配置忽略 ↔ 豁免记录双向核对（verify_tool 视图）：机器核对结论，纯展示、不参与门禁判定。
+  // 三分支共用同一份区块，避免无变更分支看不到配置一致性结论。
+  const suppressionLines =
+    step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool"
+      ? renderSuppressionConsistencySection(tg.worktreePath, state.stacks ?? null, exemptionItems)
+      : []
+
   // tool review 检查点增量三分支（A4）：仅 verify_tool 的 reviewer-tool 且提供了变更检测结果时生效；
   // toolChanges 缺省（未预计算）时维持既有全量渲染，不误伤其他 agent/step 的通用渲染。
   // 独立审查 full 形态（scopeFull 哨兵）不走三分支——审查锚点为全量代码库，非「未检出变更」。
   if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges && !toolChanges.scopeFull) {
     const { active, pending } = toolPendingChildren(item, ctxAgent)
     if (!toolChanges.hasNonDocChange && active.length === 0 && pending.length === 0) {
-      return renderToolDirectSubmit(exemptedHits)
+      return renderToolDirectSubmit(exemptedHits, suppressionLines)
     }
     if (!toolChanges.hasNonDocChange) {
-      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptedHits, exemptionCtx)
+      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptedHits, exemptionCtx, suppressionLines)
     }
   }
   // skill 加载清单按当前调用者 agent 声明的 capability_tags 过滤（step 内各 agent 独立声明，互不相同）
@@ -715,6 +711,7 @@ function renderAgentWorking(
   // 逐项渲染 id + 词表 description + evidence 要求，并给出 must_do_checks 提交示例。
   const mustDoItems = resolveStepMustDo(step ?? undefined, state.stacks ?? null)
   lines.push(...renderMustDoChecklist(mustDoItems, mustDoCatalog, rec.stepId))
+  lines.push(...suppressionLines)
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   // 证据区块注入：展示检查点增量口径的本次变更证据（文件清单 + 区间 diff 命令），与 Worktree 区块
   // 「变更范围」（baseRef..HEAD 本任务组累计口径）区分，供审查者审查变更内容后按操作指引裁量是否可免
@@ -1106,10 +1103,53 @@ function renderToolChangesEvidence(
   return lines
 }
 
+/**
+ * 「配置忽略与豁免一致性」区块：列出配置忽略条目 ↔ 豁免记录的双向不一致项；两侧一致时给出条目计数。
+ * 纯只读渲染，不改变任何门禁判定——config_check 仍是必做项，本区块结果供其证据对照。
+ */
+function renderSuppressionConsistencySection(
+  repoRoot: string | null | undefined,
+  session: OrchestrateState["stacks"] | null,
+  exemptionItems: ExemptionRecord[] | undefined,
+): string[] {
+  if (!repoRoot) return []
+  const entries = collectSuppressionEntries(repoRoot, session ?? null)
+  const { unmatchedConfig, unmatchedExemptions } = checkSuppressionConsistency(entries, exemptionItems ?? [])
+  const lines = ["## 配置忽略与豁免一致性", ""]
+  if (unmatchedConfig.length === 0 && unmatchedExemptions.length === 0) {
+    lines.push(`配置忽略条目与豁免记录一致（${entries.length} 条）。`, "")
+    return lines
+  }
+  lines.push(
+    "配置忽略条目与豁免记录必须成对：每条配置忽略要有对应豁免记录，每条豁免记录也要在配置里找到落点。",
+    "",
+  )
+  if (unmatchedConfig.length > 0) {
+    lines.push("配置里有但豁免记录缺失：", "")
+    for (const entry of unmatchedConfig) {
+      lines.push(`- ${entry.file} → ${entry.pattern}（来源：${entry.source}）`)
+    }
+    lines.push("")
+  }
+  if (unmatchedExemptions.length > 0) {
+    lines.push("豁免记录声称配置抑制但配置里无对应忽略：", "")
+    for (const record of unmatchedExemptions) {
+      const dimensions = [
+        record.pathPattern ? `path_pattern=${record.pathPattern}` : "",
+        record.ruleKeys && record.ruleKeys.length > 0 ? `rule_keys=${record.ruleKeys.join(",")}` : "",
+        record.file ? `file=${record.file}` : "",
+      ].filter((s) => s !== "")
+      lines.push(`- 豁免记录：${dimensions.join(" · ")}（change=${record.changeId}）`)
+    }
+    lines.push("")
+  }
+  return lines
+}
+
 /** verify_tool 三分支①（直提）：自上次工具检查后无代码/配置变更且本层无待复核/待裁定项。
  *  替换式最小视图：不渲染 worktree/变更范围区块（避免与既有 baseRef..HEAD 累计口径提示冲突），
  *  文案只给结论，不展示检查点 hash。 */
-function renderToolDirectSubmit(exemptedHits?: number): string {
+function renderToolDirectSubmit(exemptedHits?: number, suppressionLines: string[] = []): string {
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
@@ -1122,9 +1162,9 @@ function renderToolDirectSubmit(exemptedHits?: number): string {
       "",
     )
   }
+  lines.push("无需运行全量工具检查。", "")
+  lines.push(...suppressionLines)
   lines.push(
-    "无需运行全量工具检查。",
-    "",
     "## 操作指引",
     "",
     "1. 提交前须申报本轮必做清单处理结果：以一条 `step` 名首段为 `no_change` 的 `must_do_checks` 条目声明本轮整体豁免必做清单（completed=false，并附结构化 skip_reason 注明判定依据），或按视图「本 step 必做清单」逐项申报（completed=true 附执行结果；无法执行项置 completed=false + 结构化 skip_reason）",
@@ -1137,7 +1177,7 @@ function renderToolDirectSubmit(exemptedHits?: number): string {
 
 /** verify_tool 三分支②（仅处理待复核项）：无代码/配置变更但有本层待复核/待裁定项 →
  *  仅复核/裁定待处理项，不跑全量工具扫描，处理完成后提交。 */
-function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string, exemptedHits?: number, exemptionCtx?: ExemptionHintCtx): string {
+function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string, exemptedHits?: number, exemptionCtx?: ExemptionHintCtx, suppressionLines: string[] = []): string {
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
@@ -1152,6 +1192,7 @@ function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctx
   }
   lines.push("仅处理以下本层待复核 / 待裁定项，处理完成后提交：", "")
   lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx))
+  lines.push(...suppressionLines)
   lines.push("## 操作指引", "")
   lines.push(
     "1. 逐项复核/裁定上方各项：待复核 issue 经 `recheck_adjudications` 复核（通过置 done、不通过驳回并附驳回原因）；待裁定豁免经 `exempt_adjudications` 裁定（dismissed/rejected）",
@@ -1302,10 +1343,16 @@ function appendExemptionHints(
   if (f.sourcePhase === "tool" && rule === "") {
     lines.push("  - 无规则名：豁免结论不会写入跨 change 清单，下个 change 将重新报此问题")
   }
-  if (exemptionCtx && rule !== "" && f.file !== "" && child.metadata[EXEMPTED_HIT_KEY] === undefined) {
-    const hitLine = exemptionCtx.ruleFileLines.get([rule, f.file].join("\u0000"))
-    if (hitLine !== undefined && hitLine !== f.line) {
-      lines.push(`  - 疑似行号漂移：豁免清单记录 line=${hitLine}，当前报 line=${f.line}，请核对是否同一问题`)
+  if (exemptionCtx && f.file !== "" && child.metadata[EXEMPTED_HIT_KEY] === undefined) {
+    // 忽略行号后再匹配一次（共享匹配函数，覆盖精确三元组与路径模式/规则键豁免），
+    // 命中但行号不同 → 疑似行号漂移。整文件/整类命中（line=0）是设计内语义，不提示漂移。
+    const target = exemptionTargetOfChild(child)
+    const record = exemptionCtx.items.find((it) =>
+      matchesExemption({ ...target, line: undefined }, { ...it, line: undefined }),
+    )
+    const recordLine = record?.line ?? 0
+    if (record && recordLine > 0 && recordLine !== f.line) {
+      lines.push(`  - 疑似行号漂移：豁免清单记录 line=${recordLine}，当前报 line=${f.line}，请核对是否同一问题`)
     }
   }
 }

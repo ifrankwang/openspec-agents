@@ -168,10 +168,27 @@ export const newChildIssueItem: JSONSchema = {
       description:
         "issue 归因维度：quality reviewer 报 issue 时由报源自动推断、无需填写（显式填写须与报源维度一致）；tool/task reviewer 报 issue 时必须显式填写",
     },
-    file: { type: "string", description: "问题所在文件路径（相对于 worktree）" },
+    file: {
+      type: "string",
+      description:
+        "问题所在文件路径（相对于 worktree），用于精确到单个文件；问题覆盖一类路径时用 path_pattern，二者可同时给出",
+    },
+    path_pattern: {
+      type: "string",
+      description:
+        "路径 glob（如 src/generated/**），用于表达「这一类路径」；精确单文件用 file，二者可同时给出",
+    },
     line: { type: "integer", minimum: 0, description: "问题所在行号（0=整文件/待新建文件）" },
     suggestion: { type: "string", description: "修复建议" },
-    rule: { type: "string", description: "工具规则名（如 PMD Rule / SonarQube rule），无则省略" },
+    rule: {
+      type: "string",
+      description: "单条规则键（规则标识），无则省略；表达一组规则时用 rule_keys，二者可同时给出",
+    },
+    rule_keys: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      description: "一组规则键，用于表达「这一组规则」；单条规则用 rule，二者可同时给出",
+    },
     root_cause_guess: { type: "string", description: "根因猜测（仅特定维度需要）" },
   },
   required: ["id", "title", "description"],

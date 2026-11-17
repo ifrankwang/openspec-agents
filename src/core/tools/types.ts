@@ -96,9 +96,11 @@ export interface AgentSubmitParams {
     severity?: string
     dimension?: string
     file?: string
+    path_pattern?: string
     line?: number
     suggestion?: string
     rule?: string
+    rule_keys?: string[]
     root_cause_guess?: string
   }>
   execution_boundary?: {

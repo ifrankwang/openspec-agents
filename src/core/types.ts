@@ -91,7 +91,9 @@ export interface IssueItem {
   rootCauseGuess: string | null
   exemptReason: string | null
   rejectReason: string | null
-  rule?: string   // 工具规则名（如 PMD Rule / SonarQube rule），非工具来源可为空
+  rule?: string   // 单条规则键，非工具来源可为空
+  pathPattern?: string  // 路径 glob（如 src/generated/**），表达「这一类路径」
+  ruleKeys?: string[]   // 一组规则键，表达「这一组规则」
 }
 
 export type BlockerStatus = "awaiting_user" | "resolved"

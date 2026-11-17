@@ -1286,6 +1286,11 @@ describe("opx_agent_submit 通用 step 提交", () => {
             id: "7", title: "NPE 风险", description: "空指针",
             severity: "High", dimension: "architecture",
             file: "src/Service.java", line: 42, suggestion: "加空判", rule: "PMD:NullDereference", root_cause_guess: "未初始化",
+          }, {
+            id: "8", title: "生成代码告警", description: "生成目录同类问题",
+            severity: "Medium", dimension: "maintainability",
+            file: "src/generated/Gen.java", line: 7,
+            path_pattern: "src/generated/**", rule: "PMD:UnusedLocalVariable", rule_keys: ["PMD:UnusedLocalVariable", "PMD:UnusedPrivateField"],
           }],
         },
         makeCtx("openspec-reviewer-tool", wt)
@@ -1296,6 +1301,42 @@ describe("opx_agent_submit 通用 step 提交", () => {
       expect(child.metadata["suggestion"]).toBe("加空判")
       expect(child.metadata["rule"]).toBe("PMD:NullDereference")
       expect(child.metadata["root_cause_guess"]).toBe("未初始化")
+      // 路径模式 + 规则键可选字段：与 file/rule 可同时给出，原样透传 metadata（旧参数不受影响）
+      const child8 = taskItemOf(wt).children.find((c: WorkItem) => c.externalId === "8")
+      expect(child8.metadata["file"]).toBe("src/generated/Gen.java")
+      expect(child8.metadata["rule"]).toBe("PMD:UnusedLocalVariable")
+      expect(child8.metadata["path_pattern"]).toBe("src/generated/**")
+      expect(child8.metadata["rule_keys"]).toEqual(["PMD:UnusedLocalVariable", "PMD:UnusedPrivateField"])
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch {}
+    }
+  })
+  test("31b. 路径模式 / 规则键参数校验：空白 path_pattern、空或含空项的 rule_keys 被拒", async () => {
+    const root = `/tmp/opxsub-31b-${Date.now()}`
+    const { wt } = freshSetup(root)
+    try {
+      await initWorktree(wt)
+      await agent_submit.execute({ change_id: CID, step_id: "implement", verdict: "passed", completed_task_ids: ["1", "2", "3"] }, makeCtx("openspec-developer", wt))
+      const submit = (extra: Record<string, unknown>) =>
+        agent_submit.execute(
+          {
+            change_id: CID, step_id: "verify_tool", verdict: "failed",
+            new_children: [{ id: "7", title: "问题", description: "描述", severity: "High", dimension: "maintainability", ...extra }],
+          },
+          makeCtx("openspec-reviewer-tool", wt)
+        ).catch((e: Error) => e)
+
+      const err1 = await submit({ path_pattern: "  " })
+      expect(err1).toBeInstanceOf(Error)
+      expect((err1 as Error).message).toContain("path_pattern 不能为空")
+
+      const err2 = await submit({ rule_keys: [] })
+      expect(err2).toBeInstanceOf(Error)
+      expect((err2 as Error).message).toContain("rule_keys 不能为空数组")
+
+      const err3 = await submit({ rule_keys: ["java:S1", " "] })
+      expect(err3).toBeInstanceOf(Error)
+      expect((err3 as Error).message).toContain("含空规则键")
     } finally {
       try { rmSync(root, { recursive: true, force: true }) } catch {}
     }

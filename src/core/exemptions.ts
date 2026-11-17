@@ -31,6 +31,10 @@ export interface ExemptionRecord {
   key: string
   rule?: string
   file?: string
+  /** 路径 glob（如 `src/generated/**`）：豁免覆盖「这一类路径」，与 file 精确匹配互补。 */
+  pathPattern?: string
+  /** 一组规则键：豁免覆盖「这一组规则」，与 rule 单条规则互补。 */
+  ruleKeys?: string[]
   line?: number
   sourcePhase: ReviewLayer
   dimension: Dimension
@@ -46,10 +50,133 @@ export interface ExemptionStore {
   items: ExemptionRecord[]
 }
 
+/** 豁免匹配用的问题字段（issue child metadata 或其投影）。 */
+export interface ExemptionTarget {
+  rule?: string
+  file?: string
+  line?: number
+  pathPattern?: string
+  ruleKeys?: string[]
+}
+
 /** 豁免 key 单一事实源：rule+file+line 拼接。rule 缺失时返回 null（宁漏勿误：不匹配、不写清单）。 */
 export function exemptionKeyOf(rule: string | undefined, file: string, line: number): string | null {
   if (rule === undefined || rule === "") return null
   return [rule, file, line].join("\u0000")
+}
+
+/** 规则键归一：去重、去空、排序（key 与匹配都基于同一份归一结果）。 */
+function normalizeRuleKeys(keys: readonly string[] | undefined): string[] {
+  if (!keys) return []
+  return [...new Set(keys.map((k) => k.trim()).filter((k) => k !== ""))].sort()
+}
+
+/**
+ * 豁免记录 key：无 path_pattern / rule_keys 时沿用旧三元组 key（存量记录零迁移）；
+ * 带路径模式或规则键时使用独立 key 空间，由各匹配维度内容拼成。
+ */
+export function exemptionRecordKeyOf(target: ExemptionTarget): string | null {
+  const pathPattern = target.pathPattern?.trim() ?? ""
+  const ruleKeys = normalizeRuleKeys(target.ruleKeys)
+  if (pathPattern === "" && ruleKeys.length === 0) {
+    return exemptionKeyOf(target.rule, target.file ?? "", target.line ?? 0)
+  }
+  const rule = target.rule ?? ""
+  return ["pattern", pathPattern, ruleKeys.join(","), rule, target.file ?? "", target.line ?? 0].join("\u0000")
+}
+
+/**
+ * 仓库相对路径 glob 匹配：支持 `**`（跨目录）、`*`（单段内）、`?`（单字符），
+ * 双星号后接斜杠可匹配零层目录（如 `src/**` + `/*.ts` 匹配 `src/a.ts`）。反斜杠统一按 `/` 归一。
+ */
+export function pathMatchesGlob(pattern: string, target: string): boolean {
+  const p = pattern.replace(/\\/g, "/").replace(/^\.\//, "")
+  const t = target.replace(/\\/g, "/").replace(/^\.\//, "")
+  return globToRegExp(p).test(t)
+}
+
+function globToRegExp(pattern: string): RegExp {
+  let out = "^"
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        i++
+        if (pattern[i + 1] === "/") {
+          i++
+          out += "(?:.*/)?"
+        } else {
+          out += ".*"
+        }
+      } else {
+        out += "[^/]*"
+      }
+    } else if (ch === "?") {
+      out += "[^/]"
+    } else {
+      out += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    }
+  }
+  return new RegExp(`${out}$`)
+}
+
+/** 是否声明了「配置抑制」意图：带路径模式或规则键（用于配置↔豁免双向核对）。 */
+export function isSuppressionIntent(record: ExemptionRecord): boolean {
+  return (record.pathPattern ?? "") !== "" || normalizeRuleKeys(record.ruleKeys).length > 0
+}
+
+/**
+ * 豁免匹配单一事实源（降级、视图提示、配置核对共用，禁止各处另写一份判断）：
+ * - 路径维度：记录带 path_pattern 时按 glob 匹配 issue.file；否则按 file 精确相等；
+ * - 规则维度：记录 rule 等于 issue.rule，或落在 issue.rule_keys；issue.rule 落在记录 rule_keys；两组规则键有交集；
+ * - 行号：记录带 line（>0）时要求相等，路径模式豁免不带 line 视为整文件/整类命中；
+ * - 记录声明了哪个维度就要求该维度命中，多个维度同时声明时全部命中（AND）。
+ */
+export function matchesExemption(issue: ExemptionTarget, record: ExemptionRecord): boolean {
+  const recordKeys = normalizeRuleKeys(record.ruleKeys)
+  const hasPathDimension = (record.pathPattern ?? "") !== "" || record.file !== undefined
+  const hasRuleDimension = (record.rule ?? "") !== "" || recordKeys.length > 0
+  if (!hasPathDimension && !hasRuleDimension) return false
+
+  // 旧精确三元组（无 path_pattern / rule_keys）保留原语义：line 一律要求相等（含 line=0）；
+  // 路径模式 / 规则键记录才把 line=0 或缺省视为整文件、整类命中。
+  const isPatternRecord = (record.pathPattern ?? "") !== "" || recordKeys.length > 0
+
+  if (hasPathDimension) {
+    const issueFile = issue.file ?? ""
+    const recordPattern = record.pathPattern ?? ""
+    if (recordPattern !== "") {
+      if (issueFile === "" || !pathMatchesGlob(recordPattern, issueFile)) return false
+    } else if (issueFile !== (record.file ?? "")) {
+      return false
+    }
+    if (record.line !== undefined && (!isPatternRecord || record.line > 0) && issue.line !== record.line) return false
+  }
+
+  if (hasRuleDimension) {
+    const issueRule = issue.rule ?? ""
+    const issueKeys = normalizeRuleKeys(issue.ruleKeys)
+    const recordRule = record.rule ?? ""
+    const ruleHit =
+      (issueRule !== "" && (issueRule === recordRule || recordKeys.includes(issueRule))) ||
+      (recordRule !== "" && issueKeys.includes(recordRule)) ||
+      recordKeys.some((k) => issueKeys.includes(k))
+    if (!ruleHit) return false
+  }
+  return true
+}
+
+/** 从工作项 metadata 提取豁免匹配字段（与 buildExemptionRecord 读取同一组 metadata 键）。 */
+export function exemptionTargetOfChild(child: WorkItem): ExemptionTarget {
+  const f = resolveChildIssueFields(child)
+  const rawKeys = child.metadata["rule_keys"]
+  return {
+    rule: typeof child.metadata["rule"] === "string" ? child.metadata["rule"] : undefined,
+    file: f.file,
+    line: f.line,
+    pathPattern: typeof child.metadata["path_pattern"] === "string" ? child.metadata["path_pattern"] : undefined,
+    ruleKeys: Array.isArray(rawKeys) ? rawKeys.filter((k): k is string => typeof k === "string") : undefined,
+  }
 }
 
 function emptyStore(): ExemptionStore {
@@ -105,20 +232,23 @@ export async function upsertExemption(worktree: string, record: ExemptionRecord)
   }
 }
 
-/** 由被裁定（dismissed）的 issue child 组装豁免记录；rule 缺失时返回 null（不参与匹配）。 */
+/** 由被裁定（dismissed）的 issue child 组装豁免记录；既无规则也无路径维度时返回 null（不参与匹配）。 */
 export function buildExemptionRecord(
   child: WorkItem,
   opts: { changeId: string; exemptedBy: string },
 ): ExemptionRecord | null {
-  const rule = typeof child.metadata["rule"] === "string" ? child.metadata["rule"] : undefined
-  const f = resolveChildIssueFields(child)
-  const key = exemptionKeyOf(rule, f.file, f.line)
+  const target = exemptionTargetOfChild(child)
+  const ruleKeys = normalizeRuleKeys(target.ruleKeys)
+  const key = exemptionRecordKeyOf(target)
   if (!key) return null
+  const f = resolveChildIssueFields(child)
   return {
     key,
-    rule,
-    file: f.file,
-    line: f.line,
+    rule: target.rule,
+    file: target.file,
+    pathPattern: target.pathPattern,
+    ruleKeys: ruleKeys.length > 0 ? ruleKeys : undefined,
+    line: target.line,
     sourcePhase: f.sourcePhase,
     dimension: f.dimension,
     severity: child.severity ?? "",
@@ -145,22 +275,20 @@ export async function writeDismissedExemption(
 }
 
 /**
- * 命中降级：new_children 中 (rule+file+line) 命中清单的 issue 降为 Info 级并追加中性描述，
- * 返回降级条数。必须在 assertFailedHasReason 之前调用——否则仅含存量豁免问题的 change 里
- * reviewer 能 failed 却无真实待办，形成死锁。
+ * 命中降级：new_children 中匹配项目级豁免清单（精确三元组或路径模式/规则键）的 issue 降为 Info 级
+ * 并追加中性描述，返回降级条数。必须在 assertFailedHasReason 之前调用——否则仅含存量豁免问题的
+ * change 里 reviewer 能 failed 却无真实待办，形成死锁。
  */
 export function applyExemptionDowngrade(children: WorkItem[], store: ExemptionStore): number {
-  const keys = new Set(store.items.map((i) => i.key))
   let downgraded = 0
   for (const c of children) {
-    const rule = typeof c.metadata["rule"] === "string" ? c.metadata["rule"] : undefined
-    const file = typeof c.metadata["file"] === "string" ? c.metadata["file"] : ""
-    const line = typeof c.metadata["line"] === "number" ? c.metadata["line"] : 0
-    const key = exemptionKeyOf(rule, file, line)
-    if (key && keys.has(key)) {
+    const target = exemptionTargetOfChild(c)
+    const hit = store.items.find((record) => matchesExemption(target, record))
+    if (hit) {
+      const label = hit.rule ?? normalizeRuleKeys(hit.ruleKeys).join(",")
       c.severity = "Info"
-      c.metadata[EXEMPTED_HIT_KEY] = rule ?? true
-      c.description = `${c.description}\n\n> 命中项目级豁免清单${rule ? `（rule=${rule}）` : ""}，保持现状。`
+      c.metadata[EXEMPTED_HIT_KEY] = label !== "" ? label : true
+      c.description = `${c.description}\n\n> 命中项目级豁免清单${label ? `（rule=${label}）` : ""}，保持现状。`
       downgraded++
     }
   }

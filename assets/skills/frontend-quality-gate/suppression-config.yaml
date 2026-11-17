@@ -1,0 +1,7 @@
+# 抑制配置来源声明（数据驱动）：声明扫描平台配置里的忽略条目从哪里读。
+# 工具按 format 解析后与豁免记录双向核对：配置里每条忽略要有对应豁免记录，豁免记录也要在配置里找到落点。
+# format=properties-key-glob-list：properties 文件里的 key=值，值按逗号切分为 glob 列表。
+# 说明：该平台只能整文件 / 整批排除，无法按「路径 + 规则」精确抑制，因此前端只做路径维度核对。
+- file: sonar-project.properties
+  format: properties-key-glob-list
+  key: sonar.exclusions
