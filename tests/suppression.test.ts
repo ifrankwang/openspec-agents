@@ -186,6 +186,17 @@ describe("format 解析", () => {
     // 全部合法时不产生跳过计数
     expect(parseSuppressionConfigWithSkips("- file: b.txt\n  format: glob-list\n").skippedDeclarations).toBe(0)
   })
+
+  test("未识别声明计数：空文件不计入（yaml.load 返回 undefined）", () => {
+    expect(parseSuppressionConfigWithSkips("")).toEqual({ declarations: [], skippedDeclarations: 0 })
+  })
+
+  test("未识别声明计数：纯注释文件不计入（没有声明可识别不等于声明非法）", () => {
+    expect(parseSuppressionConfigWithSkips("# 仅注释\n# 第二条\n")).toEqual({
+      declarations: [],
+      skippedDeclarations: 0,
+    })
+  })
 })
 
 describe("未识别声明的收集计数（视图披露口径）", () => {

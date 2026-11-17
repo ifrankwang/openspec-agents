@@ -220,6 +220,9 @@ const CONFIG_KEY_LINE = /^\s*([A-Za-z0-9_.\-]+)\s*=\s*(.*)$/
  * 同一目标被多个 skill 声明时（前后端同仓）不能直接拼接模板——拼接会产生重复键，
  * 而 properties 语义下后写覆盖前写，等于静默篡改前一个来源的值。这里统一按键合并：
  * 首值生效，同键不同值记入 conflicts（点名键名与来源），由报告显式披露。
+ *
+ * 换行风格：多来源合并统一按 LF 输出（各模板按 /\r?\n/ 拆行后按 \n 重拼）；已存在文件的追加
+ * 分支另走文件自身的换行风格（检测到 CRLF 则沿用），两者互不影响。
  */
 function mergeTemplatesByKey(
   group: readonly ProjectConfigAsset[],

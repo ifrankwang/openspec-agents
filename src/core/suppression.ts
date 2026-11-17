@@ -67,6 +67,7 @@ function stripBom(text: string): string {
  * 解析 skill 的 suppression-config.yaml：只接受数组，逐项校验 file/format/key。
  * 非法项（非对象、缺 file、未知 format、properties 形态缺 key、整文件非数组）计入 skipped，
  * 由视图渲染「已跳过 N 条未识别声明」，避免资产写错时静默丢条目。
+ * 空内容（空文件、纯注释）不算「未识别声明」：`yaml.load` 返回 undefined/null，跳过计数保持 0。
  */
 export function parseSuppressionConfigWithSkips(content: string): ParsedSuppressionConfig {
   let raw: unknown
@@ -75,6 +76,7 @@ export function parseSuppressionConfigWithSkips(content: string): ParsedSuppress
   } catch {
     return { declarations: [], skippedDeclarations: 1 } // 资产损坏按一条未识别声明处理，不阻断视图渲染
   }
+  if (raw === undefined || raw === null) return { declarations: [], skippedDeclarations: 0 }
   if (!Array.isArray(raw)) return { declarations: [], skippedDeclarations: 1 }
   const declarations: SuppressionConfigDeclaration[] = []
   let skippedDeclarations = 0
