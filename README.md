@@ -129,11 +129,11 @@ npm install -D @ifrankwang/openspec-agents
 
 ## 提案标准化
 
-OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，给出文档骨架与写作要求。这套标准在它前面加一道澄清与确认关，文档写完后加一道独立架构复核，并把改动范围、契约变更、文档语言钉得更死。
+OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，给出文档骨架与写作要求。这套标准在它前面加一道澄清与确认关，文档写完后加一道独立架构复核，并把改动范围、契约变更、文档语言钉得更死。另在 specs 与 design 之间插入一道条件化的 **prototype**（拟真原型）工件：涉及界面视觉 / 交互的变更先出可双击打开的单文件 HTML 原型，纯逻辑变更只写一页「不涉及用户可见界面」的声明。
 
 | | OpenSpec 官方 `spec-driven` | 插件提供的 `spec-driven-standard` |
 |---|---|---|
-| 阶段 | proposal → specs → design → tasks | 最前面多一个 **clarify**（澄清）；文档齐备后多一道 **架构审查**（Phase 3） |
+| 阶段 | proposal → specs → design → tasks | clarify → proposal → specs → **prototype**（原型，条件化）→ design → tasks；文档齐备后多一道 **架构审查**（Phase 3） |
 | 需求澄清 | 澄清不强制，靠 explore 用法自行把握 | 决策树逐轮提问，每题附推荐答案；事实类疑问自己查代码，不抛给你 |
 | 动笔门禁 | 无 | 疑点问完 + 你确认方案，才允许开始写文档；确认必须文字回复，点选项不算 |
 | 改动范围 | proposal 里一句 Impact 描述 | 关联场景清点：把用到这块逻辑的入口、复用链路、数据上下游全列出来，每条附代码位置，逐条跟你确认纳入还是排除；共用逻辑的所有入口必须同一变更里一起改 |
@@ -144,9 +144,9 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 | 任务划分 | 分组 + 每条带验证方式 | 追加：每组必须有真实代码改动（禁止「收尾组」凑数）、测试跟着实现同组、只覆盖本仓库 |
 | 归档 | 官方归档命令本身会同步主规格 | 追加写作纪律：主规格只写终态，不留「原 X 改为 Y」；废弃项显式删除并补 REMOVED；同语义合并去重 |
 
-**用法**：在目标项目的普通会话里调用 `/openspec-standard`（不要在被编排流程占用的会话里调用，那种会话不能改文件）。项目还没有 `openspec/` 时，它先以 Core Profile 执行 `openspec init --profile core --tools agents`：建 `openspec/` 骨架，并在 `.agents/skills/` 下生成 propose、explore、apply、update、sync、archive 六个 workflow skill；随后写入 `openspec/config.yaml`（指定 `spec-driven-standard` schema）与 `openspec/schemas/spec-driven-standard/`（schema、文档模板与架构审查职责文本）。
+**用法**：在目标项目的普通会话里调用 `/openspec-standard`（不要在被编排流程占用的会话里调用，那种会话不能改文件）。项目还没有 `openspec/` 时，它先以 Core Profile 执行 `openspec init --profile core --tools agents`：建 `openspec/` 骨架，并在 `.agents/skills/` 下生成 propose、explore、apply、update、sync、archive 六个 workflow skill；随后写入 `openspec/config.yaml`（指定 `spec-driven-standard` schema）与 `openspec/schemas/spec-driven-standard/`（schema、文档模板与架构审查职责文本；文档模板含 `templates/prototype.md` 原型模板）。
 
-装好之后提变更不必换命令，仍走 OpenSpec 官方用法：调用 `/openspec-propose {具体需求描述}`，生成的 proposal / specs / design / tasks 就会按这套标准产出，再由 `/orchestrator {change-id}` 接手实施与把关。
+装好之后提变更不必换命令，仍走 OpenSpec 官方用法：调用 `/openspec-propose {具体需求描述}`，生成的 proposal / specs / prototype / design / tasks 就会按这套标准产出，再由 `/orchestrator {change-id}` 接手实施与把关。
 
 已经装过标准的项目重跑就是升级：标准更新到插件当前版本，你自己加的规则条目和项目背景会保留。
 
@@ -198,7 +198,7 @@ OpenSpec 官方默认的流程是 `proposal → specs → design → tasks`，�
 
 **Java 后端配套**：在通用规范之上补齐 Java / Spring 的实现细节 —— Lombok、日志与命名约定、REST 接口的 Java 实现、MyBatisPlus 与 Flyway、DDD 的 Java 实现与 ArchUnit 规则、术语表落地检查、Maven / Spotless / PMD / 质量扫描平台接入、工具规则改进、Java 开发实践（事务与并发、消息与缓存一致性、可观测性、发布与回滚）、Java 安全实现（含依赖合规落地）、Java 性能与可维护性、Java 技术债形态。
 
-**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、错误码消费、TypeScript 严格度与可维护性、国际化落位、代码风格与 ESLint / Prettier、可访问性基线、响应式基线、设计系统与组件库治理、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现（含真实用户监测与错误上报）、前端开发实践（pnpm / MSW mock / 浏览器与设备基线）、前端技术债形态、前端 e2e（Playwright）与工具规则改进。
+**前端配套**：补齐 Vue / React 项目的实现细节 —— 组件与状态管理分层、错误码消费、TypeScript 严格度与可维护性、国际化落位、代码风格与 ESLint / Prettier、可访问性基线、响应式基线、设计系统与组件库治理、前端设计标准（用 DESIGN.md 固定视觉语言并定义字段状态语义）、依赖分层校验、性能预算与懒加载、Vitest 覆盖率、SonarJS 深度扫描、前端安全实现（含真实用户监测与错误上报）、前端开发实践（pnpm / MSW mock / 浏览器与设备基线）、前端技术债形态、前端 e2e（Playwright）与工具规则改进。
 
 skill 用「形态标签」（`stacks`：backend / frontend）与「框架标签」（`frameworks`：java / vue / react）声明自己适配哪类项目。初始化编排会话时必传本项目的形态栈与框架栈（`opx_orch_init` 的 `project_stacks` / `project_frameworks`，独立审查入口同样必传），skill 清单与必做清单门禁都按这份声明过滤：skill 声明的标签与会话同通道取值有交集即加载，未声明该通道的 skill 视为通用、始终加载；两个值域分字段校验，跨字段混用或传入未声明的值会被直接拒绝。扩展新框架不需要改工具代码——新增或替换 skill 时在 frontmatter 写 `stacks` / `frameworks` 即可被动态识别。
 
@@ -221,6 +221,8 @@ skill 用「形态标签」（`stacks`：backend / frontend）与「框架标签
 | 依赖合规 | `java-security`（Java 落地）、`security-baseline`（许可与漏洞扫描口径） | 直接核对（依赖树、BOM 收敛、私服顺序、依赖混淆防护）；许可证策略与依赖漏洞扫描需已接入对应平台（许可策略 / 依赖扫描流水线） |
 | API 版本演进与废弃 | `api-conventions` | 直接核对 |
 | 术语表落地 | `java-ddd-architecture` | 直接核对 |
+| 界面语义与交互一致性 | `frontend-code-style` | 直接核对（必填 / 禁用 / 只读的可见标识与程序属性同源，空 / 加载 / 出错三态可分辨，危险操作有确认） |
+| 前端设计标准（DESIGN.md） | `frontend-design-standard` | 直接核对（DESIGN.md 令牌与 8 段正文，8 种状态的视觉与程序双承载） |
 
 - 「直接核对」指不依赖额外底座，按仓库现状即可判定；「需已接入对应底座 / 平台」指判据建立在项目已接好的语言包、监控平台、组件库、发布流水线或公司浏览器标准之上，这些承载物不在项目里时该规范不成立（不属于可直接核对的类别）。
 - 公司统一浏览器时，只核对窗口尺寸、浏览器最低版本与公司电脑统一设置，不做跨浏览器种类兼容。

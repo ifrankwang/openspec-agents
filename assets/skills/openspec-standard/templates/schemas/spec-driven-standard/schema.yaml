@@ -1,6 +1,6 @@
 name: spec-driven-standard
 version: 1
-description: Spec-driven workflow with clarify gate, related-surface survey, tiered authoring (orchestrator or single subagent) and review loop - clarify → proposal → specs → design → tasks
+description: Spec-driven workflow with clarify gate, related-surface survey, realistic prototype for interface changes, tiered authoring (orchestrator or single subagent) and review loop - clarify → proposal → specs → prototype → design → tasks
 artifacts:
   - id: clarify
     generates: clarify.md
@@ -169,6 +169,11 @@ artifacts:
         user by interviewing in rounds over a decision tree (every decision
         branches into the decisions that hang off it):
         * Problem & intent: what problem is being solved? what is the success criteria?
+        * Users & scenarios (用户与场景): who uses it, in what situation, how
+          often, what mis-operation do they fear most, and what should the user
+          be able to tell at a glance after this change? When the change does
+          not touch a user-visible interface, this dimension gets one sentence
+          and no more.
         * Scope: what is in/out of bounds? is the change decomposable into sub-changes?
         * Related-surface survey (关联场景清点): complete the survey BEFORE the
           first interview round and treat it as input to the decision tree, not
@@ -308,6 +313,13 @@ artifacts:
         responsibility for data formatting moves from backend to frontend,
         only the final owner remains). The clarify record is a snapshot of
         final decisions, not an interview transcript.
+      - **Users & Scenarios (用户与场景)**: who uses it and in what situation,
+        how often, what mis-operation they fear most, and what the user should
+        be able to tell at a glance after this change. One sentence is enough
+        when the change does not touch a user-visible interface. When the
+        change does touch one, the prototype confirmation conclusion (what the
+        user confirmed, what they asked to change) is recorded here as well -
+        every prototype revision requires a fresh confirmation.
       - **Related-Surface Survey**: the related-surface survey output (关联场景清点) —
         every consuming entry point / shared processing logic / downstream
         consumer with code evidence, and the scoping verdict for each —
@@ -541,6 +553,79 @@ artifacts:
       Specs should be testable - each scenario is a potential test case.
     requires:
       - proposal
+  - id: prototype
+    generates: prototype/index.html
+    description: Realistic single-file prototype of the user-visible interface
+    template: prototype.md
+    instruction: |
+      **Generation (process constraint)**: This artifact is written by exactly
+      one author — either YOU, the orchestrating agent (SIMPLE tier), or the
+      ONE independent generation subagent dispatched once for the change
+      (COMPLEX tier) — never one subagent per artifact, and never by both.
+      The full orchestration contract (interview, tier decision, authoring,
+      review loop) lives in the clarify artifact's instruction; read it
+      first if you have not. The author runs
+      `openspec instructions <artifact-id> --change "<name>" --json`, reads
+      the project's AGENTS.md and openspec/config.yaml rules plus the
+      dependency artifacts (including the clarify.md written by the
+      orchestrating agent), then writes to the resolved output path. If a
+      generation subagent is the author, it may only read/write inside the
+      change directory (openspec/changes/<name>/).
+
+      Decide first whether this change touches a user-visible interface.
+
+      Conditional rule (条件化规则): produce the realistic prototype ONLY when
+      the change involves the visual, interaction or state presentation of a
+      user-visible interface - pages, dialogs, forms, field states, and how
+      empty / loading / error look to the user. For a pure-logic change
+      (interfaces, algorithms, data processing, pure configuration) do NOT
+      draw screens: write a one-page declaration into prototype/index.html
+      (or a same-named note file) stating 「本变更不涉及用户可见界面」 plus a
+      one-line reason. Declaring "no user-visible interface" is a recorded
+      decision, not a silent skip - state it with its reason, and keep the same
+      declaration in proposal.md so the two artifacts do not disagree.
+
+      Prototype requirements (原型规范):
+      - Single self-contained HTML file: double-click to open, no build step,
+        no backend dependency. Keep styles and scripts inline; no external
+        CDN, font or image dependency.
+      - Screen by screen (逐屏呈现): one screen per user-visible page or
+        dialog, ordered as the user actually moves through them.
+      - Field states (字段状态): every field is marked required / optional /
+        disabled / read-only (必填 / 可选 / 禁用 / 只读), together with the cue
+        the user relies on to tell it apart (a required marker plus its
+        wording, a disabled presentation plus the reason shown, a read-only
+        presentation). A placeholder alone is not a required cue, and a
+        greyed-out empty box is not a valid way to express 必填.
+      - Three states visible (三态): empty data, loading and error must be
+        visible for every screen; an in-file toggle that demonstrates them is
+        enough.
+      - Per-screen annotation (旁注): each screen states which requirement it
+        answers (the spec requirement it implements) and why it is designed
+        this way (why the field is required, why the state is presented so).
+
+      Alignment (对齐要求): the prototype MUST use the design tokens (colors,
+      spacing, type scale) and the state semantics (how required / disabled /
+      read-only / error / loading are expressed) defined in the project's
+      DESIGN.md. When the project has no DESIGN.md yet, produce one first and
+      then draw the prototype - do not invent a private visual language.
+
+      User confirmation gate (用户确认门, an ordering constraint): after the
+      prototype exists, give the user its file path, ask the user to open it
+      and look through every screen, and obtain an explicit confirmation;
+      record the conclusion (what was confirmed, what must change) in
+      clarify.md's Users & Scenarios section. Re-confirm after any prototype
+      revision. Write design.md and tasks.md only after the user has
+      explicitly confirmed the prototype: design refinement and task
+      breakdown built on an unconfirmed interface are void and must be redone.
+      This layer can only be enforced by these instructions - it is an
+      authoring order, not a mechanical gate, so follow it as written.
+
+      Sections (see template): the template is a checklist to satisfy, not the
+      literal file content - the deliverable is the hand-written single-file
+      prototype/index.html.
+    requires:
+      - specs
   - id: design
     generates: design.md
     description: Technical design document with implementation details
@@ -583,6 +668,15 @@ artifacts:
         execution path. State which action or layer the check is mounted on, and
         why no other flow reusing that action can trip it. State explicitly when
         the change involves no rules.
+      - **Interface & Implementation Mapping (界面与实现映射)**: MANDATORY when
+        the change touches a user-visible interface. One row per prototype
+        screen: the screen, the components / routes / endpoints it maps to, and
+        whether the state markers and validation rules share one source (a field
+        marked required in the prototype must also be required in the backend
+        schema and validation; same for disabled / read-only, so the screen can
+        never tell the user "必填" while the backend treats it as optional).
+        When the change does not touch a user-visible interface, write 「不适用」
+        plus a one-line reason.
       - **Risks / Trade-offs**: Known limitations, things that could go wrong. Format: [Risk] → Mitigation
       - **Migration Plan**: Steps to deploy, rollback strategy (if applicable)
       - **Open Questions**: Unknowns that can safely be answered later without
@@ -600,6 +694,7 @@ artifacts:
       Good design docs explain the "why" behind technical decisions.
     requires:
       - proposal
+      - prototype
   - id: tasks
     generates: tasks.md
     description: Implementation checklist with trackable tasks
@@ -709,6 +804,7 @@ artifacts:
       review subagent.
     requires:
       - specs
+      - prototype
       - design
 apply:
   requires: [tasks]

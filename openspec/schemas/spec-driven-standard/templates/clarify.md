@@ -5,14 +5,31 @@
      decisions, not an interview transcript: when a later decision supersedes
      an earlier one on the same point, rewrite the entry in place — do not
      append a superseded round or keep the superseded conclusion. Cover the
-     dimensions below: problem & intent, scope, related-surface survey,
-     data model, business rules, rule boundary, integration boundaries,
-     architecture direction. Division of labour with Architecture Direction:
+     dimensions below: problem & intent, users & scenarios, scope,
+     related-surface survey, data model, business rules, rule boundary,
+     integration boundaries, architecture direction. Division of labour with
+     Architecture Direction:
      this section records the per-question interview conclusions, while
      Architecture Direction records only the plan summary the user explicitly
      confirmed — the same architecture decision is never written to both. -->
 
 - <!-- decision -->
+
+## Users & Scenarios（用户与场景）
+
+<!-- Required when the change touches a user-visible interface, captured BEFORE
+     any prototype is drawn: who uses it, in which scenario, how often, what
+     they are most afraid of doing wrong, and what they should be able to tell
+     at a glance after the change. When no user-visible interface is involved,
+     one line stating that is enough.
+
+     Also the landing place for the prototype's confirmation outcome: which
+     screens the user opened, what they confirmed, and what they asked to
+     change. Every later change to the prototype is reconfirmed and rewrites
+     this entry in place — the superseded round is not kept. -->
+
+- <!-- 谁用 · 什么场景 · 多久一次 · 最怕误操作什么 · 改动后该一眼看出什么 -->
+- <!-- 原型确认结论：确认了哪些屏 / 要求改什么 / 是否已重新确认 -->
 
 ## Related-Surface Survey
 
