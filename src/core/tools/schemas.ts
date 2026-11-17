@@ -227,13 +227,13 @@ export const orchInitSchema: JSONSchema = {
     recovery: recoverySchema,
     project_stacks: {
       type: "array",
-      description: "项目形态栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 stacks 标签（动态校验，无硬编码值域），否则拒绝执行。存入编排会话状态，作为 skill 加载清单过滤与 must_do 门禁的形态过滤基准。",
+      description: "项目形态栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 stacks 标签（动态校验，无硬编码值域），否则拒绝执行。按项目实际形态声明：前后端同仓时把前后端形态都写进本字段。存入编排会话状态，作为 skill 加载清单过滤、忽略基线与 must_do 门禁的形态过滤基准。",
       items: { type: "string", minLength: 1 },
       minItems: 1,
     },
     project_frameworks: {
       type: "array",
-      description: "项目框架栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 frameworks 标签（动态校验，无硬编码值域），否则拒绝执行。存入编排会话状态，作为 skill 加载清单过滤与 must_do 门禁的框架过滤基准。",
+      description: "项目框架栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 frameworks 标签（动态校验，无硬编码值域），否则拒绝执行。按项目实际框架声明并取并集：前后端同仓时把两端框架都写进本字段，且须与 project_stacks 声明的形态对应。存入编排会话状态，作为 skill 加载清单过滤、忽略基线与 must_do 门禁的框架过滤基准。",
       items: { type: "string", minLength: 1 },
       minItems: 1,
     },

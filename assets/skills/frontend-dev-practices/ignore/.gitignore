@@ -1,0 +1,6 @@
+# 前端依赖、构建产物与缓存
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+.vite/

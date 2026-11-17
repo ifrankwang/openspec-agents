@@ -1,0 +1,5 @@
+# e2e 报告与运行产物
+e2e/reports/
+test-results/
+playwright-report/
+blob-report/

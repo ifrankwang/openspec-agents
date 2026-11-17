@@ -18,6 +18,7 @@ import {
 } from "../views.ts"
 import { taskGroupFromWorkItem } from "../derive.ts"
 import { resolveStepMustDo, SKIP_REASON_FORMAT } from "../tools/gate.ts"
+import { shapeCoverageWarnings } from "../../skills/stacks.ts"
 
 export interface WorkflowStatusViewOptions {
   state: OrchestrateState
@@ -63,13 +64,19 @@ export function renderWorkflowStatusView(
   options: WorkflowStatusViewOptions,
 ): string {
   const body = renderWorkflowStatusViewCore(item, workflow, rec, caller, options)
-  if (options.state.stacks) return body
-  return [
-    "> **旧会话未固化项目栈**：当前只加载通用 skill，技术栈配套 skill 与其必做项不参与。",
-    "> 补齐方式：调用 `opx_orch_init` 并携带 `project_stacks` / `project_frameworks`（可用 `recovery` 恢复当前进度）。",
-    "",
-    body,
-  ].join("\n")
+  const notices: string[] = []
+  if (options.state.stacks) {
+    for (const warning of shapeCoverageWarnings(options.state.stacks)) {
+      notices.push(`> ⚠️ ${warning}`)
+    }
+  } else {
+    notices.push(
+      "> **旧会话未固化项目栈**：当前只加载通用 skill，技术栈配套 skill 与其必做项不参与。",
+      "> 补齐方式：调用 `opx_orch_init` 并携带 `project_stacks` / `project_frameworks`（可用 `recovery` 恢复当前进度）。",
+    )
+  }
+  if (notices.length === 0) return body
+  return [...notices, "", body].join("\n")
 }
 
 function renderWorkflowStatusViewCore(

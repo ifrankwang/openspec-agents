@@ -28,33 +28,45 @@ export function deepFreeze<T>(value: T): T {
 // ─── Fake Git ───
 
 /**
- * 生成目录忽略守卫（ensureGeneratedDirsIgnored）的 git 视图模拟。null = 不启用（既有命令行为不变）。
- * 仅接管守卫专属命令形态（check-ignore -v / rev-parse --verify HEAD / status --porcelain -- .gitignore /
- * add -N -- .gitignore / commit --only -- .gitignore），与既有分流互不误撞。
+ * 忽略基线守卫（ensureIgnoreBaseline）的 git 视图模拟。null = 不启用（既有命令行为不变）。
+ * 按目标文件（.gitignore / .prettierignore）分别描述 index 与工作树状态。
  */
-export interface GitignoreSim {
-  /** `git check-ignore -v` 是否命中（HEAD/工作树版本已含守卫条目）：命中返回 ".gitignore:2:<entry>\t<entry>" */
-  checkIgnoreHit?: boolean
-  /** .gitignore 相对 HEAD 的状态：缺省 clean=已跟踪且干净；untracked=全新未跟踪；user-dirty=有用户其它未提交改动 */
-  gitignoreStatus?: "clean" | "untracked" | "user-dirty"
-  /** .gitignore 是否未纳入 index 跟踪（文件不存在或未 add）：true 时 commit --only 未先 add -N 会报 pathspec 不匹配（贴真实 git） */
+export interface GitignoreFileSim {
+  /** `git status --porcelain -- <f>` 整行覆盖（如 "AM .gitignore"）；设置后优先于 untracked/userDirty。 */
+  statusLine?: string
+  /** 未纳入 index 跟踪：status 输出 "?? <f>"，commit --only 前必须先 add -N。 */
   untracked?: boolean
-  /** .gitignore 之外的已暂存路径（diff --cached --name-only 输出）：非空 = 主仓库暂存区含其它改动 */
-  stagedOutside?: string[]
-  /** 当前检出分支；缺省回落 FakeGitRunner.currentBranch */
-  currentBranch?: string
-  /** detached HEAD：true 时 rev-parse --abbrev-ref HEAD 返回 "HEAD" */
-  detached?: boolean
-  /** 全新未跟踪文件未 add -N 时 commit --only 是否失败（默认 true，模拟真实 git pathspec 不匹配） */
-  commitOnlyFailsWithoutAddN?: boolean
-  /** 强制 commit --only 失败（守卫提交失败分支测试用，如 add 后文件被并发删除的竞态） */
-  forceCommitOnlyFail?: boolean
-  /** 强制 add -N 失败（守卫 intent-to-add 失败降级分支测试用；true 时 add -N 不登记 addNDone 且返回失败） */
+  /** 存在用户未提交改动：status 输出 " M <f>"。 */
+  userDirty?: boolean
+  /** 该文件 add -N 失败。 */
   forceAddNFail?: boolean
-  /** add -N 是否已执行（runChecked 侧写入，用例只读断言） */
+  /** 该文件 commit 失败。 */
+  forceCommitFail?: boolean
+  /** add -N 是否已执行（守卫侧写入，用例只读断言）。 */
   addNDone?: boolean
-  /** commit 成功后 rev-parse --verify HEAD 返回的 oid；缺省回落 defaultBranchOid */
+}
+
+export interface GitignoreSim {
+  /** 目标文件状态映射；缺省视为已跟踪且干净。 */
+  files?: Record<string, GitignoreFileSim>
+  /** `git check-ignore -v` 是否命中。 */
+  checkIgnoreHit?: boolean
+  /** 目标文件之外的已暂存路径（diff --cached --name-only）：非空 = 主仓库暂存区含其它改动。 */
+  stagedOutside?: string[]
+  /** 当前检出分支；缺省回落 FakeGitRunner.currentBranch。 */
+  currentBranch?: string
+  /** detached HEAD：true 时 rev-parse --abbrev-ref HEAD 返回 "HEAD"。 */
+  detached?: boolean
+  /** 是否模拟真实 git 的 pathspec 行为（未跟踪且未 add -N 时 commit 失败）；缺省 true。 */
+  commitOnlyFailsWithoutAddN?: boolean
+  /** 任意文件 commit 失败。 */
+  forceCommitFail?: boolean
+  /** commit 成功后 rev-parse --verify HEAD 返回的 oid；缺省回落 defaultBranchOid。 */
   commitOid?: string
+  /** `git show --name-only --format= HEAD` 输出；缺省回落到本次 commit 的 pathspec。 */
+  showNameOnly?: string
+  /** 最近一次成功提交的 pathspec（守卫侧写入，供 show 缺省回落）。 */
+  lastCommitPaths?: string[]
 }
 
 export class FakeGitRunner implements GitRunner {
@@ -191,9 +203,10 @@ export class FakeGitRunner implements GitRunner {
     if (cmd === "for-each-ref" && rest.some((a) => a.includes("refs/heads"))) {
       return Array.from(this.localBranches).join("\n")
     }
-    // 生成目录忽略守卫专用分流（gitignoreSim 启用时才生效，null = 既有逻辑完全不变）
+    // 忽略基线守卫专用分流（gitignoreSim 启用时才生效，null = 既有逻辑完全不变）
     if (this.gitignoreSim !== null) {
       const sim = this.gitignoreSim
+      const fileSim = (path: string): GitignoreFileSim => sim.files?.[path] ?? {}
       // check-ignore -v -- <entry>：命中 → ".gitignore:2:<entry>\t<entry>"；未命中 → ""（真实 git 退出码 1，run 侧空串即未命中）
       if (cmd === "check-ignore" && rest[0] === "-v" && rest[1] === "--") {
         const entry = rest[2] ?? ""
@@ -203,24 +216,31 @@ export class FakeGitRunner implements GitRunner {
       if (cmd === "rev-parse" && rest[0] === "--abbrev-ref" && rest[1] === "HEAD") {
         return sim.detached === true ? "HEAD" : sim.currentBranch ?? this.currentBranch
       }
-      // status --porcelain -- .gitignore：带 `--` 尾参的定点查询，与既有全量 porcelain 分流区分
-      if (cmd === "status" && rest[0] === "--porcelain" && rest[1] === "--" && rest[2] === ".gitignore") {
-        if (sim.gitignoreStatus === "untracked") return "?? .gitignore"
-        if (sim.gitignoreStatus === "user-dirty") return " M .gitignore"
+      // status --porcelain -- <f>：按文件模拟 index / 工作树状态
+      if (cmd === "status" && rest[0] === "--porcelain" && rest[1] === "--" && rest[2]) {
+        const target = rest[2]
+        const st = fileSim(target)
+        if (st.statusLine !== undefined) return st.statusLine
+        if (st.untracked === true) return `?? ${target}`
+        if (st.userDirty === true) return ` M ${target}`
         return ""
       }
-      // rev-parse --verify HEAD：返回 commitOid（缺省回落 defaultBranchOid）。形态无 refs/heads 前缀，
-      // 与 runChecked 侧 refs/heads/<branch> 存在性校验分流互不干扰
+      // rev-parse --verify HEAD：返回 commitOid（缺省回落 defaultBranchOid）
       if (cmd === "rev-parse" && rest[0] === "--verify" && rest[1] === "HEAD") {
         return sim.commitOid ?? this.defaultBranchOid
       }
-      // diff --cached --name-only：stagedOutside 非空 = 主仓库暂存区含 .gitignore 之外的已暂存改动
+      // diff --cached --name-only：stagedOutside 非空 = 主仓库暂存区含目标文件之外的已暂存改动
       if (cmd === "diff" && rest[0] === "--cached" && rest[1] === "--name-only") {
         return (sim.stagedOutside ?? []).join("\n")
       }
-      // add -N -- .gitignore：登记到 sim（intent-to-add），供 commit --only 分流判定
-      if (cmd === "add" && rest[0] === "-N" && rest[1] === "--" && rest[2] === ".gitignore") {
-        sim.addNDone = true
+      // show --name-only --format= HEAD：缺省返回本次提交 path
+      if (cmd === "show" && rest[0] === "--name-only" && rest.includes("HEAD")) {
+        if (sim.showNameOnly !== undefined) return sim.showNameOnly
+        return (sim.lastCommitPaths ?? []).join("\n")
+      }
+      // add -N -- <f>：登记到 sim（intent-to-add），供 commit --only 分流判定
+      if (cmd === "add" && rest[0] === "-N" && rest[1] === "--" && rest[2]) {
+        fileSim(rest[2]).addNDone = true
         return ""
       }
     }
@@ -317,30 +337,44 @@ export class FakeGitRunner implements GitRunner {
         : { success: false, stdout: "", stderr: `fatal: refs/heads/${branch}: not a valid ref`, exitCode: 128 }
     }
 
-    // 生成目录忽略守卫专用分流（runChecked 侧）：add -N / commit --only -- .gitignore
+    // 忽略基线守卫专用分流（runChecked 侧）：add -N / commit --only / reset 回滚
     if (this.gitignoreSim !== null) {
       const sim = this.gitignoreSim
-      if (cmd === "add" && args[1] === "-N" && args[2] === "--" && args[3] === ".gitignore") {
-        if (sim.forceAddNFail === true) {
+      const fileSim = (path: string): GitignoreFileSim => sim.files?.[path] ?? {}
+      if (cmd === "add" && args[1] === "-N" && args[2] === "--" && args[3]) {
+        if (fileSim(args[3]).forceAddNFail === true) {
           return { success: false, stdout: "", stderr: "fatal: add -N 失败", exitCode: 128 }
         }
-        sim.addNDone = true
+        fileSim(args[3]).addNDone = true
         return { success: true, stdout: "", stderr: "", exitCode: 0 }
       }
-      // commit -m <msg> --only -- .gitignore：全新未跟踪且未 add -N 时模拟真实 pathspec 不匹配错误
       const dashIdx = args.indexOf("--")
-      if (cmd === "commit" && args.includes("--only") && dashIdx >= 0 && args[dashIdx + 1] === ".gitignore") {
-        if (sim.forceCommitOnlyFail === true) {
+      if (cmd === "commit" && args.includes("--only") && dashIdx >= 0) {
+        const committed = args.slice(dashIdx + 1)
+        if (sim.forceCommitFail === true || committed.some((f) => fileSim(f).forceCommitFail === true)) {
           return { success: false, stdout: "", stderr: "fatal: commit --only 失败", exitCode: 1 }
         }
-        if (sim.untracked === true && sim.commitOnlyFailsWithoutAddN !== false && sim.addNDone !== true) {
+        const pending = committed.find(
+          (f) => fileSim(f).untracked === true && fileSim(f).addNDone !== true,
+        )
+        if (pending !== undefined && sim.commitOnlyFailsWithoutAddN !== false) {
           return {
             success: false,
             stdout: "",
-            stderr: "error: pathspec '.gitignore' did not match any file(s) known to git",
+            stderr: `error: pathspec '${pending}' did not match any file(s) known to git`,
             exitCode: 1,
           }
         }
+        sim.lastCommitPaths = committed
+        for (const f of committed) {
+          const st = fileSim(f)
+          st.untracked = false
+          st.statusLine = undefined
+        }
+        return { success: true, stdout: "", stderr: "", exitCode: 0 }
+      }
+      if (cmd === "reset" && args[1] === "--") {
+        for (const f of args.slice(2)) fileSim(f).addNDone = false
         return { success: true, stdout: "", stderr: "", exitCode: 0 }
       }
     }

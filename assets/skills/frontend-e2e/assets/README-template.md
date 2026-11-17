@@ -95,7 +95,7 @@ test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ 
 - 真实环境验证单独出一份：`e2e/reports/playwright-report/real/`，不覆盖 mock 全量报告。
 - 步骤截图在报告的 `assets/` 下（生成报告时从运行痕迹复制，HTML 自包含，痕迹目录被系统清掉也能看图）。
 - trace / video / 失败现场等运行痕迹写系统临时目录 `<项目目录名>-e2e/test-results-<端口>`（`npm run test:e2e` 启动时打印路径，系统定期清理，不进仓库）。
-- 报告根与痕迹目录的路径公式只在 `e2e/reporting/paths.mjs` 实现；需把 `e2e/reports/` 加入 `.gitignore` 与 Vite 的 watch ignore。
+- 报告根与痕迹目录的路径公式只在 `e2e/reporting/paths.mjs` 实现；`e2e/reports/` 不入库（忽略条目由项目初始化写入基线），并排除出 dev server 的 watch 范围。
 - 一次性验证要单独出一份报告时，用 `E2E_REPORT_DIR=$(mktemp -d)`，不要写进仓库。
 - `e2e/fixtures/` 与 `<名称>.source.json` 溯源记录是交付物，留在项目内随代码提交。
 

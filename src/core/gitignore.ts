@@ -1,224 +1,358 @@
-import path from "node:path"
 import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { runGit, runGitChecked, listStagedPathsOutside } from "./git.ts"
+import {
+  collectIgnoreBaseline,
+  normalizeIgnoreLine,
+  type IgnoreBaselineEntry,
+} from "./ignore-baseline.ts"
+import type { SessionStacks } from "../skills/stacks.ts"
 
 /**
- * 插件生成的目录清单：编排框架在目标项目根下生成、不应进入版本库的目录。
- * 本清单是忽略判定与补齐写入的唯一来源（将来增删生成目录只改这里）。
+ * 忽略基线守卫。
+ *
+ * 两类来源合并写入项目根同名文件：
+ * - 强制覆盖组（GENERATED_DIR_ENTRIES）：编排产物，用户显式 `!` 否定后仍补齐；
+ * - 基线条目（框架通用基线 + 形态命中的 skill 的 ignore/ 资产）：用户显式 `!<entry>`
+ *   视为显式保留，尊重其意图、绝不追加（git 后写优先，追加等于推翻用户意图）。
+ *
+ * 提交按「逐文件判定 + 单次原子提交」进行：只放行「tracked 且干净」与「纯未跟踪」两种状态，
+ * 其余状态（含已暂存 `A `、有工作树改动 ` M`）一律只写工作树不提交，避免夹带用户改动。
  */
+
 export const GENERATED_DIR_ENTRIES = [".worktree/", "openspec/states/"] as const
+const COMMIT_MESSAGE = "chore(ignore): add project ignore baseline"
 
-const GITIGNORE_REL = ".gitignore"
-const COMMIT_MESSAGE = "chore(gitignore): ignore openspec orchestration artifacts"
-
-export interface EnsureGeneratedDirsIgnoredOpts {
-  /** 会话固化的基准分支；null/缺省 = 无法判定 → 只写工作树不提交（保守语义）。 */
+export interface EnsureIgnoreBaselineOpts {
   baseBranch?: string | null
-  /** fix=none 的独立审查会话：跳过版本库提交，仍写工作树。 */
   skipCommit?: boolean
+  /** 会话项目栈；缺省/null = 旧会话未固化项目栈，只补框架级基线。 */
+  session?: SessionStacks | null
 }
 
-/** 明确条目的归一化：去首尾空白与尾部斜杠，使 `.worktree` 与 `.worktree/` 等价。 */
+/** 单个目标文件的计划与安全判定结果。 */
+interface FilePlan {
+  target: string
+  existsBefore: boolean
+  before: string | null
+  /** 待追加条目（原始行），强制组在前、基线条目在后。 */
+  missing: string[]
+  /** 追加条目涉及的基线来源（去重）。 */
+  sources: string[]
+  /** 用户显式 `!<entry>` 保留的基线条目（原始行）。 */
+  preserved: string[]
+  /** `git status --porcelain -- <f>` 原始输出（trim 后）。 */
+  statusRaw: string
+  /** 纯未跟踪：唯一状态行恰好为 `?? <f>`。 */
+  untrackedOnly: boolean
+  /** 有用户改动（已暂存、已修改、混合状态等），不允许提交。 */
+  userDirty: boolean
+}
+
 function normalizeEntry(line: string): string {
-  return line.trim().replace(/\/+$/, "")
+  return normalizeIgnoreLine(line)
 }
 
 /**
- * 文本解析：只认「明确条目」，返回被覆盖的生成目录归一化集合。
- * - 忽略注释行与空行；
- * - `!` 否定行把对应目录判为未覆盖（git 后写优先口径的保守简化）；
- * - 含通配符的路径（如 `openspec/*`）归一化后不在清单内，一律不算覆盖，避免误判；
- * - CRLF 行尾经 split(/\r?\n/) 兼容。
+ * 计算目标文件已有的覆盖与显式否定集合。
+ * 覆盖判定用归一化键（去尾部斜杠）；`!x` 行从覆盖集合移除并记入否定集合。
  */
-function explicitlyCovered(content: string): Set<string> {
-  const wanted = new Set<string>(GENERATED_DIR_ENTRIES.map(normalizeEntry))
+function analyzeCoverage(content: string | null): { covered: Set<string>; negated: Set<string> } {
   const covered = new Set<string>()
   const negated = new Set<string>()
-  for (const raw of content.split(/\r?\n/)) {
+  for (const raw of (content ?? "").split(/\r?\n/)) {
     const line = raw.trim()
-    if (line === "" || line.startsWith("#")) continue
-    const isNegation = line.startsWith("!")
-    const normalized = normalizeEntry(isNegation ? line.slice(1) : line)
-    if (!wanted.has(normalized)) continue
-    if (isNegation) negated.add(normalized)
-    else covered.add(normalized)
+    if (line.length === 0 || line.startsWith("#")) continue
+    if (line.startsWith("!")) {
+      const body = normalizeEntry(line.slice(1))
+      negated.add(body)
+      covered.delete(body)
+      continue
+    }
+    covered.add(normalizeEntry(line))
   }
-  for (const n of negated) covered.delete(n)
-  return covered
+  return { covered, negated }
 }
 
 /**
- * `git check-ignore -v` 辅助校验：命中来源须为工作树内 `.gitignore`。
- * 仅作辅助——覆盖与否完全由文本解析的明确条目决定，check-ignore 命中不单独构成覆盖，
- * 未命中也不推翻已有明确条目。返回可核对的命中来源说明。
+ * 合并强制组与基线条目，判定每个目标文件需要追加什么、哪些被用户显式保留。
+ * wanted 集合包含「本次要写出的全部条目」，因此重复 init 不会重复追加。
  */
+function planTarget(
+  target: string,
+  baseline: IgnoreBaselineEntry[],
+  existsBefore: boolean,
+  before: string | null,
+  statusRaw: string,
+): FilePlan {
+  const { covered, negated } = analyzeCoverage(before)
+  const missing: string[] = []
+  const sources: string[] = []
+  const preserved: string[] = []
+  const seen = new Set<string>()
+
+  const push = (line: string, source?: string): void => {
+    const key = normalizeEntry(line)
+    if (key.length === 0 || seen.has(key) || covered.has(key)) return
+    seen.add(key)
+    missing.push(line)
+    if (source && !sources.includes(source)) sources.push(source)
+  }
+
+  // 强制覆盖组：纳入 wanted 集合，但不因用户 `!` 否定而放弃补齐。
+  for (const entry of GENERATED_DIR_ENTRIES) push(entry)
+
+  for (const { line, source } of baseline) {
+    const key = normalizeEntry(line)
+    if (seen.has(key) || covered.has(key)) continue
+    if (negated.has(key)) {
+      // 用户显式保留：尊重其意图，绝不追加。
+      if (!preserved.includes(line)) preserved.push(line)
+      continue
+    }
+    push(line, source)
+  }
+
+  const lines = statusRaw.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.length > 0)
+  const untrackedOnly = lines.length === 1 && lines[0] === `?? ${target}`
+  const clean = lines.length === 0
+  return {
+    target,
+    existsBefore,
+    before,
+    missing,
+    sources,
+    preserved,
+    statusRaw,
+    untrackedOnly,
+    userDirty: !clean && !untrackedOnly,
+  }
+}
+
+/** 保留文件原有换行风格（CRLF/无尾换行），不存在时从头写。 */
+function appendMissing(before: string | null, missing: readonly string[]): string {
+  if (missing.length === 0) return before ?? ""
+  const eol = before && before.includes("\r\n") ? "\r\n" : "\n"
+  const base = before ?? ""
+  const prefix = base.length > 0 && !base.endsWith("\n") ? eol : ""
+  return `${base}${prefix}${missing.join(eol)}${eol}`
+}
+
+/** 强制组条目是否真的生效（被上层 .gitignore / 全局 excludes 覆盖时提示人工确认）。 */
 async function probeIgnoreSources(repoRoot: string): Promise<string[]> {
   const notes: string[] = []
   for (const entry of GENERATED_DIR_ENTRIES) {
     const out = await runGit(repoRoot, ["check-ignore", "-v", "--", entry])
-    const firstLine = out.split("\n")[0]?.trim() ?? ""
-    // 输出形如 ".gitignore:2:.worktree/\t.worktree/"；首段即命中来源文件
-    const source = firstLine ? firstLine.split(":")[0] : ""
-    notes.push(source === GITIGNORE_REL
-      ? `\`${entry}\` 命中来源 \`${GITIGNORE_REL}\``
-      : `\`${entry}\` 未确认命中来源`)
+    if (!out) {
+      notes.push(`\`${entry}\` 未确认命中来源`)
+      continue
+    }
+    const source = out.split(/\r?\n/)[0]?.split("\t")[0]?.split(":").slice(0, -2).join(":") ?? ""
+    const fileName = source.split(/[\\/]/).pop() ?? source
+    notes.push(
+      fileName === ".gitignore" ? `\`${entry}\` 命中来源 \`.gitignore\`` : `\`${entry}\` 未确认命中来源`,
+    )
   }
   return notes
 }
 
-/**
- * 只追加缺失行，保留原有内容与换行格式（CRLF 文件继续用 CRLF），不改写其它行。
- * 「存在但为空」与「不存在」同等处理：空文件追加直接从头写条目，不产前导空行。
- */
-function appendMissing(before: string | null, missing: readonly string[]): string {
-  if (missing.length === 0) return before ?? ""
-  if (before === null || before.trim() === "") return `${missing.join("\n")}\n`
-  const eol = before.includes("\r\n") ? "\r\n" : "\n"
-  const hasTrailingNewline = /\r?\n$/.test(before)
-  const head = hasTrailingNewline ? before : `${before}${eol}`
-  return `${head}${missing.join(eol)}${eol}`
-}
-
-interface CommitPrecheck {
-  /** 是否允许进入版本库提交。 */
-  allowed: boolean
-  /** 未提交原因（markdown 片段用）。 */
-  reason: string
-  /** `.gitignore` 是否属于全新未跟踪文件（提交前须 add -N）。 */
-  willBeUntracked: boolean
+async function readTarget(repoRoot: string, target: string): Promise<string | null> {
+  try {
+    return await readFile(join(repoRoot, target), "utf-8")
+  } catch {
+    return null
+  }
 }
 
 /**
- * 提交前置判定（必须在写入工作树之前执行，否则本次追加会被误判成用户改动）：
- * 1) 当前检出分支 == 基准分支（detached / 跨分支一律不提交，避免提交到错误分支）；
- * 2) 主仓库 index 除 `.gitignore` 外无其它已暂存改动（复用 git.ts 共享检查，DRY）；
- * 3) `.gitignore` 相对 HEAD 无用户其它未提交改动（本次只允许追加我们的条目）。
+ * 版本库提交的全局前置条件（与具体文件无关）：只审不修会话、detached HEAD、跨分支、
+ * 暂存区另有改动。返回 null 表示可提交。
  */
 async function precheckCommit(
   repoRoot: string,
-  opts: EnsureGeneratedDirsIgnoredOpts,
-  beforeExists: boolean,
-): Promise<CommitPrecheck> {
-  if (opts.skipCommit) {
-    return { allowed: false, reason: "当前会话为只审不修的独立审查会话，跳过版本库提交", willBeUntracked: false }
-  }
-  const currentBranch = (await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
-  if (currentBranch === "" || currentBranch === "HEAD") {
-    return { allowed: false, reason: "当前处于 detached HEAD，无法确认提交目标分支", willBeUntracked: false }
-  }
-  // baseBranch 缺省 = 会话尚未固化基准分支（新会话保守语义）：以当前检出分支为提交目标，
-  // 同分支即可提交；显式传入时严格比较，跨分支一律不静默提交到错误分支。
-  const effectiveBase = opts.baseBranch ?? currentBranch
-  if (currentBranch !== effectiveBase) {
-    return {
-      allowed: false,
-      reason: `当前检出分支 \`${currentBranch}\` 与基准分支 \`${effectiveBase}\` 不同`,
-      willBeUntracked: false,
-    }
-  }
+  opts: EnsureIgnoreBaselineOpts,
+  targets: readonly string[],
+): Promise<string | null> {
+  if (opts.skipCommit) return "当前会话为只审不修的独立审查会话，跳过版本库提交"
+  const branch = await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])
+  if (!branch || branch === "HEAD") return "当前处于 detached HEAD，无法确认提交目标分支"
+  const base = opts.baseBranch ?? null
+  if (base && branch !== base) return `当前检出分支 \`${branch}\` 与基准分支 \`${base}\` 不同`
+  const stagedOutside = await listStagedPathsOutside(repoRoot, [...targets])
+  if (stagedOutside.length > 0) return "主仓库暂存区含其它已暂存改动，提交会夹带非本次内容"
+  return null
+}
 
-  const statusOut = await runGit(repoRoot, ["status", "--porcelain", "--", GITIGNORE_REL])
-  const entries = statusOut.split("\n").map((l) => l.trim()).filter(Boolean)
-  const untrackedOnly = entries.length === 1 && /^\?\?\s+\.gitignore$/.test(entries[0])
-  let willBeUntracked = false
-  let userDirty = false
-  if (!beforeExists) {
-    // 文件不存在：本次新建后即全新未跟踪；status 里若已有 .gitignore 条目属反常状态，保守不提交
-    willBeUntracked = entries.length === 0
-    userDirty = entries.length > 0
-  } else if (entries.length === 0) {
-    // 已跟踪且相对 HEAD 干净
-    willBeUntracked = false
-  } else if (untrackedOnly) {
-    // 未跟踪（用户预建或此前守卫写入未提交）：按全新未跟踪文件处理
-    willBeUntracked = true
-  } else {
-    userDirty = true
-  }
-  if (userDirty) {
-    return {
-      allowed: false,
-      reason: `\`${GITIGNORE_REL}\` 存在用户其它未提交改动，提交会夹带非本次内容`,
-      willBeUntracked: false,
+function renderBaselineLines(plans: readonly FilePlan[], hasPrettierBaseline: boolean): string[] {
+  const lines: string[] = []
+  for (const plan of plans) {
+    if (plan.missing.length === 0) {
+      lines.push(`- **忽略基线**: \`${plan.target}\` 已齐全，未改动文件。`)
+      continue
+    }
+    const action = plan.existsBefore ? "补齐" : "新建"
+    const entries = plan.missing.map((e) => `\`${e}\``).join("、")
+    lines.push(`- **忽略基线**: \`${plan.target}\` ${action} ${plan.missing.length} 条（${entries}）。`)
+    if (plan.sources.length > 0) {
+      lines.push(`- **基线来源**: \`${plan.target}\` ← ${plan.sources.join("、")}。`)
     }
   }
-  const stagedOutside = await listStagedPathsOutside(repoRoot, [GITIGNORE_REL])
-  if (stagedOutside.length > 0) {
-    return {
-      allowed: false,
-      reason: "主仓库暂存区含其它已暂存改动，提交会夹带非本次内容",
-      willBeUntracked: false,
-    }
+  for (const plan of plans) {
+    if (plan.preserved.length === 0) continue
+    const entries = plan.preserved.map((e) => `\`!${e}\``).join("、")
+    lines.push(`- **用户显式保留**: \`${plan.target}\` 中的 ${entries} 未追加（用户已显式保留）。`)
   }
-  return { allowed: true, reason: "", willBeUntracked }
+  if (!hasPrettierBaseline) {
+    lines.push("- **`.prettierignore` 基线**: 当前声明的形态没有 `.prettierignore` 基线，未创建该文件。")
+  }
+  return lines
+}
+
+function renderCommitLine(
+  commitTargets: readonly string[],
+  reasons: readonly string[],
+): string | null {
+  if (commitTargets.length === 0) return null
+  const list = commitTargets.map((t) => `\`${t}\``).join("、")
+  if (reasons.length > 0) {
+    return `- **版本库提交**: 未提交（原因：${reasons.join("；")}）；本次改动只写工作树，未进版本库。`
+  }
+  return null
 }
 
 /**
- * 编排前置守卫：确保目标项目根 `.gitignore` 明确覆盖插件生成目录，并在可安全提交时
- * 以「只含 .gitignore 一处变更」的独立 commit 原子提交。
- *
- * 两层语义：工作树写入（生效）无条件执行；版本库提交仅当「当前检出分支 == 基准分支」、
- * index 干净、`.gitignore` 相对 HEAD 无用户其它改动时进行。不满足时只写工作树、不提交，
- * 返回 markdown 说明原因。返回体不含流转方向提示。
+ * 确保项目根忽略文件覆盖「编排产物 + 技术栈基线」，并在安全时提交。
+ * repoRoot 为目标项目根（或 worktree 根）；返回 markdown 报告片段（由调用方拼接）。
  */
-export async function ensureGeneratedDirsIgnored(
+export async function ensureIgnoreBaseline(
   repoRoot: string,
-  opts: EnsureGeneratedDirsIgnoredOpts = {},
+  opts: EnsureIgnoreBaselineOpts = {},
 ): Promise<string> {
-  const gitignorePath = path.join(repoRoot, GITIGNORE_REL)
-  let before: string | null = null
-  try {
-    before = await readFile(gitignorePath, "utf-8")
-  } catch {
-    before = null
-  }
-  const beforeExists = before !== null
+  const baseline = collectIgnoreBaseline(opts.session ?? null)
+  const baselineByTarget = new Map(baseline.map((b) => [b.target, b.entries]))
+  const targets = [...new Set([".gitignore", ...baseline.map((b) => b.target)])].sort((a, b) =>
+    a.localeCompare(b),
+  )
 
-  // 文本解析（明确条目） + git check-ignore -v（辅助校验命中来源）双重
-  const covered = explicitlyCovered(before ?? "")
-  const probeNotes = await probeIgnoreSources(repoRoot)
-  const missing = GENERATED_DIR_ENTRIES.filter((e) => !covered.has(normalizeEntry(e)))
-
-  // 提交前置判定必须在写入前完成（见 precheckCommit）
-  const precheck = await precheckCommit(repoRoot, opts, beforeExists)
-  const needCommit = missing.length > 0 || precheck.willBeUntracked
-
-  if (missing.length > 0) {
-    await writeFile(gitignorePath, appendMissing(before, missing), "utf-8")
+  const plans: FilePlan[] = []
+  for (const target of targets) {
+    const before = await readTarget(repoRoot, target)
+    const statusRaw = await runGit(repoRoot, ["status", "--porcelain", "--", target])
+    plans.push(
+      planTarget(target, baselineByTarget.get(target) ?? [], before !== null, before, statusRaw),
+    )
   }
 
-  const addedNote = missing.length > 0
-    ? `本次补齐：${missing.map((e) => `\`${e}\``).join("、")}`
-    : "条目齐全，未改动文件"
-  const lines: string[] = [
-    `- **生成目录忽略**: 已写入并生效（${addedNote}）。`,
-    `- **辅助校验**: ${probeNotes.join("；")}。`,
-  ]
+  const globalReason = await precheckCommit(repoRoot, opts, targets)
+  const dirtyReasons = plans
+    .filter((p) => p.userDirty)
+    .map((p) => `\`${p.target}\` 存在用户其它未提交改动，提交会夹带非本次内容`)
+  const reasons = globalReason ? [globalReason] : []
+  reasons.push(...dirtyReasons)
 
-  if (!precheck.allowed || !needCommit) {
-    const reason = !precheck.allowed
-      ? precheck.reason
-      : "条目已纳入版本库，无变更需要提交"
-    lines.push(`- **版本库提交**: 未提交（原因：${reason}）；已生效、未提交。`)
+  // 写入工作树：先落盘，再做提交前置断言（避免断言失败后留下半成品）。
+  for (const plan of plans) {
+    if (plan.missing.length === 0) continue
+    await writeFile(join(repoRoot, plan.target), appendMissing(plan.before, plan.missing), "utf-8")
+  }
+
+  // pathspec 只包含本次实际写入或需 add -N 建立跟踪的文件；不存在的文件绝不进 pathspec。
+  const commitTargets = plans
+    .filter((p) => p.missing.length > 0 || p.untrackedOnly)
+    .map((p) => p.target)
+
+  const lines = renderBaselineLines(
+    plans,
+    baseline.some((b) => b.target === ".prettierignore"),
+  )
+  const probe = await probeIgnoreSources(repoRoot)
+  if (probe.length > 0) lines.push(`- **辅助校验**: ${probe.join("；")}。`)
+
+  if (commitTargets.length === 0) return lines.join("\n")
+
+  const blocked = renderCommitLine(commitTargets, reasons)
+  if (blocked) {
+    lines.push(blocked)
     return lines.join("\n")
   }
 
-  // 全新未跟踪文件：intent-to-add（不 stage 内容、不动用户其它暂存），禁止 plain git add
-  if (precheck.willBeUntracked) {
-    const addRes = await runGitChecked(repoRoot, ["add", "-N", "--", GITIGNORE_REL])
-    if (!addRes.success) {
-      lines.push(`- **版本库提交**: 未提交（原因：\`git add -N\` 失败：${addRes.stderr}）；已生效、未提交。`)
+  // 提交前再断言：暂存区为空、逐文件状态仍是「干净」或「纯未跟踪」。
+  const staged = await runGit(repoRoot, ["diff", "--cached", "--name-only"])
+  if (staged) {
+    lines.push(renderCommitLine(commitTargets, ["主仓库暂存区含其它已暂存改动，提交会夹带非本次内容"])!)
+    return lines.join("\n")
+  }
+  // 写入后逐文件复核：允许「无输出」（已跟踪且改动已落盘）、` M <f>`（本次写入的改动）
+  // 与 `?? <f>`（新建文件，需 add -N 建立跟踪）；其余状态说明出现预期外改动，拒绝提交。
+  const needsIntentToAdd: string[] = []
+  for (const target of commitTargets) {
+    const status = await runGit(repoRoot, ["status", "--porcelain", "--", target])
+    const statusLines = status.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean)
+    if (statusLines.length === 0) continue
+    if (statusLines.length === 1 && statusLines[0] === `?? ${target}`) {
+      needsIntentToAdd.push(target)
+      continue
+    }
+    if (statusLines.length === 1 && statusLines[0] === ` M ${target}`) continue
+    lines.push(
+      renderCommitLine(commitTargets, [
+        `\`${target}\` 在写入后出现预期外状态（${statusLines.join(" / ")}），提交会夹带非本次内容`,
+      ])!,
+    )
+    return lines.join("\n")
+  }
+
+  // 全新未跟踪文件先 add -N 建立跟踪；失败则回滚已加的 intent-to-add 并只写工作树。
+  const added: string[] = []
+  for (const target of needsIntentToAdd) {
+    const res = await runGitChecked(repoRoot, ["add", "-N", "--", target])
+    if (!res.success) {
+      await rollbackIntentToAdd(repoRoot, added)
+      lines.push(
+        renderCommitLine(commitTargets, [`\`git add -N\` 失败（${res.stderr || "未知错误"}）`])!,
+      )
       return lines.join("\n")
     }
+    added.push(target)
   }
-  // --only + pathspec 限定：只提交 .gitignore，隔离其它已暂存文件；断言保证工作树全量内容
-  // 就是「HEAD 版本 + 本次追加的两行」，不会夹带用户改动。
-  const commitRes = await runGitChecked(repoRoot, ["commit", "-m", COMMIT_MESSAGE, "--only", "--", GITIGNORE_REL])
-  if (!commitRes.success) {
-    lines.push(`- **版本库提交**: 未提交（原因：\`git commit --only\` 失败：${commitRes.stderr}）；已生效、未提交。`)
+
+  const commit = await runGitChecked(repoRoot, [
+    "commit",
+    "-m",
+    COMMIT_MESSAGE,
+    "--only",
+    "--",
+    ...commitTargets,
+  ])
+  if (!commit.success) {
+    await rollbackIntentToAdd(repoRoot, added)
+    lines.push(
+      renderCommitLine(commitTargets, [`\`git commit --only\` 失败（${commit.stderr || "未知错误"}）`])!,
+    )
     return lines.join("\n")
   }
-  const oid = (await runGit(repoRoot, ["rev-parse", "--verify", "HEAD"])).trim()
-  lines.push(`- **版本库提交**: 已原子提交，仅含 \`${GITIGNORE_REL}\` 一处变更（commit \`${oid}\`，消息 \`${COMMIT_MESSAGE}\`）。`)
+
+  const oid = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD"])
+  const list = commitTargets.map((t) => `\`${t}\``).join("、")
+  lines.push(`- **版本库提交**: 已提交，仅含 ${list}（commit \`${oid}\`，消息 \`${COMMIT_MESSAGE}\`）。`)
+
+  // 提交后核验：只含本次目标文件。
+  const shown = (await runGit(repoRoot, ["show", "--name-only", "--format=", "HEAD"]))
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .sort()
+  const expected = [...commitTargets].sort()
+  if (shown.join("\n") !== expected.join("\n")) {
+    lines.push(
+      `- **提交核验**: 提交内容与预期不一致（实际：${shown.join("、") || "无"}；预期：${expected.join("、")}），请人工核对。`,
+    )
+  }
   return lines.join("\n")
+}
+
+/** 提交失败时回滚 intent-to-add，避免下次预检把 `" A "` 误判为用户改动。 */
+async function rollbackIntentToAdd(repoRoot: string, files: readonly string[]): Promise<void> {
+  if (files.length === 0) return
+  await runGitChecked(repoRoot, ["reset", "--", ...files])
 }
