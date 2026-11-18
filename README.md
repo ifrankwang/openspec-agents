@@ -3,7 +3,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Built for OpenSpec](https://img.shields.io/badge/built%20for-OpenSpec-6b46c1.svg)
 
-`openspec-agents` 是 [OpenSpec](https://openspec.sh) 的配套插件，兼容 Claude Code / Codex / ZCode / DeepSeek Harness / OpenCode：提案阶段把标准钉得更死（澄清在前、改动范围与契约变更逐条确认），实施阶段写与审查分离——实现由一个 Agent 写，审查由另一个 Agent 独立判定；完整模式下检查、验收、质量审查再拆给不同角色，按生产级标准把控到收口。
+`openspec-agents` 是 [OpenSpec](https://openspec.sh) 的配套插件，兼容 Claude Code / Codex / ZCode / DeepSeek Harness / OpenCode：提案前先澄清需求，并对提案文档做一轮复核；实施在独立 worktree 中进行，不影响主仓库，每轮以一个任务组为单位推进；实施由开发与审核两个 Agent 分工，功能有问题或质量不通过时不允许结束，问题会退回开发 Agent 修复；内置多类规范 skill 作为质量审查基准，支持 Vue 前端与 Java 后端项目。
 
 前提：项目正在使用 OpenSpec 管理需求。
 
@@ -31,7 +31,7 @@ Claude Code 和 DeepSeek Harness 自带的工作流能力擅长**并行完成大
 | 跨工具 | 各家私有 | 同一套流程跨工具通用 |
 | 中断之后 | 进度依附于对话或单次运行 | 进度记录在仓库中，换会话、换工具均可继续 |
 
-一句话：原生工作流负责把任务做完，这个插件负责判定产出是否达到生产级。
+一句话：原生工作流负责把任务做完，这个插件负责判定产出是否达到可交付标准。
 
 ## 局限
 

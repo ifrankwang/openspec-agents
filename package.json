@@ -1,7 +1,7 @@
 {
   "name": "@ifrankwang/openspec-agents",
   "version": "1.9.0",
-  "description": "OpenSpec companion plugin for AI coding agents (Claude Code, Codex, ZCode, DeepSeek Harness, OpenCode): a stricter proposal standard plus multi-agent implementation and review, gated to production-grade standards",
+  "description": "OpenSpec process plugin: proposals clarify requirements up front and get a dedicated review pass; implementation runs in an isolated worktree, grouped by task unit per round; development and review run on separate agents — a change cannot finish while functional or quality issues remain open, they loop back to the developer agent; bundled standards define the review baseline, with Vue frontend and Java backend kits included",
   "author": "ifrankwang",
   "license": "MIT",
   "homepage": "https://github.com/ifrankwang/openspec-agents#readme",
