@@ -3,16 +3,16 @@
  *
  * 背景：worktree 模式下每个新 change 是全新状态账本 + 全新 Sonar 项目，tool review 全量扫描把
  * 存量已豁免安全问题重新报为阻塞。豁免清单把 dismissed 裁定结论落为 (rule+file+line) 跨 change 共享，
- * 后续 change 命中时降为 Info 级，不阻塞、无需重复豁免。
+ * 后续 change 命中时直接抑制、不入库（不改级别、不写 exempted_hit）。
  *
  * 覆盖：
  * a) 清单读写与幂等 upsert（同 key 刷新不重复累积）
  * b) 专用锁并发串行（两个 changeId 并行写清单不丢更新）
- * c) 两轮不同 changeId 命中降级：第一轮报 High → dev 豁免 → dismissed → 写清单；
- *    第二轮同 rule+file+line 上报 → 命中 → 降为 Info → 不阻塞、无需重复豁免
- * d) Info 级 issue 豁免申请被拒（tools/submit.ts 现有逻辑 + 降级联动）
+ * c) 两轮不同 changeId 命中抑制：第一轮报 High → dev 豁免 → dismissed → 写清单；
+ *    第二轮同 rule+file+line 上报 → 命中 → 抑制不入库、按通过收口
+ * d) Info 级 issue 豁免申请被拒（tools/submit.ts 现有逻辑）
  * e) giveup 不写清单（giveup 走 applyCheckpointGiveup，不经豁免裁定路径）
- * f) 降级后仅存量豁免问题的 change 里 failed 提交被 assertFailedHasReason 拒绝（防死锁回归）
+ * f) 无清单时同类 High + failed 正常构成理由（对照组）
  */
 import { describe, expect, test, afterAll } from "bun:test"
 import { writeFileSync, readFileSync, existsSync } from "node:fs"
@@ -24,7 +24,7 @@ import {
   setupToImplement, driveToVerifyTool, readItem, taskIdsOf,
 } from "./helpers-workflow"
 import {
-  readExemptions, writeExemptions, upsertExemption, exemptionKeyOf, applyExemptionDowngrade,
+  readExemptions, writeExemptions, upsertExemption, exemptionKeyOf,
   EXEMPTIONS_FILE,
 } from "../src/core/exemptions"
 import type { ExemptionRecord } from "../src/core/exemptions"
@@ -139,10 +139,10 @@ describe("b. 专用锁并发串行", () => {
   })
 })
 
-// ── c/f: 两轮不同 changeId 命中降级 + 防死锁 ──
+// ── c/f: 两轮不同 changeId 命中抑制 ──
 
-describe("c/f. 跨 change 命中降级与防死锁", () => {
-  test("c1. 第一轮 dismissed 写清单；第二轮同 rule+file+line 命中降级（failed 被拒防死锁 → Info 提报通过）", async () => {
+describe("c/f. 跨 change 命中抑制", () => {
+  test("c1. 第一轮 dismissed 写清单；第二轮同 rule+file+line 命中抑制，不入库并按通过收口", async () => {
     const { wt, root } = fresh()
     try {
       // ── 第一轮 changeId1：tool reviewer 报 High → dev 豁免 → dismissed → 写清单 ──
@@ -178,39 +178,31 @@ describe("c/f. 跨 change 命中降级与防死锁", () => {
         { change_id: CID2, step_id: "implement", verdict: "passed", completed_task_ids: taskIdsOf(item2) },
         ctx2.dev
       )
-      // f1：报 High + failed → 命中清单被降为 Info → assertFailedHasReason 拒绝（防死锁）
-      const err = await agent_submit.execute(
+      // 第二轮：报 High + failed → 命中清单整条抑制、不入库；无剩余 blocking → 自动按 passed 收口
+      const out = await agent_submit.execute(
         { change_id: CID2, step_id: "verify_tool", verdict: "failed", new_children: [highIssue("9")] },
         ctx2.toolR
-      ).catch((e: Error) => e)
-      expect(err).toBeInstanceOf(Error)
-      expect(err.message).toMatch(/不存在未解决的阻塞 issue/)
-      // 被拒零状态变更：issue 未入库
-      expect(readItem(wt, CID2).children.find((c: any) => c.externalId === "9")).toBeUndefined()
-
-      // c1 正向：按 Info 提报 + passed → 正常入库，命中标记与中性描述追加
-      await agent_submit.execute(
-        {
-          change_id: CID2, step_id: "verify_tool", verdict: "passed",
-          new_children: [{ ...highIssue("9"), severity: "Info" }],
-        },
-        ctx2.toolR
       )
+      expect(out).toContain("### 已抑制的存量豁免问题")
+      expect(out).toContain("- java:S2068 | src/Main.java:42 | 原级别 High")
+      // 命中条目不入库
+      expect(readItem(wt, CID2).children.find((c: any) => c.externalId === "9")).toBeUndefined()
       const item3 = readItem(wt, CID2)
-      const child9 = item3.children.find((c: any) => c.externalId === "9")
-      expect(child9.severity).toBe("Info")
-      expect(child9.description).toContain("命中项目级豁免清单（rule=java:S2068）")
-      expect(child9.metadata["exempted_hit"]).toBe("java:S2068")
-      // 命中 Info 不阻塞 verify_tool → 正常推进 verify_task
+      // 自动收口：verify_tool 通过 → 推进 verify_task；留痕 verdict=passed_auto
       expect(item3.currentStep).toBe("verify_task")
+      const trail = item3.metadata["exemption_suppressed"]
+      expect(trail).toHaveLength(1)
+      expect(trail[0]).toMatchObject({
+        rule: "java:S2068", file: "src/Main.java", line: 42, severity: "High", verdict: "passed_auto",
+      })
     } finally { teardown(root) }
   })
 
-  test("f2. 无豁免清单时，同类 High + failed 正常构成理由（对照：非存量问题不受降级影响）", async () => {
+  test("f2. 无豁免清单时，同类 High + failed 正常构成理由（对照：无清单不抑制）", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID1)
-      // 清单为空：同类 High + failed 正常回退 implement（未被降级拦截）
+      // 清单为空：同类 High + failed 正常回退 implement（未被抑制）
       const r = await agent_submit.execute(
         { change_id: CID1, step_id: "verify_tool", verdict: "failed", new_children: [highIssue("7")] },
         ctx.toolR
@@ -221,13 +213,13 @@ describe("c/f. 跨 change 命中降级与防死锁", () => {
   })
 })
 
-// ── d: Info 级 issue 豁免申请被拒（降级联动）──
+// ── d: Info 级 issue 豁免申请被拒 ──
 
 describe("d. Info 级 issue 豁免申请被拒", () => {
-  test("d1. 命中清单降级入库的 Info issue，dev 申请豁免被拒（Info 不阻塞，无需豁免）", async () => {
+  test("d1. 历史存量 Info issue，dev 申请豁免被拒（Info 不阻塞，无需豁免）", async () => {
     const { wt, root } = fresh()
     try {
-      // 直接构造前置：implement 阶段 + 一个命中清单标记的 Info issue child
+      // 直接构造前置：implement 阶段 + 一个带 exempted_hit 标记的历史存量 Info issue child
       const ctx = await setupToImplement(wt, CID1, { boundary: EB })
       const item0 = readItem(wt, CID1)
       await agent_submit.execute(
@@ -292,11 +284,11 @@ describe("e. giveup 不写清单", () => {
 // ── 视图：存量豁免提示（点 4）──
 
 describe("视图存量豁免提示", () => {
-  test("v1. verify_tool 工作视图渲染「存量豁免提示」汇总与逐条命中标注", async () => {
+  test("v1. verify_tool 工作视图渲染历史存量汇总行；dev 视图逐条标注历史存量", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID1)
-      // 构造一个命中豁免清单标记的存量 Info issue（模拟上一轮降级入库）
+      // 构造一个命中豁免清单标记的存量 Info issue（模拟历史状态遗留）
       rewriteItem(wt, CID1, (item: any) => {
         item.children.push({
           id: "issue:9", source: "openspec", externalId: "9", type: "issue",
@@ -307,9 +299,9 @@ describe("视图存量豁免提示", () => {
         })
       })
       const out = await status.execute({ change_id: CID1 }, ctx.toolR)
-      expect(out).toContain("存量豁免提示")
-      expect(out).toContain("1 个命中项目级跨 change 豁免清单的存量问题")
-      // 命中降级入库的 Info issue 在 dev 视图（implement）逐条标注，提示无需重复豁免
+      expect(out).toContain("## 豁免与抑制")
+      expect(out).toContain("> 历史存量 1 条：仍带 `exempted_hit` 标记的存量 issue（历史存量，未参与本轮判定）。")
+      // 历史存量 issue 在 dev 视图（implement）逐条标注，提示不参与本轮判定
       rewriteItem(wt, CID1, (item: any) => {
         item.phase = "in_progress"
         item.currentStep = "implement"
@@ -317,7 +309,7 @@ describe("视图存量豁免提示", () => {
       })
       const devOut = await status.execute({ change_id: CID1 }, ctx.dev)
       expect(devOut).toContain("Issue (待修复 · Info，建议修复，不阻塞提交)")
-      expect(devOut).toContain("命中项目级豁免清单（rule=java:S2068）的存量问题，已按 Info 处理，无需重复豁免")
+      expect(devOut).toContain("⚠️ 历史存量，未参与本轮判定（命中项目级豁免清单 rule=java:S2068）")
     } finally { teardown(root) }
   })
 })
@@ -325,7 +317,7 @@ describe("视图存量豁免提示", () => {
 // ── 视图：豁免反馈提示（无规则名 / 疑似行号漂移）──
 
 describe("视图豁免反馈提示（无规则名 / 疑似行号漂移）", () => {
-  test("h1. (rule+file) 命中清单但 line 不同 → verify_tool 视图渲染疑似行号漂移提示；line 一致命中降级不重复提示，且漂移提示不计入存量豁免统计", async () => {
+  test("h1. (rule+file) 命中清单但 line 不同 → verify_tool 视图渲染疑似行号漂移提示；line 一致命中不重复提示，且漂移提示不计入历史存量统计", async () => {
     const { wt, root } = fresh()
     try {
       const { ctx } = await driveToVerifyTool(wt, CID1)
@@ -352,8 +344,8 @@ describe("视图豁免反馈提示（无规则名 / 疑似行号漂移）", () =
       const out = await status.execute({ change_id: CID1 }, ctx.toolR)
       expect(out).toContain("疑似行号漂移")
       expect(out).toContain("line=42")
-      // 漂移提示不写 exempted_hit 标记 → 不计入存量豁免统计（无「存量豁免提示」汇总行）
-      expect(out).not.toContain("存量豁免提示")
+      // 漂移提示不写 exempted_hit 标记 → 不计入历史存量统计（无历史存量汇总行）
+      expect(out).not.toContain("> 历史存量")
       // 对照：line=42 完全命中（exempted_hit 标记）的 issue 不出现漂移提示，仅原漂移提示保留
       rewriteItem(wt, CID1, (item: any) => {
         item.children.push({
@@ -366,8 +358,8 @@ describe("视图豁免反馈提示（无规则名 / 疑似行号漂移）", () =
       })
       const out2 = await status.execute({ change_id: CID1 }, ctx.toolR)
       expect((out2.match(/疑似行号漂移/g) ?? []).length).toBe(1)
-      // 命中降级 issue 计入存量豁免统计（仅统计 exempted_hit 标记），漂移提示不计入
-      expect(out2).toContain("1 个命中项目级跨 change 豁免清单的存量问题")
+      // 命中 issue 计入历史存量统计（仅统计 exempted_hit 标记），漂移提示不计入
+      expect(out2).toContain("> 历史存量 1 条：仍带 `exempted_hit` 标记的存量 issue（历史存量，未参与本轮判定）。")
     } finally { teardown(root) }
   })
 

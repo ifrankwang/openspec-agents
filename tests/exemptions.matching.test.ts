@@ -2,12 +2,12 @@
  * 豁免匹配单一事实源（exemptions.matchesExemption）单元测试。
  *
  * 覆盖：旧精确三元组语义不变、path_pattern 路径模式命中（含整类/整文件）、rule_keys 规则维度命中、
- * 路径+规则双维度 AND、glob 通配语义、带 pattern/rule_keys 的独立 key 空间、跨 change 命中降 Info 不变。
+ * 路径+规则双维度 AND、glob 通配语义、带 pattern/rule_keys 的独立 key 空间、跨 change 命中按抑制分流。
  */
 import { describe, expect, test } from "bun:test"
 
 import {
-  applyExemptionDowngrade,
+  applyExemptionSuppression,
   exemptionKeyOf,
   exemptionRecordKeyOf,
   isSuppressionIntent,
@@ -106,8 +106,8 @@ describe("glob 通配语义", () => {
   })
 })
 
-describe("跨 change 命中降 Info 行为不变", () => {
-  test("旧精确三元组记录（changeId 不同）命中后降 Info 并写 exempted_hit", () => {
+describe("跨 change 命中按抑制分流", () => {
+  test("旧精确三元组记录（changeId 不同）命中后进 suppressed，不改 severity、不写 exempted_hit", () => {
     const child: any = {
       id: "issue:1",
       description: "硬编码密钥",
@@ -120,16 +120,30 @@ describe("跨 change 命中降 Info 行为不变", () => {
         rule: "java:S2068",
       },
     }
+    const drift: any = {
+      id: "issue:2",
+      description: "硬编码密钥",
+      severity: "High",
+      metadata: {
+        source: "openspec-reviewer-tool",
+        dimension: "security",
+        file: "src/Main.java",
+        line: 43,
+        rule: "java:S2068",
+      },
+    }
     const store = {
       version: 1,
       items: [record({ rule: "java:S2068", file: "src/Main.java", line: 42, changeId: "other-change" })],
     }
-    expect(applyExemptionDowngrade([child], store)).toBe(1)
-    expect(child.severity).toBe("Info")
-    expect(child.metadata["exempted_hit"]).toBe("java:S2068")
+    const { kept, suppressed } = applyExemptionSuppression([child, drift], store)
+    expect(suppressed).toEqual([child])
+    expect(kept).toEqual([drift])
+    expect(child.severity).toBe("High")
+    expect(child.metadata["exempted_hit"]).toBeUndefined()
   })
 
-  test("path_pattern 豁免同样跨 change 命中：issue 带路径 glob 维度即可降级", () => {
+  test("path_pattern + rule_keys 豁免同样按抑制分流（整类命中）", () => {
     const child: any = {
       id: "issue:2",
       description: "生成代码告警",
@@ -146,9 +160,11 @@ describe("跨 change 命中降 Info 行为不变", () => {
       version: 1,
       items: [record({ pathPattern: "src/generated/**", ruleKeys: ["java:S1"], severity: "High" })],
     }
-    expect(applyExemptionDowngrade([child], store)).toBe(1)
-    expect(child.severity).toBe("Info")
-    expect(child.metadata["exempted_hit"]).toBe("java:S1")
+    const { kept, suppressed } = applyExemptionSuppression([child], store)
+    expect(suppressed).toEqual([child])
+    expect(kept).toEqual([])
+    expect(child.severity).toBe("High")
+    expect(child.metadata["exempted_hit"]).toBeUndefined()
   })
 })
 

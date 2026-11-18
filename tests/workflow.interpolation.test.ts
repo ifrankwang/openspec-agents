@@ -379,7 +379,7 @@ describe("step 操作层指引补全", () => {
     expect(out).toContain("全部确定性工具检查（代码格式/架构约束/静态分析/单元测试编译/深度扫描——按必做清单中的对应项逐项执行并逐项申报）")
     expect(out).toContain("报 issue 时必须显式声明归因维度 dimension（style/architecture/performance/security/maintainability）")
     expect(out).toContain("当发现修复需要调整 openspec/changes/ 下文档时，所报 issue 的 file 字段必须指向目标文档")
-    expect(out).toContain("有实质变更时，工具检查及 issue 报告覆盖全量代码；非本轮变更文件的工具违规同样必须映射为 issue（命中项目级豁免清单的按 Info，不重新豁免；其余非本轮引入问题按原严重级别上报），不得以不在变更清单或未越界修改为由丢弃")
+    expect(out).toContain("有实质变更时，工具检查及 issue 报告覆盖全量代码；非本轮变更文件的工具违规同样必须映射为 issue（提报前先对照项目级豁免清单：命中清单且规则、文件、行号均未变化的存量问题不得重复提报；规则变更、位置移动或新引入的仍按原严重级别上报），不得以不在变更清单或未越界修改为由丢弃")
     expect(out).toContain("对视图「待裁定是否可豁免」区块中的豁免申请经 exempt_adjudications 裁定（dismissed/rejected）")
     expect(out).toContain("工具调用边界：仅可调用 opx_status、opx_agent_submit、question（需要用户协助处理时）")
     expect(out).not.toContain("；禁止 opx_orch_*")

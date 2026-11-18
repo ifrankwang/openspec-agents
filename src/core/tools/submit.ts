@@ -23,7 +23,10 @@ import { assertIssueFilesWithin } from "../paths.ts"
 import {
   readStateByWorktree, writeState, getLockPath, acquireLock, releaseLock,
 } from "../state.ts"
-import { readExemptions, applyExemptionDowngrade, writeDismissedExemption } from "../exemptions.ts"
+import {
+  readExemptions, applyExemptionSuppression, writeDismissedExemption,
+  matchesExemption, exemptionTargetOfChild,
+} from "../exemptions.ts"
 import {
   assertMustDoCoverage, uncoveredMustDo, resolveStepMustDo, hasNoChangeDeclaration,
   mustDoChecksOfStep, isValidSkipData, SKIP_REASON_FORMAT,
@@ -158,6 +161,18 @@ interface MustDoGateContext {
 
 /** 正常提交路径的固定返回体：提交状态与推进详情对子代理无意义，仅告知提交成功并结束会话。 */
 const SUBMIT_OK_MESSAGE = "提交成功，请直接结束当前会话"
+
+/** 存量豁免抑制留痕条目（item.metadata["exemption_suppressed"] 的元素）。 */
+interface ExemptionSuppressedTrail {
+  rule?: string
+  file?: string
+  line?: number
+  key?: string
+  severity: string
+  description: string
+  /** 本轮全抑制自动收口时标记，供审计区分「真实通过」与「抑制后通过」。 */
+  verdict?: "passed_auto"
+}
 
 // ─── M1a 参数面处理：task children / metadata.blockers / 分层重置 ───
 
@@ -796,10 +811,10 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
         throw new Error(`豁免裁定失败：issue "${adj.issue_id}" 不存在于 item "${item.id}" 的 children 中。`)
       }
       adjudicateExempt(item, workflow, { issueId: child.id, agentKey: ctx.agent, action: adj.action })
-      // dismissed 且携带 rule 时记入待落盘豁免清单（后续 change 同 rule+file+line 命中按 Info
-      // 处理，避免 worktree 全量扫描把存量已豁免问题反复报为阻塞）。此处仅收集，submitForStep
-      // 成功后再统一调用 writeDismissedExemption 落盘——同批后续校验抛错时清单不落盘（零状态变更
-      // 一致性）。giveup 走 applyCheckpointGiveup，不经此路径，天然排除。
+      // dismissed 且携带 rule 时记入待落盘豁免清单（后续 change 命中同一问题时按抑制处理——
+      // 直接丢弃、不入库，避免 worktree 全量扫描把存量已豁免问题反复报为阻塞）。此处仅收集，
+      // submitForStep 成功后再统一调用 writeDismissedExemption 落盘——同批后续校验抛错时清单不落盘
+      //（零状态变更一致性）。giveup 走 applyCheckpointGiveup，不经此路径，天然排除。
       if (adj.action === "dismissed") {
         pendingExemptions.push(child)
       }
@@ -893,6 +908,16 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
 
     const newChildren = (params.new_children ?? []).map((nc) => buildIssueChild(nc, ctx.agent))
 
+    // new_children 先去重（旧 deduplicateAndAddIssues 语义）：后续一切门禁与实际入库只看 accepted。
+    // 去重前移到审查分支之前，是因为存量豁免抑制必须在 handleReviewParams 之前生效（否则 review 的
+    // 「passed 只能带 Info 新报」会先拒绝一次），而抑制只作用于去重后的条目。
+    const { accepted: dedupedChildren } = dedupeNewChildren(item, newChildren)
+    let accepted = dedupedChildren
+    let suppressed: WorkItem[] = []
+    let effectiveParams: AgentSubmitParams = params
+    /** 抑制留痕（成功后写入 item.metadata，覆盖最近一轮）；无抑制时保持既有状态不动。 */
+    const suppressedTrail: ExemptionSuppressedTrail[] = []
+
     if (stepPhase === "review") {
       // 机制层预检：工作区不得残留「非文档类」未提交改动。reviewer 家族提交后会对 wtPath 自动
       // commit 工作区改动（见下方 isReviewerFamily 分支），反向探针改坏的实现若未还原会被静默
@@ -919,10 +944,48 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
           )
         }
       }
+      // 存量豁免抑制（顺序敏感：必须在 handleReviewParams 之前）：命中项目级豁免清单的 issue 直接
+      // 丢弃、不入库；下游校验（handleReviewParams、assertFailedHasReason）与 submitForStep 只看 kept。
+      // verify_cleanup 属 review 阶段但 agent 是 developer、做的是收尾合并，抑制它会把合并引入的
+      // 回归静默吞掉，必须排除。
+      if (isReviewerFamily(ctx.agent) && params.step_id !== "verify_cleanup") {
+        const store = await readExemptions(ctx.worktree)
+        const result = applyExemptionSuppression(accepted, store)
+        accepted = result.kept
+        suppressed = result.suppressed
+        for (const c of suppressed) {
+          const target = exemptionTargetOfChild(c)
+          const hit = store.items.find((record) => matchesExemption(target, record))
+          const f = resolveChildIssueFields(c)
+          suppressedTrail.push({
+            rule: hit?.rule,
+            file: f.file,
+            line: f.line,
+            key: hit?.key,
+            severity: c.severity ?? "",
+            description: c.description.slice(0, 200),
+          })
+        }
+        // 全抑制时自动收口：blocking 已全部被抑制，且没有任务驳回 / 边界扩展等真实不通过理由，
+        // 本次 failed 按 passed 继续走。不放宽任何门禁——必做清单覆盖度与任务覆盖度照常校验，
+        // 材料没带齐仍然拒绝。
+        if (
+          suppressed.length > 0 &&
+          params.verdict === "failed" &&
+          (params.failed_tasks?.length ?? 0) === 0 &&
+          params.boundary_expansion === undefined &&
+          !accepted.some((c) => isBlockingSeverity(c.severity))
+        ) {
+          for (const entry of suppressedTrail) entry["verdict"] = "passed_auto"
+          effectiveParams = { ...params, verdict: "passed" }
+        }
+        if (suppressedTrail.length > 0) item.metadata["exemption_suppressed"] = suppressedTrail
+      }
+
       // 必做清单覆盖度门禁以「当前 step 的 must_do 声明」为准（按会话项目栈分组取并集），与视图/checkpoint
       // 共用 gate.resolveStepMustDo 单一解析入口。
       const stepCfg = workflow.stepMap.get(params.step_id)!.step
-      handleReviewParams(item, params, newChildren, params.step_id, {
+      handleReviewParams(item, effectiveParams, accepted, params.step_id, {
         step: stepCfg,
         // 会话项目栈过滤：生效清单只并入会话命中的栈分组（与视图 skill 过滤同口径）；
         // 旧会话无 stacks → null（只取 always 分组）
@@ -969,20 +1032,11 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       })
     }
 
-    const { accepted } = dedupeNewChildren(item, newChildren)
-
-    // 命中项目级跨 change 豁免清单降级（顺序敏感：必须在 assertFailedHasReason 之前）：
-    // 存量已裁定豁免的 (rule+file+line) 本轮再报时降为 Info 级，不阻塞、无需再次豁免；
-    // 否则仅含存量豁免问题的 change 中 reviewer 能 failed 却无真实待办，形成死锁。
-    if (stepPhase === "review" && accepted.length > 0) {
-      const store = await readExemptions(ctx.worktree)
-      applyExemptionDowngrade(accepted, store)
-    }
-
-    // verdict=failed 必须有具体不通过理由：理由判定在去重之后，仅依据实际接受的 new_children——
-    // 重复新报（或与既有 child 同 key 被去重）不构成不通过理由，避免守卫放行但实际零新增 issue。
-    if (stepPhase === "review" && params.verdict === "failed") {
-      assertFailedHasReason(item, params, accepted, params.step_id, ctx.agent)
+    // verdict=failed 必须有具体不通过理由：理由判定仅依据实际接受的 new_children（去重与存量豁免
+    // 抑制均已在审查分支之前完成）——重复新报（或与既有 child 同 key 被去重）不构成不通过理由，
+    // 避免守卫放行但实际零新增 issue。
+    if (stepPhase === "review" && effectiveParams.verdict === "failed") {
+      assertFailedHasReason(item, effectiveParams, accepted, params.step_id, ctx.agent)
     }
 
     // dev 修复/豁免后按归因分层重置 review 验证标记（仅 implement step）
@@ -996,7 +1050,7 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     submitForStep(item, workflow, {
       stepId: params.step_id,
       agentKey: ctx.agent,
-      verdict: params.verdict,
+      verdict: effectiveParams.verdict,
       fixedIds: params.fixed_issue_ids,
       exemptIds: params.exempt_issue_ids,
       newChildren: accepted,
@@ -1069,15 +1123,26 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
     }
 
     await writeState(ctx.worktree, state)
-    if (autoCommitLines.length === 0) return SUBMIT_OK_MESSAGE
-    return [
-      `## ✅ ${SUBMIT_OK_MESSAGE}`,
-      "",
-      "### worktree 自动提交",
-      "",
-      ...autoCommitLines,
-      "",
-    ].join("\n")
+
+    const sections: string[][] = []
+    if (suppressedTrail.length > 0) {
+      const lines = suppressedTrail.map((entry) => {
+        const label = entry.rule !== undefined && entry.rule !== "" ? entry.rule : (entry.key ?? "")
+        return `- ${label} | ${entry.file ?? ""}:${entry.line ?? ""} | 原级别 ${entry.severity}`
+      })
+      sections.push([
+        "### 已抑制的存量豁免问题",
+        "",
+        ...lines,
+        "",
+        "命中项目级豁免清单的存量问题已抑制，不重复豁免；规则或行号真的变化时按原级别重新提报。",
+      ])
+    }
+    if (autoCommitLines.length > 0) {
+      sections.push(["### worktree 自动提交", "", ...autoCommitLines])
+    }
+    if (sections.length === 0) return SUBMIT_OK_MESSAGE
+    return [`## ✅ ${SUBMIT_OK_MESSAGE}`, "", ...sections.flatMap((s) => [...s, ""])].join("\n")
   } finally {
     releaseLock(lockPath)
   }

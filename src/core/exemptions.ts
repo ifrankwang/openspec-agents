@@ -11,8 +11,8 @@ import type { Dimension, ReviewLayer } from "./types.ts"
  *
  * 痛点背景：worktree 模式下每个新 change 是全新状态账本 + 全新扫描平台项目，tool review 全量扫描
  * 会把存量已裁定豁免的安全问题重新报为阻塞 issue，dev 每轮重新豁免。此模块把「裁定认可（dismissed）」
- * 的豁免结论落为 (rule+file+line) 清单，后续 change 的 tool review 提报命中清单时降为 Info 级，
- * 不阻塞、无需重复豁免。
+ * 的豁免结论落为 (rule+file+line) 清单，后续 change 的 review 提报命中清单时直接抑制（丢弃、不入库），
+ * 不再重复打扰。
  *
  * 设计约束（AGENTS.md）：
  * - 持久化归属工具/状态层，匹配语义归属 skill 层，展示归属视图层；
@@ -24,7 +24,7 @@ import type { Dimension, ReviewLayer } from "./types.ts"
 export const EXEMPTIONS_FILE = "exemptions.json"
 export const EXEMPTIONS_LOCK = "exemptions.lock"
 export const EXEMPTIONS_SCHEMA_VERSION = 1
-/** 命中项目级豁免清单的标记键（写入 child.metadata，供视图统计与标注；不参与匹配）。 */
+/** 历史存量 issue 的命中标记键（旧降级逻辑写入 child.metadata，供视图统计与标注；新报不再写入，不参与匹配）。 */
 export const EXEMPTED_HIT_KEY = "exempted_hit"
 
 export interface ExemptionRecord {
@@ -274,23 +274,24 @@ export async function writeDismissedExemption(
   }
 }
 
+export interface ExemptionSuppression {
+  kept: WorkItem[]
+  suppressed: WorkItem[]
+}
+
 /**
- * 命中降级：new_children 中匹配项目级豁免清单（精确三元组或路径模式/规则键）的 issue 降为 Info 级
- * 并追加中性描述，返回降级条数。必须在 assertFailedHasReason 之前调用——否则仅含存量豁免问题的
- * change 里 reviewer 能 failed 却无真实待办，形成死锁。
+ * 命中抑制：new_children 中匹配项目级豁免清单（精确三元组或路径模式/规则键）的 issue 直接丢弃，
+ * 不入库、不改级别。必须在 handleReviewParams 之前调用——否则 review 的「passed 只能带 Info 新报」
+ * 校验会先拒绝一次，抑制形同虚设。
  */
-export function applyExemptionDowngrade(children: WorkItem[], store: ExemptionStore): number {
-  let downgraded = 0
+export function applyExemptionSuppression(children: WorkItem[], store: ExemptionStore): ExemptionSuppression {
+  const kept: WorkItem[] = []
+  const suppressed: WorkItem[] = []
   for (const c of children) {
     const target = exemptionTargetOfChild(c)
     const hit = store.items.find((record) => matchesExemption(target, record))
-    if (hit) {
-      const label = hit.rule ?? normalizeRuleKeys(hit.ruleKeys).join(",")
-      c.severity = "Info"
-      c.metadata[EXEMPTED_HIT_KEY] = label !== "" ? label : true
-      c.description = `${c.description}\n\n> 命中项目级豁免清单${label ? `（rule=${label}）` : ""}，保持现状。`
-      downgraded++
-    }
+    if (hit) suppressed.push(c)
+    else kept.push(c)
   }
-  return downgraded
+  return { kept, suppressed }
 }

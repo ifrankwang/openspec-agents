@@ -1,7 +1,7 @@
 import type { OrchestrateState, TaskGroupState, BlockerItem, ExecutionBoundary, Dimension } from "../types.ts"
 import type { WorkItem, StepConfig, WorkflowCommon, MustDoCatalog } from "./types.ts"
 import { stepAgentIds, EXEMPT_REQUEST_KEY } from "./types.ts"
-import { EXEMPTED_HIT_KEY, matchesExemption, exemptionTargetOfChild } from "../exemptions.ts"
+import { EXEMPTED_HIT_KEY, matchesExemption, exemptionTargetOfChild, pathMatchesGlob } from "../exemptions.ts"
 import type { ExemptionRecord } from "../exemptions.ts"
 import { checkSuppressionConsistency, collectSuppressionSnapshot } from "../suppression.ts"
 import type { LoadedWorkflow } from "./loader.ts"
@@ -28,7 +28,8 @@ export interface WorkflowStatusViewOptions {
   mainPollution?: { repoRoot: string; files: string[] } | null
   /** verify_tool 的 reviewer-tool 工作视图变更检测结果（检查点增量检测，A4）；缺省 undefined 走全量。 */
   toolChanges?: DetectChangesResult
-  /** 本 change 命中项目级跨 change 豁免清单的存量问题数（工具层降级时统计，供视图汇总提示）。 */
+  /** 历史存量口径：本 change 中仍带 `exempted_hit` 标记的存量 issue 数（新流程命中即抑制、不再写该标记，
+   *  因此该计数只反映历史状态，不代表本轮判定结果；供「豁免与抑制」区块标注口径，不参与门禁）。 */
   exemptedHits?: number
   /** 项目级跨 change 豁免清单条目（statusExecute 渲染前异步读取一次传入；renderChildIssue 逐条提示数据源，纯只读）。 */
   exemptionItems?: ExemptionRecord[]
@@ -643,12 +644,18 @@ function renderAgentWorking(
   // 逐项渲染 id + 词表 description + evidence 要求，并给出 must_do_checks 提交示例。
   const mustDoItems = resolveStepMustDo(step ?? undefined, state.stacks ?? null)
 
-  // 配置忽略 ↔ 豁免记录双向核对：机器核对结论，纯展示、不参与门禁判定。
-  // 生效必做清单含 config_check 即渲染（full 的 verify_tool、simple 的 quality_review 都覆盖），
-  // 不按 step id 字面量判断，避免 simple 模式看不到一致性结论。三分支共用同一份区块。
-  const suppressionLines = mustDoItems.includes("config_check")
-    ? renderSuppressionConsistencySection(tg.worktreePath, state.stacks ?? null, exemptionItems)
-    : []
+  // 豁免与抑制区块上下文（单一渲染入口的数据源）：清单按本次变更过滤、本轮抑制留痕与历史存量口径、
+  // 配置一致性核对三段共用一份数据。配置一致性核对仅在 config_check 进入本 step 生效清单时渲染
+  // （full 的 verify_tool、simple 的 quality_review 都覆盖），不按 step id 字面量判断。
+  const exemptionSection = buildExemptionSectionContext(
+    item,
+    tg,
+    state,
+    mustDoItems.includes("config_check"),
+    toolChanges,
+    exemptionItems,
+    exemptedHits,
+  )
 
   // tool review 检查点增量三分支（A4）：仅 verify_tool 的 reviewer-tool 且提供了变更检测结果时生效；
   // toolChanges 缺省（未预计算）时维持既有全量渲染，不误伤其他 agent/step 的通用渲染。
@@ -656,10 +663,10 @@ function renderAgentWorking(
   if (step?.id === "verify_tool" && agentToReviewLayer(ctxAgent) === "tool" && toolChanges && !toolChanges.scopeFull) {
     const { active, pending } = toolPendingChildren(item, ctxAgent)
     if (!toolChanges.hasNonDocChange && active.length === 0 && pending.length === 0) {
-      return renderToolDirectSubmit(exemptedHits, suppressionLines)
+      return renderToolDirectSubmit(exemptionSection)
     }
     if (!toolChanges.hasNonDocChange) {
-      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptedHits, exemptionCtx, suppressionLines)
+      return renderToolAdjudicateOnly(item, rec, ctxAgent, exemptionCtx, exemptionSection)
     }
   }
   // skill 加载清单按当前调用者 agent 声明的 capability_tags 过滤（step 内各 agent 独立声明，互不相同）
@@ -704,15 +711,8 @@ function renderAgentWorking(
     `**阶段**: ${item.phase} | **step**: \`${rec.stepId ?? "(无)"}\``,
     "",
   ]
-  if ((exemptedHits ?? 0) > 0) {
-    lines.push(
-      `> **存量豁免提示**：本 change 存在 ${exemptedHits} 个命中项目级跨 change 豁免清单的存量问题（已按 Info 处理，不阻塞、无需重复豁免）。`,
-      "",
-    )
-  }
   lines.push(...renderStepSemantics(step, common, stepCtx))
   lines.push(...renderMustDoChecklist(mustDoItems, mustDoCatalog, rec.stepId))
-  lines.push(...suppressionLines)
   lines.push(...renderWorktreeSection(state, tg, { showNamespace: true, showPort: true }))
   // 证据区块注入：展示检查点增量口径的本次变更证据（文件清单 + 区间 diff 命令），与 Worktree 区块
   // 「变更范围」（baseRef..HEAD 本任务组累计口径）区分，供审查者审查变更内容后按操作指引裁量是否可免
@@ -737,7 +737,7 @@ function renderAgentWorking(
     lines.push(...renderDevMustDoDeclaration(item.metadata))
   }
   lines.push(...renderAgentSummaries(readAgentSummaries(item), ctxAgent))
-  lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx))
+  lines.push(...renderStepContext(item, step, ctxAgent, state, exemptionCtx, exemptionSection))
   lines.push(...renderSkillSuggestions(ctxAgent, caps, state.stacks ?? null))
   lines.push("## 操作指引", "")
   let n = 0
@@ -833,7 +833,14 @@ function stepContextKind(stepId: string): StepContextKind | undefined {
 }
 
 /** 按 step 渲染动态上下文：由 step.id 推导渲染类型（未命中优雅降级返回空数组）。 */
-function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: string, state: OrchestrateState, exemptionCtx?: ExemptionHintCtx): string[] {
+function renderStepContext(
+  item: WorkItem,
+  step: StepConfig | null,
+  ctxAgent: string,
+  state: OrchestrateState,
+  exemptionCtx?: ExemptionHintCtx,
+  exemptionSection?: ExemptionSectionCtx,
+): string[] {
   if (!step) return []
   const lines: string[] = []
   switch (stepContextKind(step.id)) {
@@ -848,16 +855,16 @@ function renderStepContext(item: WorkItem, step: StepConfig | null, ctxAgent: st
       lines.push(...renderDeveloperChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_tool":
-      lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx))
+      lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx, exemptionSection))
       break
     case "review_task":
       lines.push(...renderTaskChildren(item, ctxAgent, exemptionCtx))
       break
     case "review_quality":
-      lines.push(...renderQualityChildren(item, ctxAgent, exemptionCtx))
+      lines.push(...renderQualityChildren(item, ctxAgent, exemptionCtx, exemptionSection))
       break
     case "review_merged":
-      lines.push(...renderMergedChildren(item, ctxAgent, exemptionCtx))
+      lines.push(...renderMergedChildren(item, ctxAgent, exemptionCtx, exemptionSection))
       break
     case "review_cleanup":
       lines.push(...renderCleanupChildren(item, ctxAgent, exemptionCtx))
@@ -1029,12 +1036,19 @@ function toolPendingChildren(item: WorkItem, ctxAgent: string): { active: WorkIt
   }
 }
 
-/** verify_tool step：reviewer-tool 视角本层报源 review 态 issue + 调用者可裁定的豁免申请（待裁定）。 */
-function renderToolChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
+/** verify_tool step：reviewer-tool 视角本层报源 review 态 issue + 调用者可裁定的豁免申请（待裁定）。
+ *  「豁免与抑制」区块（段一清单 / 段二本轮抑制 / 段三配置一致性）统一从此处挂载，不另设独立挂载点。 */
+function renderToolChildren(
+  item: WorkItem,
+  ctxAgent: string,
+  exemptionCtx?: ExemptionHintCtx,
+  exemptionSection?: ExemptionSectionCtx,
+): string[] {
   const { active, pending } = toolPendingChildren(item, ctxAgent)
   const lines: string[] = []
   lines.push(...renderChildrenSection("Issue (待复核)", active, exemptionCtx))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
+  lines.push(...renderExemptionSection(exemptionSection, { list: true, consistency: true }))
   return lines
 }
 
@@ -1104,25 +1118,199 @@ function renderToolChangesEvidence(
   return lines
 }
 
-/**
- * 「配置忽略与豁免一致性」区块：列出配置忽略条目 ↔ 豁免记录的双向不一致项；两侧一致时给出条目计数。
- * 纯只读渲染，不改变任何门禁判定——config_check 仍是必做项，本区块结果供其证据对照。
- */
-function renderSuppressionConsistencySection(
-  repoRoot: string | null | undefined,
-  session: OrchestrateState["stacks"] | null,
+// ─── 豁免与抑制区块：段一已豁免清单 / 段二本轮已抑制 + 历史存量 / 段三配置一致性核对 ───
+
+/** 已豁免清单明细上限：超出上限不再逐条列出，必须显式提示截断（大仓库清单可达数百条，全量铺开会淹掉视图）。 */
+const EXEMPTION_LIST_LIMIT = 50
+
+/** 历史存量 issue 的口径标注（区块汇总行与逐条标注共用同一表述，禁止另写一份）：
+ *  新流程命中即抑制、不再降级入库，存量只表示该 issue 来自历史状态、未参与本轮判定。 */
+const STOCK_EXEMPTION_NOTE = "历史存量，未参与本轮判定"
+
+/** 本轮抑制留痕条目（工具层命中清单即抑制、不入库时写入 item.metadata["exemption_suppressed"]）。 */
+interface SuppressedExemptionEntry {
+  rule?: string
+  file?: string
+  line?: number
+  key?: string
+  severity: string
+  description: string
+  /** 本轮提报全部被抑制、自动按通过收口时由工具层写入。 */
+  verdict?: "passed_auto"
+}
+
+/** 「豁免与抑制」区块渲染上下文：渲染前构建一次，各审查视图按需取段。纯只读，不写任何状态。 */
+interface ExemptionSectionCtx {
+  /** 项目级跨 change 豁免清单（statusExecute 渲染前异步读取一次后传入）。 */
+  items: ExemptionRecord[]
+  /** 本次变更检测结果：段一按 files 过滤清单，缺省退化为摘要行。 */
+  toolChanges?: DetectChangesResult
+  /** 本轮抑制留痕（段二）。 */
+  suppressed: SuppressedExemptionEntry[]
+  /** 历史存量条数（段二口径标注）：仍带 exempted_hit 标记的存量 issue。 */
+  stockCount: number
+  /** 段三数据源：repoRoot 缺省时不渲染该段。 */
+  repoRoot: string | null
+  stacks: OrchestrateState["stacks"] | null
+  /** config_check 是否进入本 step 生效清单：不满足时不渲染段三。 */
+  consistencyEnabled: boolean
+}
+
+/** 读取本轮抑制留痕（工具层字段可能不完整：渲染侧只读消费并做缺省兜底，不因脏数据中断视图）。 */
+function readSuppressedExemptions(item: WorkItem): SuppressedExemptionEntry[] {
+  const raw = item.metadata["exemption_suppressed"]
+  if (!Array.isArray(raw)) return []
+  return raw.filter((e): e is SuppressedExemptionEntry => typeof e === "object" && e !== null)
+}
+
+/** 历史存量计数（口径：item.children 中仍带 exempted_hit 标记的 issue，与逐条标注同源）。 */
+function countStockExemptions(item: WorkItem): number {
+  return item.children.filter((c) => c.type === "issue" && c.metadata[EXEMPTED_HIT_KEY] !== undefined).length
+}
+
+/** 构建「豁免与抑制」区块上下文：各视图挂载时复用同一份数据，避免各自判断清单过滤与存量口径。 */
+function buildExemptionSectionContext(
+  item: WorkItem,
+  tg: TaskGroupState,
+  state: OrchestrateState,
+  consistencyEnabled: boolean,
+  toolChanges: DetectChangesResult | undefined,
   exemptionItems: ExemptionRecord[] | undefined,
+  exemptedHits: number | undefined,
+): ExemptionSectionCtx {
+  return {
+    items: exemptionItems ?? [],
+    toolChanges,
+    suppressed: readSuppressedExemptions(item),
+    // 调用方已按历史存量口径统计时直接采用；直接调用渲染层（无该参数）时按同一口径自算
+    stockCount: exemptedHits ?? countStockExemptions(item),
+    repoRoot: tg.worktreePath ?? null,
+    stacks: state.stacks ?? null,
+    consistencyEnabled,
+  }
+}
+
+/**
+ * 「豁免与抑制」单一渲染入口（替代原先散落的多处提示）：调用方按视图挂载对应段。
+ * - 段一「已豁免清单（命中以下条目不要再提报）」：按本次 change 的变更文件过滤，最多列 EXEMPTION_LIST_LIMIT 条；
+ * - 段二「本轮已抑制」：本轮提报命中清单后被抑制的留痕，另附历史存量口径汇总；
+ * - 段三「配置一致性核对」：配置忽略条目 ↔ 豁免记录双向核对结论（纯展示，不参与门禁判定）。
+ * 三段均无内容时返回空数组，不渲染空区块。
+ */
+function renderExemptionSection(
+  ctx: ExemptionSectionCtx | undefined,
+  opts: { list?: boolean; consistency?: boolean } = {},
 ): string[] {
-  if (!repoRoot) return []
-  const lines = ["## 配置忽略与豁免一致性", ""]
+  if (!ctx) return []
+  const body: string[] = []
+  if (opts.list) body.push(...renderExemptionListSegment(ctx))
+  body.push(...renderSuppressedSegment(ctx))
+  if (opts.consistency) {
+    const consistency = renderConsistencySegment(ctx)
+    if (consistency.length > 0) body.push("### 配置一致性核对", "", ...consistency)
+  }
+  if (body.length === 0) return []
+  return ["## 豁免与抑制", "", ...body]
+}
+
+/** 段一：已豁免清单（按本次变更过滤 + 超限截断提示）。 */
+function renderExemptionListSegment(ctx: ExemptionSectionCtx): string[] {
+  const total = ctx.items.length
+  if (total === 0) return []
+  const lines = ["### 已豁免清单（命中以下条目不要再提报）", ""]
+  const changes = ctx.toolChanges
+  // 未预计算变更检测结果：只给总数，不列明细（无法判断哪些条目与本次变更相关）
+  if (!changes) {
+    lines.push(`- 项目级跨 change 豁免清单共 ${total} 条（本次未预计算变更检测结果，不展示明细）。`, "")
+    return lines
+  }
+  // 全量代码库审查（独立审查 full 形态）：files 为空是设计内语义，单独走全量分支
+  if (changes.scopeFull) {
+    lines.push(`- 全量代码库审查：项目级跨 change 豁免清单共 ${total} 条。`, "")
+    for (const record of ctx.items.slice(0, EXEMPTION_LIST_LIMIT)) lines.push(renderExemptionListLine(record))
+    lines.push(...renderExemptionTruncation(total))
+    return lines
+  }
+  if (changes.files.length === 0) {
+    lines.push(`- 本次未检出变更文件：项目级跨 change 豁免清单共 ${total} 条，不展开明细。`, "")
+    return lines
+  }
+  const matched = ctx.items.filter((record) => exemptionCoversFiles(record, changes.files))
+  lines.push(`- 与本次变更文件相关的豁免条目共 ${matched.length} 条（清单总计 ${total} 条）。`, "")
+  if (matched.length === 0) return lines
+  for (const record of matched.slice(0, EXEMPTION_LIST_LIMIT)) lines.push(renderExemptionListLine(record))
+  lines.push(...renderExemptionTruncation(matched.length))
+  return lines
+}
+
+/** 豁免记录是否覆盖本次变更文件：pathPattern 走 glob、file 走精确相等（与 matchesExemption 路径维度同序）。
+ *  无路径维度的记录（仅规则名/规则键）对任意文件生效，一并保留——否则这类记录永远不会出现在任何变更的清单里。 */
+function exemptionCoversFiles(record: ExemptionRecord, files: readonly string[]): boolean {
+  const pattern = record.pathPattern
+  if (pattern) return files.some((f) => pathMatchesGlob(pattern, f))
+  if (record.file) return files.some((f) => f === record.file)
+  return true
+}
+
+/** 单条豁免记录渲染：定位（file:line 或路径模式）+ 规则 + 严重级别 + 描述，供评审员对照避免重复提报。 */
+function renderExemptionListLine(record: ExemptionRecord): string {
+  const location = record.pathPattern
+    ? `\`${record.pathPattern}\`（路径模式）`
+    : record.file
+      ? `\`${record.line !== undefined && record.line > 0 ? `${record.file}:${record.line}` : record.file}\``
+      : "（无路径限定）"
+  const rule =
+    record.rule ?? (record.ruleKeys && record.ruleKeys.length > 0 ? record.ruleKeys.join(",") : "（无规则名）")
+  return `- ${location} | ${rule} | ${record.severity || "Info"} | ${record.description}`
+}
+
+/** 截断提示：超过上限必须显式说明条数，禁止静默截断。 */
+function renderExemptionTruncation(total: number): string[] {
+  if (total <= EXEMPTION_LIST_LIMIT) return [""]
+  return [`> 已截断，共 ${total} 条（仅列出前 ${EXEMPTION_LIST_LIMIT} 条）。`, ""]
+}
+
+/** 段二：本轮已抑制（工具层留痕）+ 历史存量口径汇总。 */
+function renderSuppressedSegment(ctx: ExemptionSectionCtx): string[] {
+  const lines: string[] = []
+  if (ctx.suppressed.length > 0) {
+    // 全部留痕都带 passed_auto：本轮提报全部被抑制、无剩余问题，由工具层自动按通过收口
+    const autoSettled = ctx.suppressed.every((e) => e.verdict === "passed_auto")
+    lines.push("### 本轮已抑制", "")
+    lines.push(`以下 ${ctx.suppressed.length} 条提报命中「已豁免清单」，已抑制、不入库：`, "")
+    for (const entry of ctx.suppressed) {
+      const location = entry.file
+        ? `（\`${entry.line !== undefined && entry.line > 0 ? `${entry.file}:${entry.line}` : entry.file}\`）`
+        : ""
+      const rule = entry.rule ? ` | ${entry.rule}` : ""
+      lines.push(`- [${entry.severity || "Info"}] ${entry.description}${location}${rule}`)
+    }
+    if (autoSettled) lines.push("", "> 本轮无剩余问题，已按通过收口。")
+    lines.push("")
+  }
+  if (ctx.stockCount > 0) {
+    lines.push(
+      `> 历史存量 ${ctx.stockCount} 条：仍带 \`${EXEMPTED_HIT_KEY}\` 标记的存量 issue（${STOCK_EXEMPTION_NOTE}）。`,
+      "",
+    )
+  }
+  return lines
+}
+
+/** 段三正文：配置忽略条目 ↔ 豁免记录双向核对；两侧一致时给出条目计数（标题由 renderExemptionSection
+ *  统一加，保持单一挂载点）。纯只读渲染，不改变任何门禁判定——config_check 仍是必做项，本段结果供其证据对照。 */
+function renderConsistencySegment(ctx: ExemptionSectionCtx): string[] {
+  if (!ctx.consistencyEnabled || !ctx.repoRoot) return []
+  const lines: string[] = []
+  const session = ctx.stacks
   // 会话未固化项目栈（旧会话）：形态无法解析，抑制配置读不出来。此时必须显式说「未核对」，
   // 不能把「一条都没读到」渲染成「一致（0 条）」——那会让缺失看起来像通过。
   if (!session || session.project_stacks.length === 0) {
     lines.push("未核对（会话未固化项目栈）。", "")
     return lines
   }
-  const { entries, skippedDeclarations } = collectSuppressionSnapshot(repoRoot, session)
-  const { unmatchedConfig, unmatchedExemptions } = checkSuppressionConsistency(entries, exemptionItems ?? [])
+  const { entries, skippedDeclarations } = collectSuppressionSnapshot(ctx.repoRoot, session)
+  const { unmatchedConfig, unmatchedExemptions } = checkSuppressionConsistency(entries, ctx.items)
   const skipLine =
     skippedDeclarations > 0 ? `已跳过 ${skippedDeclarations} 条未识别声明（format 不在枚举、缺 key 或非数组）。` : ""
   if (unmatchedConfig.length === 0 && unmatchedExemptions.length === 0) {
@@ -1164,22 +1352,17 @@ function renderSuppressionConsistencySection(
 
 /** verify_tool 三分支①（直提）：自上次工具检查后无代码/配置变更且本层无待复核/待裁定项。
  *  替换式最小视图：不渲染 worktree/变更范围区块（避免与既有 baseRef..HEAD 累计口径提示冲突），
- *  文案只给结论，不展示检查点 hash。 */
-function renderToolDirectSubmit(exemptedHits?: number, suppressionLines: string[] = []): string {
+ *  文案只给结论，不展示检查点 hash。豁免区块只取段二（本轮抑制 + 历史存量）与段三（配置一致性），
+ *  不列段一清单——本视图没有待提报的问题，清单无可对照的动作。 */
+function renderToolDirectSubmit(exemptionSection?: ExemptionSectionCtx): string {
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
     "自上次工具检查后，worktree 无代码/配置变更（仅 openspec 文档变更或无变更），本层亦无待复核/待裁定 issue。",
     "",
   ]
-  if ((exemptedHits ?? 0) > 0) {
-    lines.push(
-      `> **存量豁免提示**：本 change 存在 ${exemptedHits} 个命中项目级跨 change 豁免清单的存量问题（已按 Info 处理，不阻塞、无需重复豁免）。`,
-      "",
-    )
-  }
   lines.push("无需运行全量工具检查。", "")
-  lines.push(...suppressionLines)
+  lines.push(...renderExemptionSection(exemptionSection, { consistency: true }))
   lines.push(
     "## 操作指引",
     "",
@@ -1192,23 +1375,23 @@ function renderToolDirectSubmit(exemptedHits?: number, suppressionLines: string[
 }
 
 /** verify_tool 三分支②（仅处理待复核项）：无代码/配置变更但有本层待复核/待裁定项 →
- *  仅复核/裁定待处理项，不跑全量工具扫描，处理完成后提交。 */
-function renderToolAdjudicateOnly(item: WorkItem, rec: EngineRecommendation, ctxAgent: string, exemptedHits?: number, exemptionCtx?: ExemptionHintCtx, suppressionLines: string[] = []): string {
+ *  仅复核/裁定待处理项，不跑全量工具扫描，处理完成后提交。豁免区块（含段一清单）由
+ *  renderToolChildren 统一挂载，本函数不重复渲染。 */
+function renderToolAdjudicateOnly(
+  item: WorkItem,
+  rec: EngineRecommendation,
+  ctxAgent: string,
+  exemptionCtx?: ExemptionHintCtx,
+  exemptionSection?: ExemptionSectionCtx,
+): string {
   const lines = [
     "# ✅ 当前轮到你执行",
     "",
     "自上次工具检查后，worktree 无代码/配置变更，无需运行全量工具检查。",
     "",
   ]
-  if ((exemptedHits ?? 0) > 0) {
-    lines.push(
-      `> **存量豁免提示**：本 change 存在 ${exemptedHits} 个命中项目级跨 change 豁免清单的存量问题（已按 Info 处理，不阻塞、无需重复豁免）。`,
-      "",
-    )
-  }
   lines.push("仅处理以下本层待复核 / 待裁定项，处理完成后提交：", "")
-  lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx))
-  lines.push(...suppressionLines)
+  lines.push(...renderToolChildren(item, ctxAgent, exemptionCtx, exemptionSection))
   lines.push("## 操作指引", "")
   lines.push(
     "1. 逐项复核/裁定上方各项：待复核 issue 经 `recheck_adjudications` 复核（通过置 done、不通过驳回并附驳回原因）；待裁定豁免经 `exempt_adjudications` 裁定（dismissed/rejected）",
@@ -1263,8 +1446,14 @@ function renderTaskChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: Exe
   return lines
 }
 
-/** verify_quality step：各维度 reviewer 渲染本维度报源 review 态 issue + 本维度豁免申请（待裁定）。 */
-function renderQualityChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
+/** verify_quality step：各维度 reviewer 渲染本维度报源 review 态 issue + 本维度豁免申请（待裁定）。
+ *  维度审查者不挂段一清单与段三配置核对，只保留段二（本轮抑制 + 历史存量）摘要。 */
+function renderQualityChildren(
+  item: WorkItem,
+  ctxAgent: string,
+  exemptionCtx?: ExemptionHintCtx,
+  exemptionSection?: ExemptionSectionCtx,
+): string[] {
   const dimension = agentToDimension(ctxAgent)
   if (!dimension) return []
   // task child 无 dimension 归因（resolveChildIssueFields 缺省 style），必须按 type 排除
@@ -1274,6 +1463,7 @@ function renderQualityChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: 
   lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
   const pending = issues.filter((c) => isQualityAdjudicable(c, dimension, ctxAgent))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
+  lines.push(...renderExemptionSection(exemptionSection, { list: false, consistency: false }))
   return lines
 }
 
@@ -1281,7 +1471,12 @@ function renderQualityChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: 
  *  Task(待验证)（任务验证语义来自 verify_task 的 submitted 列表）+ Issue(待复核) + Issue(待裁定是否可豁免)，
  *  issue 归属来自 quality 层口径（openspec-reviewer 无固定维度：待复核按报源 === 调用者、
  *  待裁定按报源 === 调用者，见 isAgentOwnedIssue / isQualityAdjudicable）。 */
-function renderMergedChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: ExemptionHintCtx): string[] {
+function renderMergedChildren(
+  item: WorkItem,
+  ctxAgent: string,
+  exemptionCtx?: ExemptionHintCtx,
+  exemptionSection?: ExemptionSectionCtx,
+): string[] {
   const lines: string[] = []
   const pendingTasks = readTasks(item).filter((t) => t.status === "submitted")
   if (pendingTasks.length > 0) {
@@ -1295,6 +1490,8 @@ function renderMergedChildren(item: WorkItem, ctxAgent: string, exemptionCtx?: E
   lines.push(...renderChildrenSection("Issue (待复核)", own, exemptionCtx))
   const pending = issues.filter((c) => isQualityAdjudicable(c, agentToDimension(ctxAgent), ctxAgent))
   lines.push(...renderChildrenSection("Issue (待裁定是否可豁免)", pending, exemptionCtx))
+  // simple 合并审查同样提报问题：挂完整豁免区块（段一清单 + 段二抑制 + 段三配置一致性）
+  lines.push(...renderExemptionSection(exemptionSection, { list: true, consistency: true }))
   return lines
 }
 
@@ -1386,7 +1583,9 @@ function renderChildIssue(child: WorkItem, exemptionCtx?: ExemptionHintCtx): str
   appendExemptionHints(lines, child, f, exemptionCtx)
   if (child.metadata[EXEMPTED_HIT_KEY] !== undefined) {
     const rule = typeof child.metadata[EXEMPTED_HIT_KEY] === "string" ? child.metadata[EXEMPTED_HIT_KEY] : ""
-    lines.push(`  - ⚠️ 命中项目级豁免清单${rule ? `（rule=${rule}）` : ""}的存量问题，已按 Info 处理，无需重复豁免`)
+    // 历史存量逐条标注：新流程不再产生降级，措辞只说明「来自历史状态、不参与本轮判定」，
+    // 与「豁免与抑制」区块段二汇总行共用 STOCK_EXEMPTION_NOTE 单一表述。
+    lines.push(`  - ⚠️ ${STOCK_EXEMPTION_NOTE}（命中项目级豁免清单${rule ? ` rule=${rule}` : ""}）`)
   }
   if (typeof child.metadata["suggestion"] === "string") lines.push(`  - 建议：${child.metadata["suggestion"]}`)
   if (typeof child.metadata["reject_reason"] === "string") lines.push(`  - 驳回原因：${child.metadata["reject_reason"]}`)
