@@ -168,10 +168,27 @@ export const newChildIssueItem: JSONSchema = {
       description:
         "issue 归因维度：quality reviewer 报 issue 时由报源自动推断、无需填写（显式填写须与报源维度一致）；tool/task reviewer 报 issue 时必须显式填写",
     },
-    file: { type: "string", description: "问题所在文件路径（相对于 worktree）" },
+    file: {
+      type: "string",
+      description:
+        "问题所在文件路径（相对于 worktree），用于精确到单个文件；问题覆盖一类路径时用 path_pattern，二者可同时给出",
+    },
+    path_pattern: {
+      type: "string",
+      description:
+        "路径 glob（如 src/generated/**），用于表达「这一类路径」；精确单文件用 file，二者可同时给出",
+    },
     line: { type: "integer", minimum: 0, description: "问题所在行号（0=整文件/待新建文件）" },
     suggestion: { type: "string", description: "修复建议" },
-    rule: { type: "string", description: "工具规则名（如 PMD Rule / SonarQube rule），无则省略" },
+    rule: {
+      type: "string",
+      description: "单条规则键（规则标识），无则省略；表达一组规则时用 rule_keys，二者可同时给出",
+    },
+    rule_keys: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      description: "一组规则键，用于表达「这一组规则」；单条规则用 rule，二者可同时给出",
+    },
     root_cause_guess: { type: "string", description: "根因猜测（仅特定维度需要）" },
   },
   required: ["id", "title", "description"],
@@ -227,13 +244,13 @@ export const orchInitSchema: JSONSchema = {
     recovery: recoverySchema,
     project_stacks: {
       type: "array",
-      description: "项目形态栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 stacks 标签（动态校验，无硬编码值域），否则拒绝执行。存入编排会话状态，作为 skill 加载清单过滤与 must_do 门禁的形态过滤基准。",
+      description: "项目形态栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 stacks 标签（动态校验，无硬编码值域），否则拒绝执行。按项目实际形态声明：前后端同仓时把前后端形态都写进本字段。存入编排会话状态，作为 skill 加载清单过滤、忽略基线与 must_do 门禁的形态过滤基准。",
       items: { type: "string", minLength: 1 },
       minItems: 1,
     },
     project_frameworks: {
       type: "array",
-      description: "项目框架栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 frameworks 标签（动态校验，无硬编码值域），否则拒绝执行。存入编排会话状态，作为 skill 加载清单过滤与 must_do 门禁的框架过滤基准。",
+      description: "项目框架栈（必传，两入口均需）：每个值必须是当前 skill 索引中某个 skill frontmatter 声明的 frameworks 标签（动态校验，无硬编码值域），否则拒绝执行。按项目实际框架声明并取并集：前后端同仓时把两端框架都写进本字段，且须与 project_stacks 声明的形态对应。存入编排会话状态，作为 skill 加载清单过滤、忽略基线与 must_do 门禁的框架过滤基准。",
       items: { type: "string", minLength: 1 },
       minItems: 1,
     },

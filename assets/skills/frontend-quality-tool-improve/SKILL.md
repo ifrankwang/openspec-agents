@@ -98,7 +98,7 @@ export default [{
 
 - 给自定义规则配 `RuleTester` 单测（合法样例 + 违规样例各至少 2 条），随规则一起提交
 - 验证命令：`pnpm exec eslint src --format json`；期望命中数写入交付说明
-- 误报处理：先 `--format json` 统计命中文件清单人工核对，通过规则内边界判断收窄；禁止直接加 `eslint-disable` 或扩大 `ignorePatterns`
+- 误报处理：先 `--format json` 统计命中文件清单人工核对，通过规则内边界判断收窄；禁止直接加 `eslint-disable` 或扩大 `ignorePatterns`；确需整体排除某类路径时，按路径模式写入扫描配置忽略并同时登记豁免记录（配置忽略与豁免记录双向对应）
 
 ## dependency-cruiser 规则草案模板
 

@@ -30,7 +30,7 @@ frameworks: ["java"]
 
 在执行工具检查前，先确保工具运行环境就绪。环境检查失败时先按自愈性步骤尝试恢复；不可自愈或自愈失败后，用 `question` 提请用户处理或裁定。用户裁定降级跳过时，在报告中注明降级理由，不阻塞其他检查。
 
-使用编排会话提供的隔离标识 `<namespace>`（来自编排会话上下文）为 SonarQube 容器指定独立的 docker compose 项目名，避免多个并发 change 的容器互相冲突。环境隔离对象不限于数据库：SonarQube 实例与扫描项目均须按隔离标识隔离（独立 compose 项目名 + 项目 key 后缀，见第 6 节），禁止复用宿主既有实例/项目。
+使用编排会话提供的隔离标识 `<namespace>`（来自编排会话上下文）为 SonarQube 容器指定独立的 docker compose 项目名，避免多个并发 change 的容器互相冲突。扫描项目必须隔离：项目 key 在项目根配置的原始 key 上追加 `-<namespace>`（见第 6 节），禁止复用宿主既有的扫描项目。平台实例允许复用本地已在运行的 SonarQube 容器——容器不承载业务数据，只要项目 key 隔离即不会互相干扰；本地无运行实例时再按下文命令自行拉起。
 
 ```bash
 docker info
@@ -271,7 +271,7 @@ MUST token 名唯一（如附时间戳或随机后缀），token 值只在生成
 
 ### 配置
 
-`sonar-project.properties` 文件位于项目根目录。
+`sonar-project.properties` 文件位于项目根目录。该文件缺失时由初始化按模板创建，已存在时只补齐缺失键、不覆盖已有值。
 
 ### 执行
 
@@ -284,7 +284,7 @@ SONAR_TOKEN=<token> sonar-scanner \
 
 MUST 使用 `-Dsonar.projectKey` 指定含隔离标识 `<namespace>` 的项目 key（原始 key 从 `sonar-project.properties` 读取后追加 `-<namespace>`），禁止不加 `-Dsonar.projectKey` 覆盖直接执行 `sonar-scanner`。隔离标识来自编排会话上下文。
 
-非 worktree 场景下，MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，禁止改动 `sonar-project.properties`，避免影响质量门配置检查。若因 SCM 集成故障导致扫描失败或 new code 期数据异常，按下方降级判据降级。
+非 worktree 场景下，MUST 追加 SCM 集成参数 `-Dsonar.scm.enabled=true -Dsonar.scm.provider=git`，git blame 提供代码行修改时间戳，是 new code 期判定的数据基础。SCM 参数经命令行显式传入，扫描执行期禁止改动 `sonar-project.properties`，避免影响质量门配置检查。若因 SCM 集成故障导致扫描失败或 new code 期数据异常，按下方降级判据降级。
 
 非 worktree 场景下，当项目 `sonar-project.properties` 含 `sonar.scm.disabled=true` 时，需在上方命令显式追加 `-Dsonar.scm.disabled=false` 覆盖（`sonar.scm.disabled` 是 SCM 集成总开关，`-Dsonar.scm.enabled=true` 会被其压制）；覆盖失败按下方降级判据降级。
 

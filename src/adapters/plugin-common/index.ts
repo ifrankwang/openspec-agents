@@ -125,6 +125,11 @@ export function buildSkills(targetDir: string): string[] {
   return injected
 }
 
+/** 复制框架级忽略基线到插件包（bundle 内按部署深度逐级上溯探测读取）。 */
+export function copyIgnoreBaseline(targetDir: string): void {
+  cpSync(resolve("assets", "ignore-baseline"), join(targetDir, "assets", "ignore-baseline"), { recursive: true })
+}
+
 /** 复制 workflow 定义到插件包（bundle 内按部署深度逐级上溯探测读取）。 */
 export function copyWorkflows(targetDir: string): void {
   cpSync(resolve("assets", "workflows"), join(targetDir, "assets", "workflows"), { recursive: true })
@@ -169,6 +174,7 @@ export function buildPluginPackage({ outDir, manifestDirName }: PluginPackagePar
   // workflow 定义随包分发：bundle 内 TASK_WORKFLOW_PATH 按部署深度逐级上溯探测
   // assets/workflows/task.yaml，插件根（dist/cache 形态）上溯 1 级即命中
   copyWorkflows(outDir)
+  copyIgnoreBaseline(outDir)
   copyLicense(outDir)
 
   writeFileSync(

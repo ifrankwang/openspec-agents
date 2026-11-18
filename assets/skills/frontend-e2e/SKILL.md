@@ -186,7 +186,7 @@ test('上传超过 20MB 的清单文件，应提示不能超过 20MB', async ({ 
 - `e2e/support/test.ts`：叠加项目自己的登录 fixture，保留 fixture 内的请求取证注入与回传，不要用项目自有 fixture 整体覆盖 `page` 而丢掉取证通道。
 - 项目 `src/mocks/browser.ts`：`E2E_API_MODE=mock` 时启动 worker，`real` 时不启动；确保 dev server 启动时能读到该环境变量。
 - 项目 `src/mocks/`：新增或修改 mock 数据时按「mock 数据来源」取数并留溯源记录；mock 数据目录随项目既有布局，e2e 侧不另建一份。
-- `.gitignore`：加 `e2e/reports/`，并保留兜底项 `test-results*/`、`playwright-report*/`、`blob-report/`；dev server 的 watch 忽略里加 `e2e/reports/`，否则报告写入会触发无意义的整页刷新。
+- 报告产物（`e2e/reports/`）不入库，忽略条目由项目初始化按形态写入基线；dev server 的 watch 忽略里加 `e2e/reports/`，否则报告写入会触发无意义的整页刷新。
 - 其他框架或原生项目：先在 SKILL.md frontmatter 的 `frameworks` 声明对应值（如 `["angular"]`），工具代码无需改动；未声明时按框架过滤后本 skill 不会加载。
 
 ## 常见坑

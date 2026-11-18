@@ -96,6 +96,10 @@ function projectIssueFromChild(child: WorkItem): IssueItem {
     exemptReason: typeof child.metadata["exempt_reason"] === "string" ? child.metadata["exempt_reason"] : null,
     rejectReason: typeof child.metadata["reject_reason"] === "string" ? child.metadata["reject_reason"] : null,
     rule: typeof child.metadata["rule"] === "string" ? child.metadata["rule"] : undefined,
+    pathPattern: typeof child.metadata["path_pattern"] === "string" ? child.metadata["path_pattern"] : undefined,
+    ruleKeys: Array.isArray(child.metadata["rule_keys"])
+      ? (child.metadata["rule_keys"] as unknown[]).filter((k): k is string => typeof k === "string")
+      : undefined,
   }
 }
 

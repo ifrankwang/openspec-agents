@@ -26,6 +26,7 @@ import {
   bundleDshNativeTools,
   buildAgents,
   buildSkills,
+  copyIgnoreBaseline,
   copyWorkflows,
   copyLicense,
   readPkgVersion,
@@ -313,6 +314,7 @@ export function buildDeepSeekHarnessPlugin(outDir: string = DEEP_SEEK_HARNESS_PL
   const skills = buildSkills(join(outDir, ...DSH_SKILLS_DIR_SEGMENTS))
   bundleDshNativeTools(outDir)
   copyWorkflows(outDir)
+  copyIgnoreBaseline(outDir)
   copyLicense(outDir)
 
   writeFileSync(

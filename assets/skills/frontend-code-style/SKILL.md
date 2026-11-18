@@ -132,17 +132,4 @@ frameworks: ["vue", "react"]
 
 ## .gitignore 必须项
 
-```
-node_modules/
-dist/
-coverage/
-e2e/reports/
-*.local
-.env.local
-.env.*.local
-.DS_Store
-```
-
-- `dist/`、`coverage/`、`e2e/reports/`、依赖目录必须忽略
-- 本地环境变量文件（`.env.local`、`.env.*.local`）必须忽略，`.env` 系列模板可提交
-- 构建报告目录同时加入 dev server 的 watch ignore（如 `e2e/reports/`），避免报告写入触发热更新噪音
+忽略条目由项目初始化按形态自动补齐并在报告中列出，审查时核对报告补齐项与项目实际产物是否一致。报告类产物目录同时排除出 dev server 的 watch 范围，避免写入触发热更新噪音。

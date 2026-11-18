@@ -40,6 +40,94 @@ export function matchesSessionStacks(
   return true
 }
 
+/**
+ * 形态维度命中规则（忽略基线资产选型用）：只看 skill 声明的形态标签与会话 project_stacks 是否
+ * 有交集，不看框架维度——基线的归属由「谁产出这些产物」决定，与具体框架无关。
+ * 未声明形态标签的 skill 视为通用，始终命中。与 matchesSessionStacks 的双维度语义互不影响。
+ */
+export function matchesSessionShapes(stacks: string[], session: SessionStacks): boolean {
+  if (stacks.length === 0) return true
+  return stacks.some((t) => session.project_stacks.includes(t))
+}
+
+// ─── 框架 → 形态推导（会话栈声明完整性校验用，不维护静态对应表） ───
+
+/**
+ * 由 skill 索引推导「框架标签 → 声明该框架的 skill 所属形态标签」。
+ * 只取同时声明了 stacks 与 frameworks 的 skill：形态来自声明，不来自代码常量。
+ * 未被任何 skill 同时声明的框架不出现在结果中（无法判定归属，校验时跳过）。
+ */
+export function frameworkShapes(index: SkillTagIndex = scanSkillTags()): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>()
+  for (const [skill, frameworks] of index.skillFrameworks) {
+    const stacks = index.skillStacks.get(skill) ?? []
+    if (stacks.length === 0) continue
+    for (const framework of frameworks) {
+      const shapes = map.get(framework) ?? new Set<string>()
+      for (const shape of stacks) shapes.add(shape)
+      map.set(framework, shapes)
+    }
+  }
+  return map
+}
+
+/**
+ * 会话声明的框架中，所属形态与会话 project_stacks 无交集者（硬拒绝依据）。
+ * 归属不可推导的框架（索引里没有 skill 同时声明其形态）不计入，交由值域校验处理。
+ */
+export function conflictingFrameworks(
+  session: SessionStacks,
+  index: SkillTagIndex = scanSkillTags(),
+): { framework: string; shapes: string[] }[] {
+  const map = frameworkShapes(index)
+  const conflicts: { framework: string; shapes: string[] }[] = []
+  for (const framework of session.project_frameworks) {
+    const shapes = map.get(framework)
+    if (!shapes || shapes.size === 0) continue
+    const shapeList = [...shapes].sort()
+    if (shapeList.some((s) => session.project_stacks.includes(s))) continue
+    conflicts.push({ framework, shapes: shapeList })
+  }
+  return conflicts
+}
+
+/**
+ * 已声明形态中没有任何已声明框架覆盖的形态（常驻警告依据）。
+ * 覆盖判定：存在同时声明该形态与该会话框架的 skill。缺失时只警告不拒绝——技术栈可能不在
+ * 现成词表内（如 Angular / Svelte），拒绝会让这类项目无法初始化。
+ */
+export function uncoveredShapes(
+  session: SessionStacks,
+  index: SkillTagIndex = scanSkillTags(),
+): { shape: string; declaredFrameworks: string[] }[] {
+  const uncovered: { shape: string; declaredFrameworks: string[] }[] = []
+  for (const shape of session.project_stacks) {
+    const covered = [...index.skillStacks.entries()].some(([skill, stacks]) => {
+      if (!stacks.includes(shape)) return false
+      return (index.skillFrameworks.get(skill) ?? []).some((f) => session.project_frameworks.includes(f))
+    })
+    if (!covered) uncovered.push({ shape, declaredFrameworks: [...session.project_frameworks] })
+  }
+  return uncovered
+}
+
+/**
+ * 形态无框架覆盖的警告文案（opx_orch_init 返回体与 opx_status 视图共用，措辞区分
+ * 「形态已声明、框架未声明」；只描述声明现状，不臆断项目是否真的缺框架）。
+ */
+export function shapeCoverageWarnings(
+  session: SessionStacks,
+  index: SkillTagIndex = scanSkillTags(),
+): string[] {
+  return uncoveredShapes(session, index).map(({ shape, declaredFrameworks }) => {
+    const declared = declaredFrameworks.map((f) => `\`${f}\``).join("、")
+    return (
+      `形态 \`${shape}\` 已声明，但没有与之匹配的框架声明（当前声明框架：${declared}）；` +
+      `该形态的技术栈配套 skill 与必做项可能未被覆盖`
+    )
+  })
+}
+
 // ─── 标签存在性词汇（opx_orch_init 分字段动态校验用） ───
 
 /** 测试注入的形态/框架值域（与 init 两参数分字段校验对应，结构保持可读）。 */

@@ -179,6 +179,8 @@ export function buildIssueWorkItem(issue: IssueItem): WorkItem {
   child.metadata["dimension"] = issue.dimension
   child.metadata["file"] = issue.file
   child.metadata["line"] = issue.line
+  if (issue.pathPattern !== undefined) child.metadata["path_pattern"] = issue.pathPattern
+  if (issue.ruleKeys !== undefined && issue.ruleKeys.length > 0) child.metadata["rule_keys"] = issue.ruleKeys
   if (issue.status === "exemption_requested") {
     // 迁移时保留豁免申请语义：exempt_request 标记使 sync 回写保持 exemption_requested，
     // 避免 child 落 todo 后被覆写回 open 丢失豁免申请。

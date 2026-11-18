@@ -8,7 +8,9 @@ import { BUILD_PHASE_TARGETS, REVIEW_LAYERS, REVIEW_VERIFY_STEPS, SIMPLE_REVIEW_
 import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, archiveOpenspecChange, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock, getStatePath, getLegacyStateDir } from "../state.ts"
-import { ensureGeneratedDirsIgnored, type EnsureGeneratedDirsIgnoredOpts } from "../gitignore.ts"
+import { ensureIgnoreBaseline, type EnsureIgnoreBaselineOpts } from "../gitignore.ts"
+import { probeContainers } from "../containers.ts"
+import { ensureProjectConfigsForSession } from "../project-config.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
 import { parseTaskGroupsFromContent, parseTasksForGroupFromContent, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
@@ -22,7 +24,13 @@ import { renderWorkflowStatusView } from "../workflow/status.ts"
 import { taskChildrenOf } from "../task-children.ts"
 import type { WorkItem, WorkItemPhase } from "../workflow/types.ts"
 import type { InitParams, SetWorktreeParams, UnattendedParams, ToolContext, StatusParams } from "./types.ts"
-import { knownFrameworks, knownStacks, type SessionStacks } from "../../skills/stacks.ts"
+import {
+  conflictingFrameworks,
+  knownFrameworks,
+  knownStacks,
+  shapeCoverageWarnings,
+  type SessionStacks,
+} from "../../skills/stacks.ts"
 
 /** 由 tasks.md 解析结果构造 task child WorkItem（初始 todo；externalId 存 taskNumber，id 存数字索引）。 */
 function taskChildFromParsed(p: ParsedTask, index: number): WorkItem {
@@ -553,13 +561,18 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
       )
     }
     const stacksNote = adoptOrAssertSessionStacks(state, args)
+    const guardSession: SessionStacks = state.stacks ?? {
+      project_stacks: args.project_stacks,
+      project_frameworks: args.project_frameworks,
+    }
+    const guardNote = await runBaselineGuards(ctx, reviewBaselineOpts(scope, guardSession), guardSession)
     if (args.recovery) {
       const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
       if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
       assertValidResetStepValues(args.recovery, state)
       applyRecoveryState(item, args.recovery, [], state)
       await writeState(ctx.worktree, state)
-      return `独立审查会话 "${sessionId}" 已恢复到 review 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。后续工具以 change_id="${sessionId}" 传入。`
+      return `独立审查会话 "${sessionId}" 已恢复到 review 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。后续工具以 change_id="${sessionId}" 传入。\n\n${guardNote}`
     }
     if (stacksNote) await writeState(ctx.worktree, state)
     return [
@@ -568,6 +581,8 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
       `- **会话 ID**: \`${sessionId}\``,
       `- **说明**: 后续所有 opx_* 工具以 \`change_id="${sessionId}"\` 传入。`,
       ...(stacksNote ? ["", stacksNote] : []),
+      "",
+      guardNote,
     ].join("\n")
   }
   if (args.recovery) {
@@ -588,6 +603,7 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
     reviewScope: scope,
     stacks: { project_stacks: args.project_stacks, project_frameworks: args.project_frameworks },
   }
+  const guardNote = await runBaselineGuards(ctx, reviewBaselineOpts(scope, state.stacks!), state.stacks!)
   await writeState(ctx.worktree, state)
   const granularityLabel = scope.granularity === "thorough" ? "三层审查（工具检查 → 回归验证 → 五维度质量审查）" : "单层合并审查"
   const fixLabel = scope.fix === "fix" ? "审并修（失败回退修复后重审）" : "只审不修（issue 报告即交付物）"
@@ -601,6 +617,8 @@ async function initReviewSession(params: InitParams, ctx: ToolContext): Promise<
     `- **修复策略**: ${fixLabel}`,
     "",
     `- **说明**: 后续所有 opx_* 工具以 \`change_id="${sessionId}"\` 传入（含 opx_orch_set_worktree / opx_status / opx_agent_submit / 收尾）。`,
+    "",
+    guardNote,
   ].join("\n")
 }
 
@@ -628,10 +646,16 @@ async function initReviewRecovery(params: InitParams, state: OrchestrateState, c
   const item = state.workItems.find((w) => w.id === `task:${REVIEW_TASK_GROUP_ID}`)
   if (!item) throw new Error(`工作项 "task:${REVIEW_TASK_GROUP_ID}" 缺失，会话状态异常，请核对 state 文件。`)
   const stacksNote = adoptOrAssertSessionStacks(state, args)
+  const scope = state.reviewScope!
+  const guardSession: SessionStacks = state.stacks ?? {
+    project_stacks: args.project_stacks,
+    project_frameworks: args.project_frameworks,
+  }
+  const guardNote = await runBaselineGuards(ctx, reviewBaselineOpts(scope, guardSession), guardSession)
   if (args.recovery) {
     applyRecoveryState(item, args.recovery, [], state)
     await writeState(ctx.worktree, state)
-    return `独立审查会话 "${state.changeId}" 已恢复到 ${args.recovery.phase} 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。`
+    return `独立审查会话 "${state.changeId}" 已恢复到 ${args.recovery.phase} 阶段（当前 step：${item.currentStep ?? "(已收口)"}）。\n\n${guardNote}`
   }
   if (stacksNote) await writeState(ctx.worktree, state)
   return [
@@ -640,8 +664,20 @@ async function initReviewRecovery(params: InitParams, state: OrchestrateState, c
     `- **会话 ID**: \`${state.changeId}\``,
     `- **说明**: 后续所有 opx_* 工具以 \`change_id="${state.changeId}"\` 传入。`,
     ...(stacksNote ? ["", stacksNote] : []),
+    "",
+    guardNote,
   ].join("\n")
 }
+
+/** 独立审查会话的忽略基线参数：pr 以 head_ref 为基准分支，fix=none 跳过提交。 */
+function reviewBaselineOpts(scope: ReviewScope, session: SessionStacks): EnsureIgnoreBaselineOpts {
+  return {
+    baseBranch: scope.scopeType === "pr" ? scope.headRef ?? null : null,
+    skipCommit: scope.fix === "none",
+    session,
+  }
+}
+
 
 /** 标签数组按集合语义比较（顺序无关、去重后比较）。 */
 function sameTagSet(a: string[], b: string[]): boolean {
@@ -729,6 +765,24 @@ function assertProjectStacks(args: InitParams): void {
       )
     }
   }
+  const conflicts = conflictingFrameworks({
+    project_stacks: args.project_stacks,
+    project_frameworks: args.project_frameworks,
+  })
+  if (conflicts.length > 0) {
+    const detail = conflicts
+      .map(
+        (c) =>
+          `${c.framework} 属${c.shapes.join(" / ")}，与会话声明的形态（${args.project_stacks.join("、")}）没有交集`,
+      )
+      .join("；")
+    const shapes = [...new Set(conflicts.flatMap((c) => c.shapes))]
+    throw new Error(
+      `project_frameworks 与会话声明的 project_stacks 矛盾：${detail}。\n` +
+        `框架标签归属的形态由声明该标签的 skill 推导，不由本工具硬编码。\n` +
+        `前后端同仓请把对应形态一并写进 project_stacks（${shapes.join(" / ")} 需在 project_stacks 中声明）。`
+    )
+  }
 }
 
 /**
@@ -768,22 +822,44 @@ async function resolveChangeDocContent(
 }
 
 /**
- * 生成目录忽略守卫的统一包装（init 与 set_worktree 共用）：
- * - 必须在任何 state 读之前调用——readStateByChangeId 的迁移会在「读」时 mkdir/writeFile
- *   `openspec/states/`，晚于守卫则这些文件会先于 `.gitignore` 生效落入版本库视野。
- * - opts 由调用方按能否精确判定传入：能拿到 state 时传固化基准分支与 fix=none 跳过提交标记；
- *   拿不到时（如 init 顶部 state 读会触发迁移，不能提前读）按 baseBranch=null 的保守语义处理。
+ * 忽略基线与生成目录守卫的统一入口（init 与 set_worktree 共用）：
+ * - 必须排在「栈参数校验 + 会话栈一致性校验」之后——基线按最终确定的 stacks 挑资产，
+ *   传错 stacks 时先报错、不落盘任何忽略改动。
+ * - opts.session 传会话已固化的项目栈；拿不到（旧会话 / state 缺失）时只补框架级基线。
+ * - 能拿到 state 时传固化基准分支与 fix=none 跳过提交标记；拿不到时按 baseBranch=null 的保守语义处理。
  */
 async function runGitignoreGuard(
   ctx: ToolContext,
-  opts: EnsureGeneratedDirsIgnoredOpts,
+  opts: EnsureIgnoreBaselineOpts,
 ): Promise<string> {
-  return ensureGeneratedDirsIgnored(ctx.worktree, opts)
+  return ensureIgnoreBaseline(ctx.worktree, opts)
 }
 
 /** 把守卫返回片段并入工具返回体：始终保留片段，不丢弃、不塞流转指令。 */
 function withGitignoreGuard(guardNote: string, body: string): string {
-  return `${body}\n\n${guardNote}`
+  return guardNote.length > 0 ? `${body}\n\n${guardNote}` : body
+}
+
+/**
+ * 项目级扫描平台配置补齐（init 与 set_worktree 共用）。
+ * - 排在忽略基线守卫之后：两类基线互不依赖，但顺序固定便于阅读返回体；
+ * - 容器探测只做一次，结果直接传给收集，避免重复起子进程；
+ * - 只写工作树（不 add、不 commit），review 会话 fix=none 同样只落盘不提交。
+ */
+async function runProjectConfigGuard(ctx: ToolContext, session: SessionStacks | null): Promise<string> {
+  const probe = await probeContainers(ctx.worktree)
+  return ensureProjectConfigsForSession(ctx.worktree, session, probe)
+}
+
+/** 忽略基线与扫描平台配置串成一段返回片段（忽略基线在前）。 */
+async function runBaselineGuards(
+  ctx: ToolContext,
+  ignoreOpts: EnsureIgnoreBaselineOpts,
+  session: SessionStacks | null,
+): Promise<string> {
+  const ignoreNote = await runGitignoreGuard(ctx, ignoreOpts)
+  const configNote = await runProjectConfigGuard(ctx, session)
+  return ignoreNote.length > 0 ? `${ignoreNote}\n${configNote}` : configNote
 }
 
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
@@ -805,29 +881,16 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 会话项目栈两入口必传 + 标签动态校验（早于入口分流与任何状态变更/落盘，错误可读）
   assertProjectStacks(args)
 
-  // 生成目录忽略守卫：assertProjectStacks 之后、入口分流之前，且早于任何 state 读
-  // （readStateByChangeId 的 needsUpgrade 迁移会在「读」时 mkdir/writeFile openspec/states/）。
-  // 三分支共用一次调用；参数按入参推导（不读 state，避免触发迁移写盘）：
-  // - review_scope 入口 fix=none 跳过提交仍写工作树；pr 会话以 head_ref 为基准分支；
-  // - change 入口用显式 base_branch（缺省 null = 同分支可提交的保守语义）。
-  // 既有 review 会话与固化基准分支的精确判定由 setWorktreeExecute 的二次守卫承担。
-  const guardNote = await runGitignoreGuard(ctx, {
-    baseBranch: args.review_scope?.scope_type === "pr"
-      ? args.review_scope.head_ref ?? null
-      : args.base_branch ?? null,
-    skipCommit: args.review_scope?.fix === "none",
-  })
-
   // 入口分流：review_scope（独立审查会话）与 change_id/task_group_id 互斥——同传报错、都不传报错
   if (args.review_scope !== undefined) {
-    return withGitignoreGuard(guardNote, await initReviewSession(args, ctx))
+    return initReviewSession(args, ctx)
   }
   if (!args.change_id || !args.task_group_id) {
     if (args.change_id) {
       // 已存在的独立审查会话按 change_id（会话 id）恢复：虚拟组 review，task_group_id 可缺省
       const existing = await readStateByChangeId(ctx.worktree, args.change_id)
       if (existing?.kind === "review") {
-        return withGitignoreGuard(guardNote, await initReviewRecovery(args, existing, ctx))
+        return initReviewRecovery(args, existing, ctx)
       }
     }
     throw new Error(
@@ -873,6 +936,8 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 已无规划文档副本，换任务组重入 init 依赖该回落链才解析得到任务组。
   // 第三级必须用「会话固化的基准分支」：state 已存在且本次未传 base_branch 时，当前检出分支可能已切走
   // （跨分支发起/重入），拿当前检出分支去 git show 会读错分支甚至读不到。
+  // 该解析/校验排在忽略基线守卫之前：无效 change（缺 tasks.md、任务组不存在）必须在写盘与提交之前失败，
+  // 否则守卫已补齐 .gitignore 并提交，留下半成品。
   const fallbackBaseBranch = state?.baseBranch || baseBranch
   const tasksContent = await resolveChangeDocContent(
     ctx.worktree,
@@ -901,6 +966,19 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   for (const g of parsedGroups) {
     tasksByGroup.set(g.id, parseTasksForGroupFromContent(tasksContent!, g.id))
   }
+
+  // 忽略基线守卫：排在栈参数校验 + 会话栈一致性校验之后、规划文档/任务组校验之后，按最终确定的 stacks 选资产
+  // （传错 stacks 或无效 change 时上面已抛错，不落盘任何忽略改动、不产生提交）。
+  const guardSession: SessionStacks = state?.stacks ?? {
+    project_stacks: args.project_stacks,
+    project_frameworks: args.project_frameworks,
+  }
+  const guardNote = await runBaselineGuards(ctx, {
+    baseBranch: args.base_branch ?? state?.baseBranch ?? null,
+    session: guardSession,
+  }, guardSession)
+  // 形态已声明但无框架覆盖：不拒绝（技术栈可能不在词表内），但常驻警告到会话补齐为止
+  const shapeWarnings = shapeCoverageWarnings(guardSession)
 
   // 执行边界改由提案阶段产出到 clarify.md：init 解析当前任务组边界，待 task item 重建/恢复完成后
   // 写入 metadata（不新增 init 参数）。解析失败/文件缺失不阻塞 init——实施视图按整个 worktree 处理。
@@ -1115,6 +1193,9 @@ export async function initExecute(params: InitParams, ctx: ToolContext): Promise
   // 返回体显式警告，避免调用方误以为已按子层恢复
   if (args.recovery?.review_layer && (state.mode ?? "full") === "simple") {
     parts.push("\n\n⚠️ simple 模式无 review 子层（仅 quality_review 单层审查），recovery.review_layer 参数未生效。")
+  }
+  if (shapeWarnings.length > 0) {
+    parts.push(`\n\n⚠️ ${shapeWarnings.join("\n⚠️ ")}`)
   }
   return withGitignoreGuard(guardNote, parts.join(""))
 }
@@ -1587,7 +1668,12 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   // 不触发任何迁移写盘；守卫不能移到 state 读之后，否则同样有迁移先于守卫的写盘问题。
   const stateFileExists = existsSync(getStatePath(ctx.worktree, params.change_id)) ||
     existsSync(path.join(getLegacyStateDir(ctx.worktree), `${params.change_id}.json`))
-  let preexisting: { baseBranch?: unknown; kind?: unknown; reviewScope?: { fix?: unknown } } | null = null
+  let preexisting: {
+    baseBranch?: unknown
+    kind?: unknown
+    reviewScope?: { fix?: unknown }
+    stacks?: { project_stacks?: unknown; project_frameworks?: unknown }
+  } | null = null
   try {
     const raw = await readFile(getStatePath(ctx.worktree, params.change_id), "utf-8")
     const parsed = JSON.parse(raw) as Record<string, unknown>
@@ -1595,13 +1681,28 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
       baseBranch: parsed["baseBranch"],
       kind: parsed["kind"],
       reviewScope: parsed["reviewScope"] as { fix?: unknown } | undefined,
+      stacks: parsed["stacks"] as { project_stacks?: unknown; project_frameworks?: unknown } | undefined,
     }
   } catch { /* 状态文件缺失/损坏：按保守语义只写工作树，后续读会自行报错或重建 */ }
+  // 会话栈读嵌套字段 stacks.project_stacks / stacks.project_frameworks（旧布局无此字段）：
+  // 读不到只用框架级基线，并在返回体显式提示本次未按形态补能力级基线。
+  const preexistingSession: SessionStacks | null =
+    Array.isArray(preexisting?.stacks?.project_stacks) &&
+    Array.isArray(preexisting?.stacks?.project_frameworks)
+      ? {
+          project_stacks: preexisting!.stacks!.project_stacks as string[],
+          project_frameworks: preexisting!.stacks!.project_frameworks as string[],
+        }
+      : null
   const guardNote = stateFileExists
-    ? await ensureGeneratedDirsIgnored(ctx.worktree, {
+    ? await runBaselineGuards(ctx, {
       baseBranch: typeof preexisting?.baseBranch === "string" ? preexisting.baseBranch : null,
       skipCommit: preexisting?.kind === "review" && (preexisting as any).reviewScope?.fix === "none",
-    })
+      session: preexistingSession,
+    }, preexistingSession)
+    : ""
+  const stacksFallbackNote = stateFileExists && preexistingSession === null
+    ? "- **旧布局提示**: 状态文件未记录会话项目栈（旧布局），本次只补框架级基线；能力级基线与项目级扫描配置需重新初始化会话后补齐。"
     : ""
   const state = await readStateByWorktree(ctx.worktree, params.change_id)
   if (!state) throw new Error("编排会话未初始化。请先调用 opx_orch_init。")
@@ -1752,6 +1853,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     `- **路径**: \`${item.metadata["worktree_path"]}\``,
     `- **分支**: \`${branch}\``,
     ...(planNote ? ["", planNote] : []),
+    ...(stacksFallbackNote ? ["", stacksFallbackNote] : []),
   ].join("\n"))
 }
 

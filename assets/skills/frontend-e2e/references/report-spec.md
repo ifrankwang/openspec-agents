@@ -13,7 +13,7 @@
 | 运行痕迹（截图 / trace / video） | `<os.tmpdir()>/<仓库目录名 slug>-e2e/test-results-<端口>` | 只服务失败排查；按端口分目录，系统定期清理；`run-e2e.mjs` 启动时打印并清理 3 天前的同类目录 |
 | 一次性验证报告 | `E2E_REPORT_DIR=$(mktemp -d)` | 临时验证用，不进仓库 |
 
-覆盖语义：`E2E_REPORT_DIR` / `E2E_RESULT_DIR` 显式设置时直接使用该目录（real 模式不再叠加 `real/`）；相对路径按 `e2e/` 目录解析，绝对路径原样使用。报告写入 `e2e/reports/`，需把该目录加入 `.gitignore` 与 Vite 的 watch ignore；项目根不再出现 `playwright-report/`、`test-results/`。
+覆盖语义：`E2E_REPORT_DIR` / `E2E_RESULT_DIR` 显式设置时直接使用该目录（real 模式不再叠加 `real/`）；相对路径按 `e2e/` 目录解析，绝对路径原样使用。报告写入 `e2e/reports/`，该目录不入库，忽略条目由项目初始化写入基线，并加入 Vite 的 watch ignore；运行痕迹只落系统临时目录，项目根不出现运行产物。
 
 ## 一、页面结构
 
@@ -118,5 +118,5 @@
 - [ ] 接口证据的请求/响应是完整原文且已脱敏；JSON 树能展开、全部展开、复制。
 - [ ] 断言证据含源码、期望、实际；元素不存在时给「未找到该元素」而不是空。
 - [ ] `report-data.json` 有 `schemaVersion` 与 `schema`，失败场景带 `error.raw`。
-- [ ] 已把 `e2e/reports/` 加入 `.gitignore` 与 Vite 的 watch ignore；项目根无 `test-results/`、`playwright-report/`；痕迹目录在系统临时目录。
+- [ ] `e2e/reports/` 不入库（项目初始化已写入忽略基线）且加入 Vite 的 watch ignore；痕迹目录在系统临时目录，项目根无运行产物。
 - [ ] 页面无前端报错（打开报告控制台干净）。

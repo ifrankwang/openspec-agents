@@ -269,9 +269,11 @@ function buildIssueChild(nc: NonNullable<AgentSubmitParams["new_children"]>[numb
   const sourceDim = agentToReviewDimension(sourceAgent)
   child.metadata["dimension"] = sourceDim ?? nc.dimension
   if (nc.file) child.metadata["file"] = nc.file
+  if (nc.path_pattern) child.metadata["path_pattern"] = nc.path_pattern
   if (nc.line !== undefined) child.metadata["line"] = nc.line
   if (nc.suggestion) child.metadata["suggestion"] = nc.suggestion
   if (nc.rule) child.metadata["rule"] = nc.rule
+  if (nc.rule_keys && nc.rule_keys.length > 0) child.metadata["rule_keys"] = nc.rule_keys
   if (nc.root_cause_guess) child.metadata["root_cause_guess"] = nc.root_cause_guess
   return child
 }
@@ -846,6 +848,21 @@ export async function agentSubmitExecute(params: AgentSubmitParams, ctx: ToolCon
       }
       if (!nc.description || !nc.description.trim()) {
         throw new Error(`new_children 中 issue "${nc.id}" 的 description 不能为空。`)
+      }
+      if (nc.path_pattern !== undefined && !nc.path_pattern.trim()) {
+        throw new Error(
+          `new_children 中 issue "${nc.id}" 的 path_pattern 不能为空。表达一类路径时给出路径 glob（如 src/generated/**）；精确单文件用 file。`
+        )
+      }
+      if (nc.rule_keys !== undefined) {
+        if (nc.rule_keys.length === 0) {
+          throw new Error(
+            `new_children 中 issue "${nc.id}" 的 rule_keys 不能为空数组。表达一组规则时至少给出一个规则键；单条规则用 rule。`
+          )
+        }
+        if (nc.rule_keys.some((k) => !k || !k.trim())) {
+          throw new Error(`new_children 中 issue "${nc.id}" 的 rule_keys 含空规则键，请填写有效规则键。`)
+        }
       }
       if (sourceDim) {
         if (nc.dimension !== undefined) {

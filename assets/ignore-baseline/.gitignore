@@ -1,0 +1,9 @@
+# 框架级忽略基线：与项目形态无关，任何项目都生效
+.DS_Store
+.idea/
+*.iml
+*.log
+.env
+.env.local
+.env.*.local
+*.local

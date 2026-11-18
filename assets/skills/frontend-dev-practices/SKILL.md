@@ -24,8 +24,8 @@ frameworks: ["vue", "react"]
 - 质量命令统一封装在 `package.json` scripts（`lint` / `format` / `test` / `test:e2e`），CI 与本地同一入口；禁止 CI 另写一套命令
 - 环境变量：Vite 用 `.env`、`.env.development`、`.env.production`；仅 `VITE_` 前缀暴露给客户端
 - 前端环境变量只放非敏感配置（接口前缀、开关、埋点 id）；密钥一律不进前端环境变量与产物
-- `.env.local` / `.env.*.local` 不进仓库；`dist/`、`coverage/`、`node_modules/` 不进仓库
-- 构建产物目录、缓存目录（`node_modules/.vite`）纳入 `.gitignore` 与 dev server watch ignore
+- 本地环境变量文件、构建产物、依赖缓存与报告目录的忽略条目由项目初始化按形态自动补齐并写入报告，不在此逐条列举
+- 构建产物与缓存目录同样排除出 dev server 的 watch 范围
 
 ## 浏览器与设备基线
 
