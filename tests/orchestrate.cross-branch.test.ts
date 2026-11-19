@@ -176,6 +176,99 @@ describe("跨分支发起：规划文档落位", () => {
     expect(readFileSync(join(repo, ".worktree", CID, "ws", changeDirOf(), "tasks.md"), "utf-8"))
       .toContain("First Task Group")
   })
+
+  test("切组复用：worktree 已存在且规划文档已提交在 change 分支、主仓库副本过时 → 不 blocked，复用同一 worktree", async () => {
+    installTestSkillEnv()
+    const repo = initRepo()
+    git(repo, "checkout", "-b", "work")
+    writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
+    const o = makeOrchCtx(repo)
+
+    await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "main" },
+      o,
+    )
+    await set_worktree.execute({ change_id: CID }, o)
+    const wtPath = join(repo, ".worktree", CID, "ws")
+
+    // 权威副本已在 change 分支上、主工作树副本已清理；再在主仓库放一份过时副本模拟跨分支残留
+    // （内容可解析但与 change 分支版本不同，模拟勾选进度落伍的旧副本）
+    expect(existsSync(join(repo, `${changeDirOf()}/tasks.md`))).toBe(false)
+    writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS.replace("- [ ] 1.1 Task one", "- [x] 1.1 Task one"))
+    const wtBefore = git(repo, "rev-parse", `change/${CID}`)
+
+    await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "full", base_branch: "main" },
+      o,
+    )
+    const out = await set_worktree.execute({ change_id: CID }, o)
+
+    expect(out).not.toContain("blocked")
+    expect(out).toContain("复用已有 worktree")
+    // 复用同一 worktree，change 分支未产生新的同步提交，过时副本未被搬运覆盖
+    expect(taskItemOf(readState(repo, CID)).metadata["worktree_path"]).toBe(wtPath)
+    const syncCommits = git(repo, "log", "--format=%s", `change/${CID}`)
+      .split("\n")
+      .filter((m) => m === "docs(openspec): sync change plan into change branch")
+    expect(syncCommits).toHaveLength(1)
+    expect(wtBefore).not.toBe("")
+    expect(readFileSync(join(wtPath, changeDirOf(), "tasks.md"), "utf-8")).toContain("First Task Group")
+    expect(readFileSync(join(repo, `${changeDirOf()}/tasks.md`), "utf-8")).toContain("- [x] 1.1 Task one")
+  })
+
+  test("主仓库检出 change 分支本身 → 不 blocked（权威文档就在当前检出分支上下文）", async () => {
+    const root = `/tmp/cross-same-branch-${Date.now()}`
+    const { worktree: wt, fakeGit } = setupWithFakeGit(root, CID)
+    try {
+      const o = makeOrchCtx(wt)
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "main" }, o)
+      await set_worktree.execute({ change_id: CID }, o)
+      const wtPath = taskItemOf(readState(wt, CID)).metadata["worktree_path"]
+      expect(wtPath).toBe(join(wt, ".worktree", CID, "ws"))
+
+      // 主仓库检出 change 分支本身：crossBranch 不得判定为真（含 tasks.md 勾选差异也不触发预检 blocked）
+      fakeGit.currentBranch = `change/${CID}`
+      await init.execute({ ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "full", base_branch: "main" }, o)
+      const out = await set_worktree.execute({ change_id: CID }, o)
+
+      expect(out).not.toContain("blocked")
+      expect(out).toContain("复用已有 worktree")
+      expect(taskItemOf(readState(wt, CID)).metadata["worktree_path"]).toBe(wtPath)
+    } finally { teardown(root) }
+  })
+
+  test("worktree 已删但 change 分支仍在且含规划文档 → 不 blocked，重建 worktree 自带权威文档", async () => {
+    installTestSkillEnv()
+    const repo = initRepo()
+    git(repo, "checkout", "-b", "work")
+    writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
+    const o = makeOrchCtx(repo)
+
+    await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "main" },
+      o,
+    )
+    await set_worktree.execute({ change_id: CID }, o)
+
+    // 模拟「worktree 已删但分支仍在」的重建路径：删目录 + 清 worktree 登记，主仓库留过时副本
+    // （内容可解析但与 change 分支版本不同，模拟勾选进度落伍的旧副本）
+    rmSync(join(repo, ".worktree", CID), { recursive: true, force: true })
+    git(repo, "worktree", "prune")
+    writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS.replace("- [ ] 1.1 Task one", "- [x] 1.1 Task one"))
+    const wtBefore = git(repo, "rev-parse", `change/${CID}`)
+
+    await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "2", mode: "full", base_branch: "main" },
+      o,
+    )
+    const out = await set_worktree.execute({ change_id: CID }, o)
+
+    expect(out).not.toContain("blocked")
+    const wtPath = join(repo, ".worktree", CID, "ws")
+    expect(existsSync(join(wtPath, changeDirOf(), "tasks.md"))).toBe(true)
+    expect(readFileSync(join(wtPath, changeDirOf(), "tasks.md"), "utf-8")).toContain("First Task Group")
+    expect(readFileSync(join(repo, `${changeDirOf()}/tasks.md`), "utf-8")).toContain("- [x] 1.1 Task one")
+  })
 })
 
 // ════════════════════════════════════════════════════════════════

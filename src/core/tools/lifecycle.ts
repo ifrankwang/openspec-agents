@@ -1258,6 +1258,16 @@ async function ensureChangeBranch(repoRoot: string, branch: string, baseBranch: 
   return true
 }
 
+/** 按 `git worktree list` 检索检出指定分支的 linked worktree；未找到返回 undefined。 */
+async function worktreePathForBranch(repoRoot: string, branch: string): Promise<string | undefined> {
+  const wtList = await runGit(repoRoot, ["worktree", "list"])
+  const line = wtList.split("\n").find((l) => {
+    const m = l.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
+    return m && m[2].trim() === branch
+  })
+  return line ? line.match(/^(\S+)/)?.[1] : undefined
+}
+
 // ─── 跨基准分支发起：规划文档落位（I1）───
 
 /** 递归列出目录下全部文件（返回相对路径，/ 分隔）；目录不存在或不可读时返回空数组。 */
@@ -1601,12 +1611,7 @@ async function ensureChangeWorktree(
 
   await ensureChangeBranch(repoRoot, branch, state.baseBranch)
 
-  const wtList = await runGit(repoRoot, ["worktree", "list"])
-  const existingLine = wtList.split("\n").find((l) => {
-    const m = l.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
-    return m && m[2].trim() === branch
-  })
-  const registeredPath = existingLine ? existingLine.match(/^(\S+)/)?.[1] : undefined
+  const registeredPath = await worktreePathForBranch(repoRoot, branch)
   const targetPath = registeredPath ?? defaultPath
 
   if (!(await pathExists(targetPath))) {
@@ -1746,19 +1751,38 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   // detached HEAD 无法判定检出分支：仅在确有规划文档需要同步时 blocked（基准分支已自带文档、
   // 或工作树无文件可同步时放行，按既有 worktree 创建逻辑继续）。
   const detached = !isReview && (currentBranch === "" || currentBranch === "HEAD")
-  const crossBranch = !isReview && !detached && currentBranch !== state.baseBranch
-  // 规划文档预检（只读）：detached / 跨分支的各类分流都在此完成，blocked 时不创建 worktree、零改动。
+  // crossBranch 排除「主仓库已检出 change 分支」的情形（含显式 branch_name）：此时主仓库工作树副本
+  // 就在 change 分支上下文里，与基准分支的正常差异（如 tasks.md 勾选）不构成预检不一致；
+  // 连带使主仓库 openspec 目录自动提交路径重新启用——语义与同分支流程对称，且发生在
+  // bindWorktreeRefs 之前，不影响审查范围起点。
+  const crossBranch = !isReview && !detached && currentBranch !== state.baseBranch && currentBranch !== branch
+  // 复用短路：worktree 已检出本分支（或 change 本地分支存在且其上已提交规划文档——「worktree 已删
+  // 但分支仍在」的重建路径，重建检出自带权威文档）时，规划文档权威副本在 change 分支上，主仓库
+  // 工作树副本过时属正常态，跳过整个预检块（detached / crossBranch 两条都跳过）直接复用；首次落位
+  // 时分支尚不存在，条件自然为假，预检照常执行。同分支（非 detached、非 crossBranch）不进预检，
+  // 不做这些查询。
   let planSync = false
   let planSkipNote = ""
-  if (detached) {
-    const plan = await resolveDetachedPlan(repoRoot, state)
-    if (plan.blocked) return withGitignoreGuard(guardNote, plan.blocked)
-    planSkipNote = plan.skipNote ?? ""
-  } else if (crossBranch) {
-    const plan = await resolveCrossBranchPlan(repoRoot, state, currentBranch)
-    if (plan.blocked) return withGitignoreGuard(guardNote, plan.blocked)
-    planSync = plan.sync ?? false
-    planSkipNote = plan.skipNote ?? ""
+  if (!isReview && (detached || crossBranch)) {
+    const reusePath = await worktreePathForBranch(repoRoot, branch)
+    const changeDirForReuse = `openspec/changes/${state.changeId}`
+    const reusePlanOnBranch =
+      reusePath !== undefined ||
+      ((await isLocalBranch(repoRoot, branch)) &&
+        (await listTreePaths(repoRoot, branch, changeDirForReuse)).length > 0)
+    if (reusePlanOnBranch) {
+      // 短路后 planSync=false、skipNote 为空：ensureChangeWorktree 复用路径不再尝试同步主仓库副本
+      planSkipNote = ""
+    } else if (detached) {
+      const plan = await resolveDetachedPlan(repoRoot, state)
+      if (plan.blocked) return withGitignoreGuard(guardNote, plan.blocked)
+      planSkipNote = plan.skipNote ?? ""
+    } else {
+      const plan = await resolveCrossBranchPlan(repoRoot, state, currentBranch)
+      if (plan.blocked) return withGitignoreGuard(guardNote, plan.blocked)
+      planSync = plan.sync ?? false
+      planSkipNote = plan.skipNote ?? ""
+    }
   }
 
   // 主仓库 openspec 变更目录自动提交仅在「当前检出分支 == 基准分支」时执行（跨分支走新路径，
@@ -1779,12 +1803,7 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
   let reused = false
   let planNote = ""
   if (isReview) {
-    const wtList = await runGit(repoRoot, ["worktree", "list"])
-    const existingLine = wtList.split("\n").find((l) => {
-      const m = l.match(/^(\S+)\s+[0-9a-f]+\s+\[(.+?)\]/)
-      return m && m[2].trim() === branch
-    })
-    const existingPath = existingLine ? existingLine.match(/^(\S+)/)?.[1] : undefined
+    const existingPath = await worktreePathForBranch(repoRoot, branch)
 
     if (existingPath) {
       const baseHead = await runGit(repoRoot, ["rev-parse", state.baseBranch])

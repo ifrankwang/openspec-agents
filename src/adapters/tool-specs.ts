@@ -38,7 +38,7 @@ export const OPX_TOOL_SPECS: readonly OpxToolSpec[] = [
   {
     name: "opx_orch_set_worktree",
     description:
-      "按会话声明的形态补齐技术栈忽略基线（`.gitignore` / `.prettierignore`），编排产物强制覆盖；无法安全提交时只写工作树并说明。同时按本地容器探测结果补齐项目级扫描平台配置：缺失时按模板创建、已存在时只补缺失键，只写工作树不提交，探测不到则跳过。确保目标组的 git worktree 就绪。change 会话按 change 模型 create-or-reuse：分支 change/{changeId} 不存在时从基准分支 tip 创建，worktree 常驻于 .worktree/{changeId}/ws，全部任务组串行复用（复用校验：目录缺失自愈重建、openspec 文档脏自动提交、代码文件脏拒绝）。只补齐资源，不改变阶段。",
+      "按会话声明的形态补齐技术栈忽略基线（`.gitignore` / `.prettierignore`），编排产物强制覆盖；无法安全提交时只写工作树并说明。同时按本地容器探测结果补齐项目级扫描平台配置：缺失时按模板创建、已存在时只补缺失键，只写工作树不提交，探测不到则跳过。确保目标组的 git worktree 就绪。change 会话按 change 模型 create-or-reuse：分支 change/{changeId} 不存在时从基准分支 tip 创建，worktree 常驻于 .worktree/{changeId}/ws，全部任务组串行复用（复用校验：目录缺失自愈重建、openspec 文档脏自动提交、代码文件脏拒绝）。切组复用（worktree 可复用或主仓库已检出 change 分支）时跳过规划文档预检直接复用。只补齐资源，不改变阶段。",
     schema: setWorktreeSchema,
   },
   {
