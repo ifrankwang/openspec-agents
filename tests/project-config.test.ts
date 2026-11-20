@@ -231,6 +231,28 @@ describe("ensureProjectConfigsForSession / 报告文案", () => {
     expect(note).toContain("- **扫描平台配置**: 已创建 `sonar-project.properties`（来源：skill `java-gate`）")
   })
 
+  test("slug 覆盖（worktree 语境）：project.key 用传入 slug 而非 worktree 目录名", async () => {
+    const { ensureProjectConfigsForSessionWithReport } = await import("../src/core/project-config")
+    // 模拟 worktree 布局：主仓库 my-repo / .worktree/cid/ws（basename 为 ws）
+    const repo = setupSkills([
+      { name: "java-gate", stacks: ["backend"], match: ["sonarqube"], files: { "sonar-project.properties": SONAR_TEMPLATE } },
+    ])
+    const wt = join(repo, ".worktree", "cid", "ws")
+    mkdirSync(wt, { recursive: true })
+    const probe = probeWith(["sonarqube:9.9"])
+    const r = await ensureProjectConfigsForSessionWithReport(wt, BACKEND, probe, { slug: "my-repo" })
+    expect(r.note).toContain("已创建 `sonar-project.properties`")
+    expect(r.writtenTargets).toEqual(["sonar-project.properties"])
+    const content = readFileSync(join(wt, "sonar-project.properties"), "utf-8")
+    expect(content).toContain("sonar.projectKey=my-repo")
+    expect(content).toContain("sonar.projectName=my-repo")
+    expect(content).not.toContain("ws")
+    // 同 slug 重跑：已完整，不写盘、writtenTargets 为空（受控提交幂等）
+    const again = await ensureProjectConfigsForSessionWithReport(wt, BACKEND, probe, { slug: "my-repo" })
+    expect(again.writtenTargets).toEqual([])
+    expect(again.note).toContain("已存在且完整")
+  })
+
   test("旧会话无栈：跳过并说明", async () => {
     const repo = setupSkills([
       { name: "java-gate", stacks: ["backend"], match: ["sonarqube"], files: { "sonar-project.properties": SONAR_TEMPLATE } },

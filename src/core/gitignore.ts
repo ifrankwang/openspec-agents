@@ -323,6 +323,9 @@ export async function ensureIgnoreBaseline(
   }
   // 写入后逐文件复核：允许「无输出」（已跟踪且改动已落盘）、` M <f>`（本次写入的改动）
   // 与 `?? <f>`（新建文件，需 add -N 建立跟踪）；其余状态说明出现预期外改动，拒绝提交。
+  // GitRunner.run 对 stdout 整体 trim()（见 src/core/git.ts porcelain 解析注释）：真 git 的
+  // ` M <f>` 首行会被吃掉前导空格变成 `M <f>`；FakeGitRunner 的 gitignoreSim 分支返回原样
+  // ` M <f>`。两种形态都视为未暂存修改放行；staged 形态 `M  <f>`（两个空格）仍拒绝。
   const needsIntentToAdd: string[] = []
   for (const target of commitTargets) {
     const status = await runGit(repoRoot, ["status", "--porcelain", "--", target])
@@ -332,7 +335,7 @@ export async function ensureIgnoreBaseline(
       needsIntentToAdd.push(target)
       continue
     }
-    if (statusLines.length === 1 && statusLines[0] === ` M ${target}`) continue
+    if (statusLines.length === 1 && (statusLines[0] === ` M ${target}` || statusLines[0] === `M ${target}`)) continue
     lines.push(
       renderCommitLine(commitTargets, [
         `\`${target}\` 在写入后出现预期外状态（${statusLines.join(" / ")}），提交会夹带非本次内容`,

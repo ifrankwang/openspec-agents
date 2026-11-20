@@ -159,6 +159,22 @@ describe("独立审查入口（pr 初始化 / 校验 / 幂等）", () => {
       expect(item.metadata["base_ref"]).toBe(fakeGit.baseRef)
     } finally { teardown(root) }
   })
+
+  test("worktree：review 会话不在 worktree 侧跑基线守卫，不产生基线提交", async () => {
+    const { wt, root, fakeGit } = fresh()
+    try {
+      const o = makeOrchCtx(wt)
+      await init.execute({ ...INIT_PROJECT_STACKS, review_scope: { scope_type: "pr", head_ref: "feature-x", granularity: "simple", fix: "fix" } }, o)
+      fakeGit.callLog.length = 0
+      fakeGit.callSites.length = 0
+      const out = await set_worktree.execute({ change_id: PR_SESSION }, o)
+      // 全程（含新建 review worktree 路径）无 ignore 基线提交
+      expect(fakeGit.callLog.some((l) => l.startsWith("checked:commit -m chore(ignore)"))).toBe(false)
+      expect(fakeGit.callLog.some((l) => l.includes("chore(baseline)"))).toBe(false)
+      // 返回体说明 review 会话维持只写主仓库
+      expect(out).toContain("独立审查会话维持只写主仓库、不在 worktree 侧提交")
+    } finally { teardown(root) }
+  })
 })
 
 // ─── 驱动助手 ───

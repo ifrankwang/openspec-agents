@@ -10,7 +10,7 @@ import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWo
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock, getStatePath, getLegacyStateDir } from "../state.ts"
 import { ensureIgnoreBaseline, type EnsureIgnoreBaselineOpts } from "../gitignore.ts"
 import { probeContainers } from "../containers.ts"
-import { ensureProjectConfigsForSession } from "../project-config.ts"
+import { ensureProjectConfigsForSession, ensureProjectConfigsForSessionWithReport, projectSlug } from "../project-config.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
 import { readExemptions } from "../exemptions.ts"
 import { parseTaskGroupsFromContent, parseTasksForGroupFromContent, extractRelevantSpecsFromTasks } from "../tasks-md.ts"
@@ -841,10 +841,11 @@ function withGitignoreGuard(guardNote: string, body: string): string {
 }
 
 /**
- * 项目级扫描平台配置补齐（init 与 set_worktree 共用）。
+ * 项目级扫描平台配置补齐（主仓库侧，init 与 set_worktree 共用）。
  * - 排在忽略基线守卫之后：两类基线互不依赖，但顺序固定便于阅读返回体；
  * - 容器探测只做一次，结果直接传给收集，避免重复起子进程；
- * - 只写工作树（不 add、不 commit），review 会话 fix=none 同样只落盘不提交。
+ * - 主仓库侧本函数只写工作树（不 add、不 commit），review 会话 fix=none 同样只落盘不提交；
+ *   worktree 侧由 runWorktreeBaselineGuards 补跑并对写入清单做受控提交进 change 分支。
  */
 async function runProjectConfigGuard(ctx: ToolContext, session: SessionStacks | null): Promise<string> {
   const probe = await probeContainers(ctx.worktree)
@@ -860,6 +861,67 @@ async function runBaselineGuards(
   const ignoreNote = await runGitignoreGuard(ctx, ignoreOpts)
   const configNote = await runProjectConfigGuard(ctx, session)
   return ignoreNote.length > 0 ? `${ignoreNote}\n${configNote}` : configNote
+}
+
+/**
+ * worktree 侧基线守卫（change 会话常驻 worktree 就位时补跑，创建与复用两条路径共用）：
+ * - worktree 检出的是 change 分支而非基准分支，ignore 守卫传 baseBranch: null
+ *   跳过分支校验（worktree 内 HEAD 必为 change 分支，安全），skipCommit: false 直接提交进 change 分支；
+ * - 扫描平台配置按主仓库根目录计算 projectSlug（worktree 路径 basename 是 "ws"，不能作 project.key），
+ *   写入清单由 ensureProjectConfigsForSessionWithReport 返回，非空时对清单做受控提交
+ *   （沿用 gitignore.ts 的 add -N + commit --only 样式，不扫全仓库 status，不误吞用户文件）；
+ * - 守卫自身幂等：基线无变化时不写盘不提交；提交失败显式抛错，不静默降级；
+ * - 排在 applyPlan（规划文档同步）与 bindWorktreeRefs 之前：守卫提交必须落在
+ *   scope_start_oid..scope_end 审查范围之外（同步先于 bind 的既有原则），
+ *   且 syncChangePlanDocs 要求 worktree 干净，守卫若在同步后留下未提交文件会令同步抛错。
+ */
+async function runWorktreeBaselineGuards(worktreePath: string, repoRoot: string, state: OrchestrateState): Promise<string> {
+  const ignoreNote = await ensureIgnoreBaseline(worktreePath, {
+    skipCommit: false,
+    baseBranch: null,
+    session: state.stacks ?? null,
+  })
+
+  const probe = await probeContainers(worktreePath)
+  let { note: configNote, writtenTargets } = await ensureProjectConfigsForSessionWithReport(
+    worktreePath,
+    state.stacks ?? null,
+    probe,
+    { slug: projectSlug(repoRoot) },
+  )
+
+  if (writtenTargets.length > 0) {
+    // 受控提交：只提交守卫实际写盘的目标文件（新文件先 add -N 占位，再 commit --only 限定范围），
+    // 提交后按 name-only 核验，失败整体抛错。
+    for (const target of writtenTargets) {
+      const status = await runGit(worktreePath, ["status", "--porcelain", "--", target])
+      if (status.trim().length === 0) continue // 该目标实际未落盘（无变化），跳过
+      const addN = await runGitChecked(worktreePath, ["add", "-N", "--", target])
+      if (!addN.success) throw new Error(`worktree 基线文件 git add -N 失败（${target}）：${addN.stderr}`)
+    }
+    const commit = await runGitChecked(worktreePath, [
+      "commit", "-m", "chore(baseline): sync project config baseline", "--only", "--", ...writtenTargets,
+    ])
+    if (!commit.success) throw new Error(`worktree 基线配置受控提交失败：${commit.stderr}`)
+    const headBefore = await runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])
+    const shown = await runGit(worktreePath, ["show", "--name-only", "--format=", "HEAD"])
+    const committed = shown.split("\n").map((l) => l.trim()).filter(Boolean)
+    const missing = writtenTargets.filter((t) => !committed.includes(t))
+    if (missing.length > 0) {
+      throw new Error(
+        `worktree 基线配置提交核验失败：以下目标未出现在 HEAD 提交中（HEAD=${headBefore.trim()}）：${missing.join("、")}`
+      )
+    }
+    configNote += `\n- **版本库提交**: 已提交，仅含 ${writtenTargets.map((t) => `\`${t}\``).join("、")}（消息 \`chore(baseline): sync project config baseline\`）。`
+  }
+
+  const notes = [ignoreNote, configNote].filter((n) => n.length > 0)
+  return notes.join("\n")
+}
+
+/** worktree 侧守卫片段与规划文档说明拼成一段返回体（守卫在前）。 */
+function joinGuardNote(guardNote: string, planNote: string): string {
+  return guardNote.length > 0 ? `${guardNote}\n\n${planNote}` : planNote
 }
 
 export async function initExecute(params: InitParams, ctx: ToolContext): Promise<string> {
@@ -1593,8 +1655,12 @@ async function syncChangePlanDocs(repoRoot: string, worktreePath: string, state:
  *   目录由 git 拒绝，透传错误提示人工处理）；
  *   ③目录存在且检出本分支 → 脏分类：仅 openspec/ 路径脏 → 自动 commit 兜底（与主仓库侧对称）；
  *   含代码文件脏 → 拒绝并提示人工处理；
+ * - 三条路径都在 applyPlan 之前补跑 worktree 侧基线守卫（runWorktreeBaselineGuards）：
+ *   ignore 基线与扫描平台配置直接提交进 change 分支（创建路径 worktree 全新必然干净；
+ *   复用路径基线文件已提交属 clean，守卫幂等无写入，不影响脏分类）；
  * - 跨基准分支发起时，规划文档同步（或跳过说明）在 bindWorktreeRefs 之前执行：保证 scope_start_oid
- *   起点不含本次同步提交，同步文档不会被算进本任务组的审查范围；
+ *   起点不含本次同步提交，同步文档不会被算进本任务组的审查范围；守卫提交同样先于 bind，
+ *   不落入 scope_start_oid..scope_end 审查范围；
  * - 就位后 bindWorktreeRefs 绑定引用并记录任务组 scope 端点。
  */
 async function ensureChangeWorktree(
@@ -1618,9 +1684,10 @@ async function ensureChangeWorktree(
     // 目录不存在：管理记录残留（幽灵 worktree）时先 prune，再全新创建 checkout change 分支
     await runGitChecked(repoRoot, ["worktree", "prune"])
     await runGit(repoRoot, ["worktree", "add", targetPath, branch])
+    const guardNote = await runWorktreeBaselineGuards(targetPath, repoRoot, state)
     const planNote = await applyPlan(targetPath)
     await bindWorktreeRefs(item, targetPath, branch)
-    return { path: targetPath, reused: false, planNote }
+    return { path: targetPath, reused: false, planNote: joinGuardNote(guardNote, planNote) }
   }
 
   if (!registeredPath) {
@@ -1632,9 +1699,10 @@ async function ensureChangeWorktree(
         `请人工确认该目录内容并处理（删除或迁移）后重试。`
       )
     }
+    const guardNote = await runWorktreeBaselineGuards(targetPath, repoRoot, state)
     const planNote = await applyPlan(targetPath)
     await bindWorktreeRefs(item, targetPath, branch)
-    return { path: targetPath, reused: false, planNote }
+    return { path: targetPath, reused: false, planNote: joinGuardNote(guardNote, planNote) }
   }
 
   // 目录存在且检出本分支 → 复用候选：脏分类（openspec/ 脏自动 commit 兜底；代码文件脏拒绝）
@@ -1658,9 +1726,12 @@ async function ensureChangeWorktree(
     const commitResult = await runGitChecked(targetPath, ["commit", "-m", "docs(openspec): auto-commit before worktree reuse"])
     if (!commitResult.success) throw new Error(`worktree openspec 目录 git commit 失败：${commitResult.stderr}`)
   }
+  // 守卫放脏分类之后、applyPlan 之前：复用路径上基线文件已提交进 change 分支属 clean，
+  // 守卫幂等无写入；用户手改的文件仍被上方脏分类拒绝，拒绝语义保持不变。
+  const guardNote = await runWorktreeBaselineGuards(targetPath, repoRoot, state)
   const planNote = await applyPlan(targetPath)
   await bindWorktreeRefs(item, targetPath, branch)
-  return { path: targetPath, reused: true, planNote }
+  return { path: targetPath, reused: true, planNote: joinGuardNote(guardNote, planNote) }
 }
 
 export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolContext): Promise<string> {
@@ -1872,6 +1943,8 @@ export async function setWorktreeExecute(params: SetWorktreeParams, ctx: ToolCon
     `- **路径**: \`${item.metadata["worktree_path"]}\``,
     `- **分支**: \`${branch}\``,
     ...(planNote ? ["", planNote] : []),
+    "",
+    "- **worktree 侧基线**: change 会话在 worktree 创建/复用时补跑基线守卫（.gitignore/.prettierignore 与扫描平台配置），并提交进 change 分支；独立审查会话维持只写主仓库、不在 worktree 侧提交。",
     ...(stacksFallbackNote ? ["", stacksFallbackNote] : []),
   ].join("\n"))
 }

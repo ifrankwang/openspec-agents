@@ -338,6 +338,7 @@ describe("文本边界与幂等", () => {
     expect(first).toContain("已提交")
 
     fake.callLog.length = 0
+    fake.callSites.length = 0
     const second = await ensureIgnoreBaseline(repo, { baseBranch: "main", session: null })
 
     expect(second).toContain("已齐全，未改动文件")
@@ -417,11 +418,19 @@ describe("init / set_worktree 实测", () => {
     const orch = makeOrchCtx(dir)
     await init.execute({ ...INIT_PROJECT_STACKS, change_id: "ignore-sw", task_group_id: "1", mode: "simple" }, orch)
     fake.callLog.length = 0
+    fake.callSites.length = 0
     const out = await set_worktree.execute({ change_id: "ignore-sw" }, orch)
 
     expect(out).toContain("已创建 worktree")
+    // worktree 侧基线守卫（新 worktree 无 .gitignore）会写入并提交基线；
+    // 主仓库侧条目已齐，不产生 ignore 基线提交（也不再有 add -N）
+    expect(fake.callLog.some((l) => l.startsWith("checked:commit -m chore(ignore)"))).toBe(true)
+    expect(
+      fake.callSites.some(
+        (c) => c.checked && c.args[0] === "commit" && (c.args[2] ?? "").startsWith("chore(ignore)") && c.dir === dir,
+      ),
+    ).toBe(false)
     expect(fake.callLog.some((l) => l.startsWith("checked:add -N"))).toBe(false)
-    expect(fake.callLog.some((l) => l.startsWith("checked:commit"))).toBe(false)
     expect(fake.callLog.some((l) => l.startsWith("check-ignore -v"))).toBe(true)
   })
 

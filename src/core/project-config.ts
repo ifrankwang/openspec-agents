@@ -16,7 +16,8 @@ import { collectComposeTexts, type ContainerInfo, type ContainerProbeResult } fr
  *   写入时插值，`#` 开头的行为配置文件注释并原样保留。
  *
  * 写入语义：目标不存在 → 按模板创建；已存在 → 只追加模板中缺失的键，绝不改已有行；
- * 只写工作树，不做任何 git 操作（不 add、不 commit）。
+ * 本函数自身不做任何 git 操作（不 add、不 commit）；worktree 语境下由编排层对返回的
+ * 写入清单（action 非 complete 的目标）做受控提交。
  */
 
 export const PROJECT_CONFIG_DIR_NAME = "project-config"
@@ -71,6 +72,11 @@ export interface ProjectConfigReport {
 export interface EnsureProjectConfigsOpts {
   /** 只计算计划、不落盘。 */
   dryRun?: boolean
+  /**
+   * 项目标识覆盖（模板 `{{project.name}}` / `{{project.key}}` 插值用）。
+   * worktree 语境下必须传主仓库根算出的 slug（worktree 目录名 `ws` 不是项目名）；缺省回落 `projectSlug(repoRoot)`。
+   */
+  slug?: string
 }
 
 /** container-match 词是否命中任一运行中容器（镜像名/容器名，大小写不敏感，支持 glob）。 */
@@ -279,7 +285,8 @@ function mergeDetectedVia(group: readonly ProjectConfigAsset[]): ProjectConfigDe
  * - 目标不存在：用（合并后的）模板插值创建；
  * - 已存在：逐行解析已有键，模板中的缺失键追加到文件末尾，前置一行来源注释（文件内已有该
  *   注释前缀则不重复写）；已有行的值一律不动；
- * - 只写工作树，不触碰 .git，不做任何 git 操作；dryRun 时只返回计划。
+ * - 本函数自身不做 git 操作（不 add、不 commit）；worktree 语境下由编排层对返回的写入清单做受控提交；
+ *   dryRun 时只返回计划。
  */
 export async function ensureProjectConfigs(
   repoRoot: string,
@@ -293,7 +300,7 @@ export async function ensureProjectConfigs(
     groups.set(asset.target, list)
   }
 
-  const slug = projectSlug(repoRoot)
+  const slug = opts.slug ?? projectSlug(repoRoot)
   const targets: ProjectConfigTargetReport[] = []
 
   for (const [target, group] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
@@ -413,8 +420,40 @@ export async function ensureProjectConfigsForSession(
   probe: ContainerProbeResult,
   opts: EnsureProjectConfigsOpts = {},
 ): Promise<string> {
+  const outcome = await ensureProjectConfigsForSessionOutcome(repoRoot, session, probe, opts)
+  return "skip" in outcome
+    ? renderProjectConfigSkip(outcome.skip)
+    : renderProjectConfigReport(outcome.report).join("\n")
+}
+
+/**
+ * worktree 语境入口（编排层受控提交用）：与 ensureProjectConfigsForSession 同语义，
+ * 额外返回本次实际写盘的目标文件清单（action 非 complete 的目标；跳过时为空），
+ * 供编排层对清单做受控提交。本函数自身仍不做 git 操作。
+ */
+export async function ensureProjectConfigsForSessionWithReport(
+  repoRoot: string,
+  session: SessionStacks | null,
+  probe: ContainerProbeResult,
+  opts: EnsureProjectConfigsOpts = {},
+): Promise<{ note: string; writtenTargets: string[] }> {
+  const outcome = await ensureProjectConfigsForSessionOutcome(repoRoot, session, probe, opts)
+  if ("skip" in outcome) return { note: renderProjectConfigSkip(outcome.skip), writtenTargets: [] }
+  return {
+    note: renderProjectConfigReport(outcome.report).join("\n"),
+    writtenTargets: outcome.report.targets.filter((t) => t.action !== "complete").map((t) => t.target),
+  }
+}
+
+/** 会话栈 → 资产收集（含 compose 回落）→ 写入的共用实现；skip 分支只算原因、不落盘。 */
+async function ensureProjectConfigsForSessionOutcome(
+  repoRoot: string,
+  session: SessionStacks | null,
+  probe: ContainerProbeResult,
+  opts: EnsureProjectConfigsOpts = {},
+): Promise<{ report: ProjectConfigReport } | { skip: ProjectConfigSkipReason }> {
   if (!session || session.project_stacks.length === 0) {
-    return renderProjectConfigSkip("no-session")
+    return { skip: "no-session" }
   }
   const assets = collectProjectConfigAssets(session, probe)
   // 运行时可用但零匹配：compose 文本在运行时探测成功时不会被读取，这里再回落读一次；
@@ -424,13 +463,12 @@ export async function ensureProjectConfigsForSession(
     : assets
   if (resolved.length === 0) {
     if (probe.runtime === null && probe.composeHits.length === 0) {
-      return renderProjectConfigSkip("no-runtime")
+      return { skip: "no-runtime" }
     }
     if (probe.runtime !== null && probe.containers.length === 0) {
-      return renderProjectConfigSkip("no-containers")
+      return { skip: "no-containers" }
     }
-    return renderProjectConfigSkip("no-match")
+    return { skip: "no-match" }
   }
-  const report = await ensureProjectConfigs(repoRoot, resolved, opts)
-  return renderProjectConfigReport(report).join("\n")
+  return { report: await ensureProjectConfigs(repoRoot, resolved, opts) }
 }

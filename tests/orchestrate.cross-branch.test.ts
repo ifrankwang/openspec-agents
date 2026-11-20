@@ -25,6 +25,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import { __setGitRunner } from "../src/core/git"
+import { __setContainerRunner } from "../src/core/containers"
 import { renderWorktreeSection } from "../src/core/views"
 import type { OrchestrateState, TaskGroupState } from "../src/core/types"
 import { init, set_worktree } from "../src/adapters/opencode/tools"
@@ -141,7 +142,8 @@ describe("跨分支发起：规划文档落位", () => {
     expect(currentBranchOf(repo)).toBe("work")
     expect(git(repo, "ls-tree", "-r", "--name-only", "work", "--", changeDirOf())).toBe("")
     expect(git(repo, "ls-tree", "-r", "--name-only", "main", "--", changeDirOf())).toBe("")
-    expect(git(repo, "rev-list", "--count", `main..change/${CID}`)).toBe("1")
+    // change 分支含 2 条提交：worktree 侧基线守卫提交（.gitignore）+ 规划文档同步提交
+    expect(git(repo, "rev-list", "--count", `main..change/${CID}`)).toBe("2")
     expect(git(repo, "log", "--max-count=1", "--format=%s", `change/${CID}`)).toBe(
       "docs(openspec): sync change plan into change branch",
     )
@@ -175,6 +177,84 @@ describe("跨分支发起：规划文档落位", () => {
     expect(existsSync(join(repo, changeDirOf()))).toBe(false)
     expect(readFileSync(join(repo, ".worktree", CID, "ws", changeDirOf(), "tasks.md"), "utf-8"))
       .toContain("First Task Group")
+  })
+
+  test("复用路径基线守卫幂等：二次 set_worktree 不产生空提交、不误拒复用，worktree 内基线文件已提交且干净", async () => {
+    installTestSkillEnv()
+    const repo = initRepo()
+    git(repo, "checkout", "-b", "work")
+    writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
+    const o = makeOrchCtx(repo)
+
+    await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "main" },
+      o,
+    )
+    const first = await set_worktree.execute({ change_id: CID }, o)
+    expect(first).toContain("chore(ignore): add project ignore baseline")
+    const baselineCommitsAfterFirst = git(repo, "log", "--format=%s", `change/${CID}`)
+      .split("\n")
+      .filter((m) => m === "chore(ignore): add project ignore baseline")
+    expect(baselineCommitsAfterFirst).toHaveLength(1)
+
+    const second = await set_worktree.execute({ change_id: CID }, o)
+    expect(second).toContain("复用已有 worktree")
+    // 复用路径守卫幂等：基线文件已提交进 change 分支（clean），不产生第二条基线提交
+    const baselineCommits = git(repo, "log", "--format=%s", `change/${CID}`)
+      .split("\n")
+      .filter((m) => m === "chore(ignore): add project ignore baseline")
+    expect(baselineCommits).toHaveLength(1)
+    // worktree 内基线文件存在且干净（无未提交内容，复用未被误拒）
+    const wtPath = join(repo, ".worktree", CID, "ws")
+    expect(git(wtPath, "status", "--porcelain")).toBe("")
+    expect(readFileSync(join(wtPath, ".gitignore"), "utf-8")).toContain(".worktree/")
+  })
+
+  test("worktree 侧扫描平台配置受控提交：容器命中 → sonar 配置随 chore(baseline) 提交进 change 分支，project.key 用主仓库根名", async () => {
+    installTestSkillEnv()
+    // 覆盖离线探测：命中一个 sonarqube 容器，使 worktree 侧补齐 sonar-project.properties
+    __setContainerRunner({
+      async run(cmd) {
+        if (cmd === "docker") {
+          return { stdout: "sonarqube:9.9-community\tsonarqube\t0.0.0.0:9000->9000/tcp\n", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "", stderr: `${cmd}: not found`, exitCode: 127 }
+      },
+    })
+    const repo = initRepo()
+    git(repo, "checkout", "-b", "work")
+    writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
+    const o = makeOrchCtx(repo)
+
+    await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: CID, task_group_id: "1", mode: "full", base_branch: "main" },
+      o,
+    )
+    const out = await set_worktree.execute({ change_id: CID }, o)
+    expect(out).toContain("chore(baseline): sync project config baseline")
+
+    const wtPath = join(repo, ".worktree", CID, "ws")
+    // worktree 内存在 sonar 配置文件，project.key 用主仓库根目录名而非 worktree 子目录名 "ws"
+    const repoName = repo.split("/").pop()!.toLowerCase()
+    const content = readFileSync(join(wtPath, "sonar-project.properties"), "utf-8")
+    expect(content).toContain(`sonar.projectKey=${repoName}`)
+    expect(content).not.toContain("sonar.projectKey=ws")
+    // 受控提交恰好 1 条且消息正确；提交后 worktree 干净
+    const baselineCommits = git(repo, "log", "--format=%s", `change/${CID}`)
+      .split("\n")
+      .filter((m) => m === "chore(baseline): sync project config baseline")
+    expect(baselineCommits).toHaveLength(1)
+    // 提交只含配置文件，不夹带其它内容（按提交消息定位该提交的文件清单）
+    const commitOid = git(repo, "log", "--format=%H %s", `change/${CID}`)
+      .split("\n")
+      .find((l) => l.includes("chore(baseline): sync project config baseline"))
+      .split(" ")[0]
+    const committedFiles = git(repo, "show", "--name-only", "--format=", commitOid)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+    expect(committedFiles).toEqual(["sonar-project.properties"])
+    expect(git(wtPath, "status", "--porcelain")).toBe("")
   })
 
   test("切组复用：worktree 已存在且规划文档已提交在 change 分支、主仓库副本过时 → 不 blocked，复用同一 worktree", async () => {
@@ -347,8 +427,11 @@ describe("跨分支发起：基准分支已有规划文档", () => {
     expect(readFileSync(join(repo, ".worktree", CID, "ws", changeDirOf(), "tasks.md"), "utf-8"))
       .toContain("First Task Group")
     expect(existsSync(join(repo, `${changeDirOf()}/tasks.md`))).toBe(true)
-    // 未产生同步提交
-    expect(git(repo, "rev-list", "--count", `main..change/${CID}`)).toBe("0")
+    // 未产生同步提交；唯一提交是 worktree 侧基线守卫提交（.gitignore）
+    expect(git(repo, "rev-list", "--count", `main..change/${CID}`)).toBe("1")
+    expect(git(repo, "log", "--max-count=1", "--format=%s", `change/${CID}`)).toBe(
+      "chore(ignore): add project ignore baseline",
+    )
   })
 
   test("基准分支只有部分文档、与工作树版本不一致 → blocked，不搬运不覆盖", async () => {
@@ -468,8 +551,9 @@ describe("跨分支发起：异常路径不丢源", () => {
     git(repo, "checkout", "-b", "work")
     writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
     const sourcePath = join(repo, `${changeDirOf()}/tasks.md`)
-    // pre-commit hook 在 worktree 提交时改主仓库源文件：模拟「同步期间用户改动源副本」
-    installHook(repo, "pre-commit", `#!/bin/sh\necho tampered >> '${sourcePath}'\n`)
+    // pre-commit hook 在 worktree 同步提交时改主仓库源文件：模拟「同步期间用户改动源副本」。
+    // 只对同步提交生效（按提交消息过滤）：worktree 侧基线守卫提交先于同步提交，不应触发本 hook。
+    installHook(repo, "commit-msg", `#!/bin/sh\ngrep -q "docs(openspec)" "$1" && echo tampered >> '${sourcePath}'\nexit 0\n`)
     const o = makeOrchCtx(repo)
 
     await init.execute(
@@ -492,8 +576,9 @@ describe("跨分支发起：异常路径不丢源", () => {
     const repo = initRepo()
     git(repo, "checkout", "-b", "work")
     writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
-    // pre-commit hook 在 worktree 提交时往主仓库目录新增一个快照外文件
-    installHook(repo, "pre-commit", `#!/bin/sh\necho extra > '${join(repo, changeDirOf(), "extra.md")}'\n`)
+    // pre-commit hook 在 worktree 同步提交时往主仓库目录新增一个快照外文件。
+    // 只对同步提交生效（按提交消息过滤）：worktree 侧基线守卫提交先于同步提交，不应触发本 hook。
+    installHook(repo, "commit-msg", `#!/bin/sh\ngrep -q "docs(openspec)" "$1" && echo extra > '${join(repo, changeDirOf(), "extra.md")}'\nexit 0\n`)
     const o = makeOrchCtx(repo)
 
     await init.execute(
@@ -516,7 +601,8 @@ describe("跨分支发起：异常路径不丢源", () => {
     const repo = initRepo()
     git(repo, "checkout", "-b", "work")
     writeRepoFile(repo, `${changeDirOf()}/tasks.md`, TASKS)
-    installHook(repo, "pre-commit", "#!/bin/sh\nexit 1\n")
+    // 只让同步提交失败（按提交消息过滤）：worktree 侧基线守卫提交先于同步提交，不应触发本 hook。
+    installHook(repo, "commit-msg", '#!/bin/sh\ngrep -q "docs(openspec)" "$1" && exit 1\nexit 0\n')
     const o = makeOrchCtx(repo)
 
     await init.execute(
@@ -576,8 +662,12 @@ describe("跨分支发起：异常路径不丢源", () => {
     // worktree 从基准分支切出，自带规划文档
     expect(readFileSync(join(repo, ".worktree", CID, "ws", changeDirOf(), "tasks.md"), "utf-8"))
       .toContain("First Task Group")
-    // 未产生同步提交；detached 下主仓库副本未被搬移/删除
-    expect(git(repo, "rev-list", "--count", `main..change/${CID}`)).toBe("0")
+    // 未产生同步提交；唯一提交是 worktree 侧基线守卫提交（.gitignore）
+    expect(git(repo, "rev-list", "--count", `main..change/${CID}`)).toBe("1")
+    expect(git(repo, "log", "--max-count=1", "--format=%s", `change/${CID}`)).toBe(
+      "chore(ignore): add project ignore baseline",
+    )
+    // detached 下主仓库副本未被搬移/删除
     expect(existsSync(join(repo, `${changeDirOf()}/tasks.md`))).toBe(true)
   })
 })
