@@ -73,8 +73,10 @@ artifacts:
       context lean and is the safer default.
 
       Phase 3 - Architecture review (you, once authoring is complete):
-      1. Dispatch an independent architecture reviewer subagent (fresh
-         session — never reuse the generation subagent). Prefer a dedicated
+      1. Dispatch an architecture reviewer subagent; across review rounds of
+         the same change, reuse the same reviewer when your environment can
+         continue a subagent session. The reviewer must never be the agent
+         that authored this round's documents. Prefer a dedicated
          architecture-review subagent when the project makes one available;
          when the environment has none, use a general-purpose subagent. In
          both cases inject the full text of the standard's

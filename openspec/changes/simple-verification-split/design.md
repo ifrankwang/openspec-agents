@@ -103,7 +103,7 @@ simple 状态机为 quality_review on_fail → implement 整步回退，本轮�
 - **no_change / 纯测试代码豁免分支**（L69/L73）：与分级复验正交，不变。
 - **full 模式**：零改动（task.yaml 不动）。full 的 implement（L56 同含 quality-gate tag）不引入 dev 门禁，避免改变 full 模式 dev 提交失败形态；full 侧是否复用分流模式依 P0 效果另行评估。
 - **谁提谁裁定 / issue 状态机**：分流只改执行方式，issue 上报、复核、豁免裁定链路零改动。
-- **收尾**：simple 收尾为裸合并（无回归、无环境清理，agent-merge-and-mode-config proposal L10），quality_review 仍是唯一防线——见风险权衡。
+- **收尾**：simple 收尾为裸合并（无回归、无环境清理），quality_review 仍是唯一防线——见风险权衡。
 
 ## 6. 风险与权衡
 

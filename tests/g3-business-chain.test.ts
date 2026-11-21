@@ -322,15 +322,15 @@ describe("must-do 词表 chain_map 语义为业务链路到脚本的映射", () 
 
 describe("optimizer skill 强制前后端影响分析", () => {
   test("约束含禁止按单栈写死方案", () => {
-    expect(OPTIMIZER).toContain("## 技术栈影响评估")
-    expect(OPTIMIZER).toContain("每个优化项的方案必须分别说明后端会话与前端会话下的影响")
+    expect(OPTIMIZER).toContain("## 影响评估")
+    expect(OPTIMIZER).toContain("backend 会话、frontend 会话")
     expect(OPTIMIZER).toContain("只写单栈结论、把某一种会话的形态当通用方案，视为分析未完成")
   })
 
   test("评估顺序覆盖共用层与两端差异及各自落点", () => {
-    expect(OPTIMIZER).toContain("backend 会话下的表现")
-    expect(OPTIMIZER).toContain("frontend 会话下的表现")
+    expect(OPTIMIZER).toContain("共用层（workflow 配置、工具逻辑、agent 定义）两种会话都生效")
+    expect(OPTIMIZER).toContain("只在命中的会话生效")
     expect(OPTIMIZER).toContain("各自要改的落点")
-    expect(OPTIMIZER).toContain("评估结论并入报告对应优化项的「方案」小节")
+    expect(OPTIMIZER).toContain("并入用户报告对应项的「方案」小节")
   })
 })
