@@ -9,6 +9,7 @@ import { agentToReviewLayer } from "../constants.ts"
 import { runGit, runGitChecked, getCurrentBranch, getMergeBase, isAncestor, isWorktreeClean, listBranchDriftFiles, isVersionOnlyDrift, markTaskGroupCheckboxesComplete, mergeBranchToTarget, discoverDiskWorktrees, detectMainRepoPollution, detectChanges, removeTaskGroupWorktree, isLocalBranch, listLocalBranches, pathExists, listTreePaths, blobOidInRef, hashObjectOfFile, archiveOpenspecChange, type DetectChangesResult } from "../git.ts"
 import { readStateByWorktree, readStateByChangeId, writeState, writeContextToWorktree, getLockPath, acquireLock, releaseLock, getStatePath, getLegacyStateDir } from "../state.ts"
 import { ensureIgnoreBaseline, type EnsureIgnoreBaselineOpts } from "../gitignore.ts"
+import { commitBaselineTargets, type BaselineTargetPrecheck } from "../baseline-commit.ts"
 import { probeContainers } from "../containers.ts"
 import { ensureProjectConfigsForSession, ensureProjectConfigsForSessionWithReport, projectSlug } from "../project-config.ts"
 import { generateIsolationNamespace } from "../namespace.ts"
@@ -844,12 +845,67 @@ function withGitignoreGuard(guardNote: string, body: string): string {
  * 项目级扫描平台配置补齐（主仓库侧，init 与 set_worktree 共用）。
  * - 排在忽略基线守卫之后：两类基线互不依赖，但顺序固定便于阅读返回体；
  * - 容器探测只做一次，结果直接传给收集，避免重复起子进程；
- * - 主仓库侧本函数只写工作树（不 add、不 commit），review 会话 fix=none 同样只落盘不提交；
- *   worktree 侧由 runWorktreeBaselineGuards 补跑并对写入清单做受控提交进 change 分支。
+ * - 只对实际写盘（action 非 complete）的目标做受控提交，独立消息 chore(baseline)，
+ *   绝不并入 chore(ignore)；安全门槛不通过（fix=none / 跨分支 / detached HEAD /
+ *   暂存区有其它改动 / 用户未提交改动）时只写盘并在返回体说明原因；
+ * - 幂等：基线无变化时不写盘不提交。
  */
-async function runProjectConfigGuard(ctx: ToolContext, session: SessionStacks | null): Promise<string> {
+async function runProjectConfigGuard(
+  ctx: ToolContext,
+  session: SessionStacks | null,
+  ignoreOpts: EnsureIgnoreBaselineOpts,
+  configOpts: { slug?: string } = {},
+): Promise<string> {
   const probe = await probeContainers(ctx.worktree)
-  return ensureProjectConfigsForSession(ctx.worktree, session, probe)
+  // 写盘前用 dryRun 拿计划写入清单并采样 status：自身“补缺失键”写盘后也会产生 ` M `，
+  // 若写盘后才判脏会误伤正常补齐。用户脏判定必须在写盘前完成，交给共享外壳拦截。
+  const planned = await ensureProjectConfigsForSessionWithReport(ctx.worktree, session, probe, {
+    ...configOpts,
+    dryRun: true,
+  })
+  const precheck = await samplePrecheck(ctx.worktree, planned.writtenTargets)
+
+  const { note, writtenTargets } = await ensureProjectConfigsForSessionWithReport(ctx.worktree, session, probe, configOpts)
+  if (writtenTargets.length === 0) return note
+
+  // 写盘后复核 status：只用于判定新文件需 add -N，脏判定一律用写盘前的 precheck。
+  const postcheck = await samplePostcheck(ctx.worktree, writtenTargets)
+
+  const result = await commitBaselineTargets({
+    repoRoot: ctx.worktree,
+    targets: writtenTargets,
+    skipCommit: ignoreOpts.skipCommit,
+    baseBranch: ignoreOpts.baseBranch ?? null,
+    commitMessage: "chore(baseline): sync project config baseline",
+    displayMessage: "chore(baseline): sync project config baseline",
+    showOid: false,
+    precheck,
+    postcheck,
+    failOnCommitError: false,
+  })
+  return result.note ? `${note}\n${result.note}` : note
+}
+
+/** 写盘前采样状态：空/纯未跟踪视为无用户脏，其余非空状态一律记 userDirty。 */
+async function samplePrecheck(repoRoot: string, targets: readonly string[]): Promise<BaselineTargetPrecheck[]> {
+  return Promise.all(
+    targets.map(async (target) => {
+      const statusRaw = (await runGit(repoRoot, ["status", "--porcelain", "--", target])).trim()
+      const lines = statusRaw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      const untracked = lines.length === 1 && lines[0] === `?? ${target}`
+      return { target, statusRaw, untracked, userDirty: lines.length > 0 && !untracked }
+    }),
+  )
+}
+
+/** 写盘后采样状态：仅用于 add -N 判定，不做脏判定。 */
+async function samplePostcheck(repoRoot: string, targets: readonly string[]): Promise<BaselineTargetPrecheck[]> {
+  return Promise.all(
+    targets.map(async (target) => ({
+      target,
+      statusRaw: (await runGit(repoRoot, ["status", "--porcelain", "--", target])).trim(),
+    })),
+  )
 }
 
 /** 忽略基线与扫描平台配置串成一段返回片段（忽略基线在前）。 */
@@ -859,7 +915,7 @@ async function runBaselineGuards(
   session: SessionStacks | null,
 ): Promise<string> {
   const ignoreNote = await runGitignoreGuard(ctx, ignoreOpts)
-  const configNote = await runProjectConfigGuard(ctx, session)
+  const configNote = await runProjectConfigGuard(ctx, session, ignoreOpts)
   return ignoreNote.length > 0 ? `${ignoreNote}\n${configNote}` : configNote
 }
 
@@ -868,8 +924,8 @@ async function runBaselineGuards(
  * - worktree 检出的是 change 分支而非基准分支，ignore 守卫传 baseBranch: null
  *   跳过分支校验（worktree 内 HEAD 必为 change 分支，安全），skipCommit: false 直接提交进 change 分支；
  * - 扫描平台配置按主仓库根目录计算 projectSlug（worktree 路径 basename 是 "ws"，不能作 project.key），
- *   写入清单由 ensureProjectConfigsForSessionWithReport 返回，非空时对清单做受控提交
- *   （沿用 gitignore.ts 的 add -N + commit --only 样式，不扫全仓库 status，不误吞用户文件）；
+ *   写入清单由 ensureProjectConfigsForSessionWithReport 返回，非空时经共享提交外壳做受控提交
+ *   （add -N + commit --only + show 核验，不扫全仓库 status，不误吞用户文件）；
  * - 守卫自身幂等：基线无变化时不写盘不提交；提交失败显式抛错，不静默降级；
  * - 排在 applyPlan（规划文档同步）与 bindWorktreeRefs 之前：守卫提交必须落在
  *   scope_start_oid..scope_end 审查范围之外（同步先于 bind 的既有原则），
@@ -883,36 +939,42 @@ async function runWorktreeBaselineGuards(worktreePath: string, repoRoot: string,
   })
 
   const probe = await probeContainers(worktreePath)
+  const configOpts = { slug: projectSlug(repoRoot) }
+  // 写盘前用 dryRun 采样用户脏；worktree 侧用户脏必须显式抛错，不能静默降级。
+  const planned = await ensureProjectConfigsForSessionWithReport(worktreePath, state.stacks ?? null, probe, {
+    ...configOpts,
+    dryRun: true,
+  })
+  const precheck = await samplePrecheck(worktreePath, planned.writtenTargets)
+
   let { note: configNote, writtenTargets } = await ensureProjectConfigsForSessionWithReport(
     worktreePath,
     state.stacks ?? null,
     probe,
-    { slug: projectSlug(repoRoot) },
+    configOpts,
   )
 
   if (writtenTargets.length > 0) {
-    // 受控提交：只提交守卫实际写盘的目标文件（新文件先 add -N 占位，再 commit --only 限定范围），
-    // 提交后按 name-only 核验，失败整体抛错。
-    for (const target of writtenTargets) {
-      const status = await runGit(worktreePath, ["status", "--porcelain", "--", target])
-      if (status.trim().length === 0) continue // 该目标实际未落盘（无变化），跳过
-      const addN = await runGitChecked(worktreePath, ["add", "-N", "--", target])
-      if (!addN.success) throw new Error(`worktree 基线文件 git add -N 失败（${target}）：${addN.stderr}`)
-    }
-    const commit = await runGitChecked(worktreePath, [
-      "commit", "-m", "chore(baseline): sync project config baseline", "--only", "--", ...writtenTargets,
-    ])
-    if (!commit.success) throw new Error(`worktree 基线配置受控提交失败：${commit.stderr}`)
-    const headBefore = await runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])
-    const shown = await runGit(worktreePath, ["show", "--name-only", "--format=", "HEAD"])
-    const committed = shown.split("\n").map((l) => l.trim()).filter(Boolean)
-    const missing = writtenTargets.filter((t) => !committed.includes(t))
-    if (missing.length > 0) {
+    const dirty = precheck.filter((c) => c.userDirty)
+    if (dirty.length > 0) {
       throw new Error(
-        `worktree 基线配置提交核验失败：以下目标未出现在 HEAD 提交中（HEAD=${headBefore.trim()}）：${missing.join("、")}`
+        `worktree 基线配置存在用户未提交改动，拒绝提交：${dirty.map((c) => c.target).join("、")}`,
       )
     }
-    configNote += `\n- **版本库提交**: 已提交，仅含 ${writtenTargets.map((t) => `\`${t}\``).join("、")}（消息 \`chore(baseline): sync project config baseline\`）。`
+    const postcheck = await samplePostcheck(worktreePath, writtenTargets)
+    const result = await commitBaselineTargets({
+      repoRoot: worktreePath,
+      targets: writtenTargets,
+      skipCommit: false,
+      baseBranch: null,
+      commitMessage: "chore(baseline): sync project config baseline",
+      displayMessage: "chore(baseline): sync project config baseline",
+      showOid: false,
+      precheck,
+      postcheck,
+      failOnCommitError: true,
+    })
+    if (result.note) configNote += `\n${result.note}`
   }
 
   const notes = [ignoreNote, configNote].filter((n) => n.length > 0)

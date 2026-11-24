@@ -32,13 +32,13 @@ export const OPX_TOOL_SPECS: readonly OpxToolSpec[] = [
   {
     name: "opx_orch_init",
     description:
-      "按会话声明的形态补齐技术栈忽略基线（`.gitignore` / `.prettierignore`），编排产物强制覆盖；无法安全提交时只写工作树并说明。同时按本地容器探测结果补齐项目级扫描平台配置：缺失时按模板创建、已存在时只补缺失键，只写工作树不提交，探测不到则跳过。初始化编排会话。project_stacks 与 project_frameworks 必传（change 入口与 review_scope 独立审查入口均需要）：声明项目形态栈与框架栈，每个值须命中当前 skill 索引中 skill frontmatter 声明的 stacks / frameworks 标签（动态校验，无硬编码值域），作为 skill 加载清单过滤与 step 必做清单分组的过滤基准，与 change_id 同生命周期持久化（recovery 恢复时同样必传）。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务，同时自动从 clarify.md 解析当前任务组执行边界写入状态，缺失时按整个 worktree 处理。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式：full=完整流程（implement→三重审查+收尾验证，analyze 仅作 implement 上报 blocker 后的裁决回退落点）；simple=精简流程（implement→quality_review→done，不走 blocker 状态机）。首次新建状态时固化；已开始的变更仅切组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）时可更新，其余场景传不同 mode 报错。",
+      "按会话声明的形态补齐技术栈忽略基线（`.gitignore` / `.prettierignore`），编排产物强制覆盖；无法安全提交时只写工作树并说明。同时按本地容器探测结果补齐项目级扫描平台配置：缺失时按模板创建、已存在时只补缺失键，主仓库侧安全时单独提交（独立 chore(baseline)，不与忽略基线合并），独立审查 fix=none 或跨分支等不安全场景只写工作树并说明，探测不到则跳过。初始化编排会话。project_stacks 与 project_frameworks 必传（change 入口与 review_scope 独立审查入口均需要）：声明项目形态栈与框架栈，每个值须命中当前 skill 索引中 skill frontmatter 声明的 stacks / frameworks 标签（动态校验，无硬编码值域），作为 skill 加载清单过滤与 step 必做清单分组的过滤基准，与 change_id 同生命周期持久化（recovery 恢复时同样必传）。传入变更 ID 和任务组 ID，工具自动解析 tasks.md 提取全部任务组并解析目标组子任务，同时自动从 clarify.md 解析当前任务组执行边界写入状态，缺失时按整个 worktree 处理。可通过 recovery 参数恢复到指定阶段。无 recovery 重复初始化当前任务组时保留其阶段和进度；切换到其它任务组时初始化该组。可选 mode 参数（full/simple，缺省 simple）选择流程模式：full=完整流程（implement→三重审查+收尾验证，analyze 仅作 implement 上报 blocker 后的裁决回退落点）；simple=精简流程（implement→quality_review→done，不走 blocker 状态机）。首次新建状态时固化；已开始的变更仅切组（其他任务组均已完成或从未激活）或 recovery.phase=task_analysis 重制当前组（其他任务组同样须已完成或从未激活）时可更新，其余场景传不同 mode 报错。",
     schema: orchInitSchema,
   },
   {
     name: "opx_orch_set_worktree",
     description:
-      "按会话声明的形态补齐技术栈忽略基线（`.gitignore` / `.prettierignore`），编排产物强制覆盖；无法安全提交时只写工作树并说明。同时按本地容器探测结果补齐项目级扫描平台配置：缺失时按模板创建、已存在时只补缺失键，只写工作树不提交，探测不到则跳过。确保目标组的 git worktree 就绪。change 会话按 change 模型 create-or-reuse：分支 change/{changeId} 不存在时从基准分支 tip 创建，worktree 常驻于 .worktree/{changeId}/ws，全部任务组串行复用（复用校验：目录缺失自愈重建、openspec 文档脏自动提交、代码文件脏拒绝）。切组复用（worktree 可复用或主仓库已检出 change 分支）时跳过规划文档预检直接复用。只补齐资源，不改变阶段。",
+      "按会话声明的形态补齐技术栈忽略基线（`.gitignore` / `.prettierignore`），编排产物强制覆盖；无法安全提交时只写工作树并说明。同时按本地容器探测结果补齐项目级扫描平台配置：缺失时按模板创建、已存在时只补缺失键，主仓库侧安全时单独提交（独立 chore(baseline)，不与忽略基线合并），独立审查 fix=none 或跨分支等不安全场景只写工作树并说明，探测不到则跳过。确保目标组的 git worktree 就绪。change 会话按 change 模型 create-or-reuse：分支 change/{changeId} 不存在时从基准分支 tip 创建，worktree 常驻于 .worktree/{changeId}/ws，全部任务组串行复用（复用校验：目录缺失自愈重建、openspec 文档脏自动提交、代码文件脏拒绝）。切组复用（worktree 可复用或主仓库已检出 change 分支）时跳过规划文档预检直接复用。只补齐资源，不改变阶段。",
     schema: setWorktreeSchema,
   },
   {

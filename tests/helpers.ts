@@ -35,6 +35,10 @@ export function deepFreeze<T>(value: T): T {
 export interface GitignoreFileSim {
   /** `git status --porcelain -- <f>` 整行覆盖（如 "AM .gitignore"）；设置后优先于 untracked/userDirty。 */
   statusLine?: string
+  /** 每次 status 调用按顺序返回一行，用于模拟“写盘前干净、写盘后变脏”；用尽后复用最后一项。 */
+  statusSequence?: string[]
+  /** statusSequence 内部游标（由 runner 写入，用例无需设置）。 */
+  statusSeqIdx?: number
   /** 未纳入 index 跟踪：status 输出 "?? <f>"，commit --only 前必须先 add -N。 */
   untracked?: boolean
   /** 存在用户未提交改动：status 输出 " M <f>"。 */
@@ -221,6 +225,11 @@ export class FakeGitRunner implements GitRunner {
       if (cmd === "status" && rest[0] === "--porcelain" && rest[1] === "--" && rest[2]) {
         const target = rest[2]
         const st = fileSim(target)
+        if (st.statusSequence !== undefined && st.statusSequence.length > 0) {
+          const idx = Math.min(st.statusSeqIdx ?? 0, st.statusSequence.length - 1)
+          st.statusSeqIdx = idx + 1
+          return st.statusSequence[idx]
+        }
         if (st.statusLine !== undefined) return st.statusLine
         if (st.untracked === true) return `?? ${target}`
         if (st.userDirty === true) return ` M ${target}`

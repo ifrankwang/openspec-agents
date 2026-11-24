@@ -471,9 +471,7 @@ describe("init 实测：扫描平台配置补齐", () => {
     return { dir, fake }
   }
 
-  test("探测到匹配容器 → 按 skill 模板创建配置，且不提交", async () => {
-    const { dir, fake } = makeChangeRepo("opx-config-init-", "config-cid")
-    // installTestSkillEnv 默认注入离线探测，这里覆盖为命中一个容器
+  function containerHitRunner(): void {
     __setContainerRunner({
       async run(cmd) {
         if (cmd === "docker") {
@@ -482,6 +480,11 @@ describe("init 实测：扫描平台配置补齐", () => {
         return { stdout: "", stderr: `${cmd}: not found`, exitCode: 127 }
       },
     })
+  }
+
+  test("探测到匹配容器 → 按 skill 模板创建配置，安全时以独立 chore(baseline) 提交", async () => {
+    const { dir, fake } = makeChangeRepo("opx-config-init-", "config-cid")
+    containerHitRunner()
 
     const orch = makeOrchCtx(dir)
     const out = await init.execute(
@@ -494,8 +497,70 @@ describe("init 实测：扫描平台配置补齐", () => {
     expect(content).toContain("sonar.sources=src/main/java")
     expect(out).toContain("扫描平台配置")
     expect(out).toContain("已创建 `sonar-project.properties`")
-    // 只写工作树：任何 git 动作（add / commit / status）都不得触及新配置文件
-    expect(fake.callLog.some((l) => l.includes("sonar-project.properties"))).toBe(false)
+    // 主仓库侧安全：独立提交，消息与 chore(ignore) 分开，不对忽略基线合并提交
+    const commitCalls = fake.callLog.filter((l) => l.startsWith("checked:commit -m chore(baseline)"))
+    expect(commitCalls).toHaveLength(1)
+    expect(commitCalls[0]).toContain("-- sonar-project.properties")
+    expect(out).toContain("chore(baseline): sync project config baseline")
+    expect(fake.callLog.some((l) => l.startsWith(COMMIT_LINE_PREFIX) && l.includes("sonar-project.properties"))).toBe(false)
+  })
+
+  test("跨分支 → 扫描配置只写工作树、不提交，并说明原因", async () => {
+    const { dir, fake } = makeChangeRepo("opx-config-cross-", "config-cross")
+    fake.gitignoreSim!.currentBranch = "work"
+    containerHitRunner()
+
+    const orch = makeOrchCtx(dir)
+    const out = await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: "config-cross", task_group_id: "1", mode: "simple", base_branch: "main" },
+      orch,
+    )
+
+    expect(existsSync(join(dir, "sonar-project.properties"))).toBe(true)
+    expect(out).toContain("配置")
+    expect(out).toContain("未提交（原因")
+    expect(out).toContain("work")
+    expect(fake.callLog.some((l) => l.startsWith("checked:commit -m chore(baseline)"))).toBe(false)
+  })
+
+  test("补齐缺失键使文件写盘后变脏 → 仍以独立 chore(baseline) 提交（写盘前判脏，不误伤自身写入）", async () => {
+    const { dir, fake } = makeChangeRepo("opx-config-append-", "config-append")
+    // 已有 projectKey，模板其余键缺失 → 写盘后文件从干净变 ` M `；用状态序列锁住“写盘前/后”两次采样。
+    writeFileSync(join(dir, "sonar-project.properties"), "sonar.projectKey=existing\n", "utf-8")
+    fake.gitignoreSim!.files = {
+      "sonar-project.properties": { statusSequence: ["", " M sonar-project.properties"] },
+    }
+    containerHitRunner()
+
+    const orch = makeOrchCtx(dir)
+    const out = await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: "config-append", task_group_id: "1", mode: "simple" },
+      orch,
+    )
+
+    expect(readFileSync(join(dir, "sonar-project.properties"), "utf-8")).toContain("sonar.sources=src/main/java")
+    expect(out).not.toContain("存在用户其它未提交改动")
+    const commitCalls = fake.callLog.filter((l) => l.startsWith("checked:commit -m chore(baseline)"))
+    expect(commitCalls).toHaveLength(1)
+    expect(commitCalls[0]).toContain("-- sonar-project.properties")
+  })
+
+  test("写盘前已有用户脏改动 → 只写盘说明原因、不提交", async () => {
+    const { dir, fake } = makeChangeRepo("opx-config-dirty-", "config-dirty")
+    writeFileSync(join(dir, "sonar-project.properties"), "sonar.projectKey=existing\n", "utf-8")
+    fake.gitignoreSim!.files = {
+      "sonar-project.properties": { statusSequence: [" M sonar-project.properties"] },
+    }
+    containerHitRunner()
+
+    const orch = makeOrchCtx(dir)
+    const out = await init.execute(
+      { ...INIT_PROJECT_STACKS, change_id: "config-dirty", task_group_id: "1", mode: "simple" },
+      orch,
+    )
+
+    expect(out).toContain("存在用户其它未提交改动")
+    expect(fake.callLog.some((l) => l.startsWith("checked:commit -m chore(baseline)"))).toBe(false)
   })
 
   test("容器运行时不可用 → 跳过并说明，不建空文件", async () => {

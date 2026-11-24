@@ -1,12 +1,13 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { runGit, runGitChecked, listStagedPathsOutside } from "./git.ts"
+import { runGit } from "./git.ts"
 import {
   collectIgnoreBaseline,
   normalizeIgnoreLine,
   resolveIgnoreBaselineRoot,
   type IgnoreBaselineEntry,
 } from "./ignore-baseline.ts"
+import { commitBaselineTargets, type BaselineTargetPrecheck } from "./baseline-commit.ts"
 import type { SessionStacks } from "../skills/stacks.ts"
 
 /**
@@ -187,25 +188,6 @@ async function readTarget(repoRoot: string, target: string): Promise<string | nu
   }
 }
 
-/**
- * 版本库提交的全局前置条件（与具体文件无关）：只审不修会话、detached HEAD、跨分支、
- * 暂存区另有改动。返回 null 表示可提交。
- */
-async function precheckCommit(
-  repoRoot: string,
-  opts: EnsureIgnoreBaselineOpts,
-  targets: readonly string[],
-): Promise<string | null> {
-  if (opts.skipCommit) return "当前会话为只审不修的独立审查会话，跳过版本库提交"
-  const branch = await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])
-  if (!branch || branch === "HEAD") return "当前处于 detached HEAD，无法确认提交目标分支"
-  const base = opts.baseBranch ?? null
-  if (base && branch !== base) return `当前检出分支 \`${branch}\` 与基准分支 \`${base}\` 不同`
-  const stagedOutside = await listStagedPathsOutside(repoRoot, [...targets])
-  if (stagedOutside.length > 0) return "主仓库暂存区含其它已暂存改动，提交会夹带非本次内容"
-  return null
-}
-
 function renderBaselineLines(
   plans: readonly FilePlan[],
   hasPrettierBaseline: boolean,
@@ -245,18 +227,6 @@ function renderBaselineLines(
   return lines
 }
 
-function renderCommitLine(
-  commitTargets: readonly string[],
-  reasons: readonly string[],
-): string | null {
-  if (commitTargets.length === 0) return null
-  const list = commitTargets.map((t) => `\`${t}\``).join("、")
-  if (reasons.length > 0) {
-    return `- **版本库提交**: 未提交（原因：${reasons.join("；")}）；本次改动只写工作树，未进版本库。`
-  }
-  return null
-}
-
 /**
  * 确保项目根忽略文件覆盖「编排产物 + 技术栈基线」，并在安全时提交。
  * repoRoot 为目标项目根（或 worktree 根）；返回 markdown 报告片段（由调用方拼接）。
@@ -281,14 +251,7 @@ export async function ensureIgnoreBaseline(
     )
   }
 
-  const globalReason = await precheckCommit(repoRoot, opts, targets)
-  const dirtyReasons = plans
-    .filter((p) => p.userDirty)
-    .map((p) => `\`${p.target}\` 存在用户其它未提交改动，提交会夹带非本次内容`)
-  const reasons = globalReason ? [globalReason] : []
-  reasons.push(...dirtyReasons)
-
-  // 写入工作树：先落盘，再做提交前置断言（避免断言失败后留下半成品）。
+  // 写入工作树：先落盘，再交给共享提交外壳复核状态与安全门槛。
   for (const plan of plans) {
     if (plan.missing.length === 0) continue
     await writeFile(join(repoRoot, plan.target), appendMissing(plan.before, plan.missing), "utf-8")
@@ -309,92 +272,37 @@ export async function ensureIgnoreBaseline(
 
   if (commitTargets.length === 0) return lines.join("\n")
 
-  const blocked = renderCommitLine(commitTargets, reasons)
-  if (blocked) {
-    lines.push(blocked)
-    return lines.join("\n")
+  // 写盘后逐文件复核状态（GitRunner.run 对 stdout 整体 trim()，真 git 的 ` M <f>` 会变成 `M <f>`，
+  // 两种形态都视为未暂存修改放行；staged 形态 `M  <f>`（两个空格）仍拒绝）。
+  const postcheck: BaselineTargetPrecheck[] = []
+  for (const plan of plans) {
+    if (!commitTargets.includes(plan.target)) continue
+    const status = await runGit(repoRoot, ["status", "--porcelain", "--", plan.target])
+    postcheck.push({
+      target: plan.target,
+      statusRaw: status,
+      untracked: plan.untrackedOnly || status === `?? ${plan.target}`,
+      userDirty: plan.userDirty,
+    })
   }
 
-  // 提交前再断言：暂存区为空、逐文件状态仍是「干净」或「纯未跟踪」。
-  const staged = await runGit(repoRoot, ["diff", "--cached", "--name-only"])
-  if (staged) {
-    lines.push(renderCommitLine(commitTargets, ["主仓库暂存区含其它已暂存改动，提交会夹带非本次内容"])!)
-    return lines.join("\n")
-  }
-  // 写入后逐文件复核：允许「无输出」（已跟踪且改动已落盘）、` M <f>`（本次写入的改动）
-  // 与 `?? <f>`（新建文件，需 add -N 建立跟踪）；其余状态说明出现预期外改动，拒绝提交。
-  // GitRunner.run 对 stdout 整体 trim()（见 src/core/git.ts porcelain 解析注释）：真 git 的
-  // ` M <f>` 首行会被吃掉前导空格变成 `M <f>`；FakeGitRunner 的 gitignoreSim 分支返回原样
-  // ` M <f>`。两种形态都视为未暂存修改放行；staged 形态 `M  <f>`（两个空格）仍拒绝。
-  const needsIntentToAdd: string[] = []
-  for (const target of commitTargets) {
-    const status = await runGit(repoRoot, ["status", "--porcelain", "--", target])
-    const statusLines = status.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean)
-    if (statusLines.length === 0) continue
-    if (statusLines.length === 1 && statusLines[0] === `?? ${target}`) {
-      needsIntentToAdd.push(target)
-      continue
-    }
-    if (statusLines.length === 1 && (statusLines[0] === ` M ${target}` || statusLines[0] === `M ${target}`)) continue
-    lines.push(
-      renderCommitLine(commitTargets, [
-        `\`${target}\` 在写入后出现预期外状态（${statusLines.join(" / ")}），提交会夹带非本次内容`,
-      ])!,
-    )
-    return lines.join("\n")
-  }
-
-  // 全新未跟踪文件先 add -N 建立跟踪；失败则回滚已加的 intent-to-add 并只写工作树。
-  const added: string[] = []
-  for (const target of needsIntentToAdd) {
-    const res = await runGitChecked(repoRoot, ["add", "-N", "--", target])
-    if (!res.success) {
-      await rollbackIntentToAdd(repoRoot, added)
-      lines.push(
-        renderCommitLine(commitTargets, [`\`git add -N\` 失败（${res.stderr || "未知错误"}）`])!,
-      )
-      return lines.join("\n")
-    }
-    added.push(target)
-  }
-
-  const commit = await runGitChecked(repoRoot, [
-    "commit",
-    "-m",
-    COMMIT_MESSAGE,
-    "--only",
-    "--",
-    ...commitTargets,
-  ])
-  if (!commit.success) {
-    await rollbackIntentToAdd(repoRoot, added)
-    lines.push(
-      renderCommitLine(commitTargets, [`\`git commit --only\` 失败（${commit.stderr || "未知错误"}）`])!,
-    )
-    return lines.join("\n")
-  }
-
-  const oid = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD"])
-  const list = commitTargets.map((t) => `\`${t}\``).join("、")
-  lines.push(`- **版本库提交**: 已提交，仅含 ${list}（commit \`${oid}\`，消息 \`${COMMIT_MESSAGE}\`）。`)
-
-  // 提交后核验：只含本次目标文件。
-  const shown = (await runGit(repoRoot, ["show", "--name-only", "--format=", "HEAD"]))
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .sort()
-  const expected = [...commitTargets].sort()
-  if (shown.join("\n") !== expected.join("\n")) {
-    lines.push(
-      `- **提交核验**: 提交内容与预期不一致（实际：${shown.join("、") || "无"}；预期：${expected.join("、")}），请人工核对。`,
-    )
-  }
+  const commitResult = await commitBaselineTargets({
+    repoRoot,
+    targets: commitTargets,
+    skipCommit: opts.skipCommit,
+    baseBranch: opts.baseBranch,
+    commitMessage: COMMIT_MESSAGE,
+    displayMessage: COMMIT_MESSAGE,
+    showOid: false,
+    precheck: postcheck,
+    postcheck,
+    failOnCommitError: false,
+    extraGuard: async () => {
+      const staged = await runGit(repoRoot, ["diff", "--cached", "--name-only"])
+      return staged ? "主仓库暂存区含其它已暂存改动，提交会夹带非本次内容" : null
+    },
+  })
+  if (commitResult.note) lines.push(commitResult.note)
   return lines.join("\n")
 }
 
-/** 提交失败时回滚 intent-to-add，避免下次预检把 `" A "` 误判为用户改动。 */
-async function rollbackIntentToAdd(repoRoot: string, files: readonly string[]): Promise<void> {
-  if (files.length === 0) return
-  await runGitChecked(repoRoot, ["reset", "--", ...files])
-}
